@@ -1,0 +1,114 @@
+cmake_minimum_required(VERSION 3.22)
+
+project(GP200Studio VERSION 0.1.0)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+add_subdirectory(external/JUCE)
+
+juce_add_plugin(GP200Plugin
+    COMPANY_NAME "GP200Studio"
+
+    PLUGIN_MANUFACTURER_CODE Gp2S
+    PLUGIN_CODE Gp20
+
+    FORMATS VST3
+
+    PRODUCT_NAME "GP200 Studio"
+
+    IS_SYNTH FALSE
+    NEEDS_MIDI_INPUT TRUE
+    NEEDS_MIDI_OUTPUT TRUE
+    IS_MIDI_EFFECT FALSE
+
+    NEEDS_WEB_BROWSER FALSE
+    NEEDS_CURL FALSE
+
+    COPY_PLUGIN_AFTER_BUILD FALSE
+)
+
+juce_generate_juce_header(GP200Plugin)
+
+target_sources(GP200Plugin
+    PRIVATE
+        source/GP200Plugin/PluginProcessor.cpp
+        source/GP200Plugin/PluginProcessor.h
+        source/GP200Plugin/PluginEditor.cpp
+        source/GP200Plugin/PluginEditor.h
+        source/GP200Plugin/EffectBlockComponent.cpp
+        source/GP200Plugin/EffectBlockComponent.h
+
+        source/libgp200/GP200Constants.h
+        source/libgp200/MidiDeviceScanner.cpp
+        source/libgp200/MidiDeviceScanner.h
+        source/libgp200/MidiConnection.cpp
+        source/libgp200/MidiConnection.h
+        source/libgp200/GP200Preset.cpp
+        source/libgp200/GP200Preset.h
+        source/libgp200/GP200EffectDatabase.cpp
+        source/libgp200/GP200EffectDatabase.h
+        source/libgp200/GP200EffectParamDatabase.cpp
+        source/libgp200/GP200EffectParamDatabase.h
+)
+
+target_include_directories(GP200Plugin
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/source
+        ${CMAKE_CURRENT_SOURCE_DIR}/source/GP200Plugin
+        ${CMAKE_CURRENT_SOURCE_DIR}/source/libgp200
+)
+
+target_compile_definitions(GP200Plugin
+    PUBLIC
+        JUCE_WEB_BROWSER=0
+        JUCE_USE_CURL=0
+        JUCE_VST3_CAN_REPLACE_VST2=0
+)
+
+target_link_libraries(GP200Plugin
+    PRIVATE
+        juce::juce_audio_devices
+        juce::juce_audio_processors
+        juce::juce_audio_utils
+        juce::juce_gui_extra
+
+    PUBLIC
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_lto_flags
+        juce::juce_recommended_warning_flags
+)
+
+if(MSVC)
+    target_compile_options(GP200Plugin
+        PRIVATE
+            /utf-8
+            /permissive-
+            /Zc:__cplusplus
+    )
+endif()
+
+source_group(
+    TREE ${CMAKE_CURRENT_SOURCE_DIR}/source
+    PREFIX "Source"
+    FILES
+        source/GP200Plugin/PluginProcessor.cpp
+        source/GP200Plugin/PluginProcessor.h
+        source/GP200Plugin/PluginEditor.cpp
+        source/GP200Plugin/PluginEditor.h
+        source/GP200Plugin/EffectBlockComponent.cpp
+        source/GP200Plugin/EffectBlockComponent.h
+
+        source/libgp200/GP200Constants.h
+        source/libgp200/MidiDeviceScanner.cpp
+        source/libgp200/MidiDeviceScanner.h
+        source/libgp200/MidiConnection.cpp
+        source/libgp200/MidiConnection.h
+        source/libgp200/GP200Preset.cpp
+        source/libgp200/GP200Preset.h
+        source/libgp200/GP200EffectDatabase.cpp
+        source/libgp200/GP200EffectDatabase.h
+        source/libgp200/GP200EffectParamDatabase.cpp
+        source/libgp200/GP200EffectParamDatabase.h
+)

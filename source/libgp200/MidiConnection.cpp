@@ -1,0 +1,1813 @@
+#include "MidiConnection.h"
+#include "GP200EffectParamDatabase.h"
+#include "MidiDeviceScanner.h"
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstring>
+#include <utility>
+
+namespace gp200
+{
+MidiConnection::MidiConnection () = default;
+
+MidiConnection::~MidiConnection ()
+{
+    disconnect ();
+}
+
+bool MidiConnection::connectToGP200 ()
+{
+    disconnect ();
+
+    juce::MidiDeviceInfo selectedInput;
+    juce::MidiDeviceInfo selectedOutput;
+
+    if (!MidiDeviceScanner::findFirstGP200Input (selectedInput) ||
+        !MidiDeviceScanner::findFirstGP200Output (selectedOutput))
+    {
+        const juce::ScopedLock lock (stateLock);
+        statusText = "GP-200 MIDI input/output not found";
+        return false;
+    }
+
+    auto newInput = juce::MidiInput::openDevice (selectedInput.identifier, this);
+    auto newOutput = juce::MidiOutput::openDevice (selectedOutput.identifier);
+
+    if (newInput == nullptr || newOutput == nullptr)
+    {
+        const juce::ScopedLock lock (stateLock);
+        statusText = "Could not open GP-200 MIDI ports";
+        return false;
+    }
+
+    {
+        const juce::ScopedLock lock (stateLock);
+        midiInput = std::move (newInput);
+        midiOutput = std::move (newOutput);
+        statusText = "Connected to GP-200: IN=" + selectedInput.name + " OUT=" + selectedOutput.name;
+        lastMessageText = "Listening for GP-200 messages...";
+    }
+
+    midiInput->start ();
+    return true;
+}
+
+void MidiConnection::disconnect ()
+{
+    std::unique_ptr<juce::MidiInput> inputToStop;
+
+    {
+        const juce::ScopedLock lock (stateLock);
+        inputToStop = std::move (midiInput);
+        midiOutput.reset ();
+    }
+
+    if (inputToStop != nullptr)
+        inputToStop->stop ();
+
+    const juce::ScopedLock lock (stateLock);
+
+    statusText = "Not connected";
+    currentSlot = -1;
+    currentPresetName = "unknown";
+
+    presetNameRequestPending = false;
+    lastRequestedNameSlot = -1;
+
+    presetDumpSlot = -1;
+    presetReadChunks.clear ();
+    currentPresetDecodedData.setSize (0);
+    currentPresetDumpStatusText = "Current full preset data: not captured";
+
+    pendingAssignmentNameQueries.clear ();
+    currentAssignmentNameQuery = {};
+    assignmentNameRequestInProgress = false;
+
+    for (auto& name : userIRNames)
+        name.clear ();
+
+    for (auto& name : snapToneNames)
+        name.clear ();
+
+    assignmentNamesStatusText = "Assignment names: not requested";
+    ++presetRevision;
+    ++assignmentNamesRevision;
+}
+
+bool MidiConnection::isConnected () const
+{
+    const juce::ScopedLock lock (stateLock);
+    return midiInput != nullptr && midiOutput != nullptr;
+}
+
+bool MidiConnection::requestCurrentPresetFromGP200 ()
+{
+    const juce::ScopedLock lock (stateLock);
+    if (midiOutput == nullptr)
+    {
+        lastMessageText = "Cannot query current preset: MIDI output not open";
+        return false;
+    }
+
+    const auto bytes = buildStateDumpRequest ();
+
+    auto message =
+        juce::MidiMessage::createSysExMessage (bytes.data () + 1, static_cast<int> (bytes.size () - 2));
+
+    midiOutput->sendMessageNow (message);
+
+    lastMessageText = "Requested current preset from GP-200";
+    currentPresetDumpStatusText = "Current full preset data: waiting for current slot";
+
+    return true;
+}
+
+bool MidiConnection::requestAssignmentNamesFromGP200 ()
+{
+    const juce::ScopedLock lock (stateLock);
+    if (midiOutput == nullptr)
+    {
+        assignmentNamesStatusText = "Assignment names: MIDI output not open";
+        lastMessageText = assignmentNamesStatusText;
+        return false;
+    }
+
+    pendingAssignmentNameQueries.clear ();
+
+    for (auto& name : userIRNames)
+        name.clear ();
+
+    for (auto& name : snapToneNames)
+        name.clear ();
+
+    ++assignmentNamesRevision;
+
+    // Section 0: User IR 1-20. Page 0 contains 16 entries and page 1
+    // contains the remaining entries.
+    constexpr int assignmentPageSize = 16;
+
+    for (int block = 0; block < assignmentPageSize; ++block)
+        pendingAssignmentNameQueries.push_back ({0, 0, block});
+
+    for (int block = 0; block < static_cast<int> (userIRCount) - assignmentPageSize; ++block)
+    {
+        pendingAssignmentNameQueries.push_back ({0, 1, block});
+    }
+
+    // Section 1: SnapTone 1-10.
+    for (int block = 0; block < static_cast<int> (snapToneCount); ++block)
+        pendingAssignmentNameQueries.push_back ({1, 0, block});
+
+    currentAssignmentNameQuery = {};
+    assignmentNameRequestInProgress = false;
+
+    assignmentNamesStatusText = "Assignment names: requesting...";
+    lastMessageText = assignmentNamesStatusText;
+
+    return sendNextAssignmentNameQuery ();
+}
+
+juce::String MidiConnection::getAssignmentNamesStatusText () const
+{
+    const juce::ScopedLock lock (stateLock);
+    return assignmentNamesStatusText;
+}
+
+juce::String MidiConnection::getUserIRDisplayName (int zeroBasedIndex) const
+{
+    const juce::ScopedLock lock (stateLock);
+    if (zeroBasedIndex < 0 || zeroBasedIndex >= static_cast<int> (userIRNames.size ()))
+        return {};
+
+    const auto fallback = "User IR " + juce::String (zeroBasedIndex + 1);
+    const auto name = userIRNames[static_cast<std::size_t> (zeroBasedIndex)].trim ();
+
+    if (name.isEmpty ())
+        return fallback;
+
+    return fallback + " - " + name;
+}
+
+juce::String MidiConnection::getSnapToneDisplayName (int zeroBasedIndex) const
+{
+    const juce::ScopedLock lock (stateLock);
+    if (zeroBasedIndex < 0 || zeroBasedIndex >= static_cast<int> (snapToneNames.size ()))
+        return {};
+
+    const auto fallback = "SnapTone " + juce::String (zeroBasedIndex + 1);
+    const auto name = snapToneNames[static_cast<std::size_t> (zeroBasedIndex)].trim ();
+
+    if (name.isEmpty ())
+        return fallback;
+
+    return fallback + " - " + name;
+}
+
+bool MidiConnection::sendNextAssignmentNameQuery ()
+{
+    if (pendingAssignmentNameQueries.empty ())
+    {
+        assignmentNameRequestInProgress = false;
+        currentAssignmentNameQuery = {};
+
+        int userIRCount = 0;
+        int snapToneCount = 0;
+
+        for (const auto& name : userIRNames)
+        {
+            if (name.trim ().isNotEmpty ())
+                ++userIRCount;
+        }
+
+        for (const auto& name : snapToneNames)
+        {
+            if (name.trim ().isNotEmpty ())
+                ++snapToneCount;
+        }
+
+        assignmentNamesStatusText = "Assignment names: loaded User IR " + juce::String (userIRCount) + "/" +
+                                    juce::String (static_cast<int> (userIRNames.size ())) + ", SnapTone " +
+                                    juce::String (snapToneCount) + "/" +
+                                    juce::String (static_cast<int> (snapToneNames.size ()));
+
+        lastMessageText = assignmentNamesStatusText;
+        return true;
+    }
+
+    currentAssignmentNameQuery = pendingAssignmentNameQueries.front ();
+    pendingAssignmentNameQueries.erase (pendingAssignmentNameQueries.begin ());
+
+    return sendAssignmentNameQuery (currentAssignmentNameQuery.section,
+                                    currentAssignmentNameQuery.page,
+                                    currentAssignmentNameQuery.block);
+}
+
+bool MidiConnection::sendAssignmentNameQuery (int section, int page, int block)
+{
+    if (midiOutput == nullptr)
+    {
+        assignmentNamesStatusText = "Assignment names: MIDI output not open";
+        lastMessageText = assignmentNamesStatusText;
+        return false;
+    }
+
+    const auto bytes = buildAssignmentNameQuery (section, page, block);
+
+    auto message =
+        juce::MidiMessage::createSysExMessage (bytes.data () + 1, static_cast<int> (bytes.size () - 2));
+
+    midiOutput->sendMessageNow (message);
+
+    assignmentNameRequestInProgress = true;
+
+    const auto label = section == 0 ? "User IR " + juce::String (page * 16 + block + 1)
+                                    : "SnapTone " + juce::String (block + 1);
+
+    assignmentNamesStatusText = "Assignment names: requesting " + label;
+    lastMessageText = assignmentNamesStatusText;
+
+    return true;
+}
+
+bool MidiConnection::sendPatchVolume (int value)
+{
+    const juce::ScopedLock lock (stateLock);
+    if (midiOutput == nullptr)
+    {
+        lastMessageText = "Cannot change Patch VOL: MIDI output not open";
+        return false;
+    }
+
+    const auto safeValue = juce::jlimit (0, 100, value);
+
+    constexpr int midiChannel = 1;
+    constexpr int patchVolumeCC = 7;
+
+    const auto message = juce::MidiMessage::controllerEvent (midiChannel, patchVolumeCC, safeValue);
+
+    midiOutput->sendMessageNow (message);
+
+    if (currentPresetDecodedData.getSize () > patchVolumeOffset)
+    {
+        auto* data = static_cast<juce::uint8*> (currentPresetDecodedData.getData ());
+
+        if (data != nullptr)
+        {
+            data[patchVolumeOffset] = static_cast<juce::uint8> (safeValue);
+            ++presetRevision;
+        }
+    }
+
+    lastMessageText = "Sent Patch VOL CC7 = " + juce::String (safeValue);
+
+    return true;
+}
+bool MidiConnection::sendPatchPan (int pan)
+{
+    const juce::ScopedLock lock (stateLock);
+    if (midiOutput == nullptr)
+    {
+        lastMessageText = "Cannot change Patch PAN: MIDI output not open";
+        return false;
+    }
+
+    const auto safePan = juce::jlimit (-100, 100, pan);
+
+    /*
+        UI:
+            -100 = L100
+              0 = C
+             100 = R100
+
+        Device candidate:
+            0..100 for center/right
+            >127 for left side
+    */
+    const auto deviceValue = safePan >= 0 ? safePan : 256 + safePan;
+
+    const auto bytes = buildPatchSetting (0x06, deviceValue);
+
+    auto message =
+        juce::MidiMessage::createSysExMessage (bytes.data () + 1, static_cast<int> (bytes.size () - 2));
+
+    midiOutput->sendMessageNow (message);
+
+    juce::String panText;
+
+    if (safePan == 0)
+        panText = "C";
+    else if (safePan < 0)
+        panText = "L" + juce::String (std::abs (safePan));
+    else
+        panText = "R" + juce::String (safePan);
+
+    lastMessageText = "Sent Patch PAN = " + panText;
+
+    return true;
+}
+
+bool MidiConnection::sendPatchTempoBpm (int bpm)
+{
+    const juce::ScopedLock lock (stateLock);
+    if (midiOutput == nullptr)
+    {
+        lastMessageText = "Cannot change Patch Tempo: MIDI output not open";
+        return false;
+    }
+
+    const auto safeBpm = juce::jlimit (40, 250, bpm);
+
+    // Patch Setting target:
+    // 0x00 = Patch VOL
+    // 0x01 = Patch Tempo / BPM
+    // 0x06 = Patch PAN
+    //
+    // Keep the visible BPM value as-is.
+    // No -1 conversion here because the GP-200 display matches the plugin value.
+    const auto bytes = buildPatchSetting (0x01, safeBpm);
+
+    auto message =
+        juce::MidiMessage::createSysExMessage (bytes.data () + 1, static_cast<int> (bytes.size () - 2));
+
+    midiOutput->sendMessageNow (message);
+
+    if (currentPresetDecodedData.getSize () > patchTempoOffset)
+    {
+        auto* data = static_cast<juce::uint8*> (currentPresetDecodedData.getData ());
+
+        if (data != nullptr)
+        {
+            data[patchTempoOffset] = static_cast<juce::uint8> (safeBpm);
+            ++presetRevision;
+        }
+    }
+
+    lastMessageText = "Sent Patch Tempo setting = " + juce::String (safeBpm) + " BPM";
+
+    return true;
+}
+
+bool MidiConnection::sendTunerOnOff (bool shouldBeOn)
+{
+    const juce::ScopedLock lock (stateLock);
+    if (midiOutput == nullptr)
+    {
+        lastMessageText = "Cannot toggle tuner: MIDI output not open";
+        return false;
+    }
+
+    constexpr int midiChannel = 1;
+    constexpr int tunerCC = 58;
+
+    const auto value = shouldBeOn ? 127 : 0;
+
+    const auto message = juce::MidiMessage::controllerEvent (midiChannel, tunerCC, value);
+
+    midiOutput->sendMessageNow (message);
+
+    lastMessageText = shouldBeOn ? "Sent TUNER ON CC58" : "Sent TUNER OFF CC58";
+
+    return true;
+}
+
+bool MidiConnection::sendEffectOnOff (int blockIndex, bool shouldBeOn)
+{
+    const juce::ScopedLock lock (stateLock);
+    if (midiOutput == nullptr)
+    {
+        lastMessageText = "Cannot toggle effect: MIDI output not open";
+        return false;
+    }
+
+    // Special case: VOL does not have a standard MIDI CC ON/OFF command.
+    // Keep all other blocks using the existing CC path, but toggle VOL by SysEx.
+    if (blockIndex == 10)
+    {
+        const std::vector<juce::uint8> bytes{0xF0,
+                                             0x21,
+                                             0x25,
+                                             0x7E,
+                                             0x47,
+                                             0x50,
+                                             0x2D,
+                                             0x32,
+                                             0x12,
+                                             0x10,
+                                             0x00,
+                                             0x00,
+                                             0x00,
+                                             0x00,
+                                             0x00,
+                                             0x00,
+                                             0x00,
+                                             0x00,
+                                             0x04,
+                                             0x00,
+                                             0x00,
+                                             0x00,
+                                             0x00,
+                                             0x00,
+                                             0x00,
+                                             0x00,
+                                             0x00,
+                                             0x00,
+                                             0x00,
+                                             0x01,
+                                             0x05,
+                                             0x00,
+                                             0x00,
+                                             0x00,
+                                             0x04,
+                                             0x00,
+                                             0x00,
+                                             0x00,
+                                             0x0A,
+                                             0x00,
+                                             static_cast<juce::uint8> (shouldBeOn ? 0x01 : 0x00),
+                                             0x09,
+                                             0x0C,
+                                             0x00,
+                                             0x02,
+                                             0xF7};
+
+        auto message =
+            juce::MidiMessage::createSysExMessage (bytes.data () + 1, static_cast<int> (bytes.size () - 2));
+
+        midiOutput->sendMessageNow (message);
+
+        updateCurrentPresetEffectEnabled (blockIndex, shouldBeOn);
+
+        lastMessageText = "Sent VOL " + juce::String (shouldBeOn ? "ON" : "OFF") + " using SysEx";
+
+        return true;
+    }
+
+    const auto ccNumber = getEffectOnOffCCForBlockIndex (blockIndex);
+
+    if (ccNumber < 0)
+    {
+        lastMessageText = "Cannot toggle effect: unsupported block " + juce::String (blockIndex);
+
+        return false;
+    }
+
+    constexpr int midiChannel = 1;
+    const int value = shouldBeOn ? 127 : 0;
+
+    const auto message = juce::MidiMessage::controllerEvent (midiChannel, ccNumber, value);
+
+    midiOutput->sendMessageNow (message);
+
+    updateCurrentPresetEffectEnabled (blockIndex, shouldBeOn);
+
+    lastMessageText = "Sent effect " + juce::String (blockIndex) + (shouldBeOn ? " ON" : " OFF") +
+                      " using CC" + juce::String (ccNumber);
+
+    return true;
+}
+
+bool MidiConnection::sendEffectChange (int blockIndex, juce::uint32 effectId)
+{
+    const juce::ScopedLock lock (stateLock);
+    if (blockIndex < 0 || blockIndex >= static_cast<int> (effectBlockCount))
+    {
+        lastMessageText = "Cannot change effect: invalid block index";
+        return false;
+    }
+
+    if (midiOutput == nullptr)
+    {
+        lastMessageText = "Cannot change effect: MIDI output not open";
+        return false;
+    }
+
+    const auto bytes = buildEffectChange (blockIndex, effectId);
+
+    auto message =
+        juce::MidiMessage::createSysExMessage (bytes.data () + 1, static_cast<int> (bytes.size () - 2));
+
+    midiOutput->sendMessageNow (message);
+
+    updateCurrentPresetEffectId (blockIndex, effectId);
+
+    lastMessageText = "Sent effect change to GP-200: block " + juce::String (blockIndex) + " -> " +
+                      juce::String::toHexString (static_cast<juce::int64> (effectId));
+
+    return true;
+}
+
+bool MidiConnection::sendParamChange (int blockIndex, int paramIndex, juce::uint32 effectId, float value)
+{
+    const juce::ScopedLock lock (stateLock);
+    if (blockIndex < 0 || blockIndex >= static_cast<int> (effectBlockCount))
+    {
+        lastMessageText = "Cannot change parameter: invalid block index";
+        return false;
+    }
+
+    if (paramIndex < 0 || paramIndex >= static_cast<int> (effectParamCount))
+    {
+        lastMessageText = "Cannot change parameter: invalid parameter index";
+        return false;
+    }
+
+    if (midiOutput == nullptr)
+    {
+        lastMessageText = "Cannot change parameter: MIDI output not open";
+        return false;
+    }
+
+    const auto bytes = buildParamChange (blockIndex, paramIndex, effectId, value);
+
+    auto message =
+        juce::MidiMessage::createSysExMessage (bytes.data () + 1, static_cast<int> (bytes.size () - 2));
+
+    midiOutput->sendMessageNow (message);
+
+    updateCurrentPresetEffectParam (blockIndex, paramIndex, value);
+
+    lastMessageText = "Sent parameter change to GP-200: block " + juce::String (blockIndex) + " param " +
+                      juce::String (paramIndex) + " = " + juce::String (value, 2);
+
+    return true;
+}
+
+bool MidiConnection::sendReorderEffects (const RoutingOrder& routingOrder, int fxLoopSend, int fxLoopReturn)
+{
+    const juce::ScopedLock lock (stateLock);
+    if (midiOutput == nullptr)
+    {
+        lastMessageText = "Cannot reorder effects: MIDI output not open";
+        return false;
+    }
+
+    std::array<bool, effectBlockCount> seen{};
+    seen.fill (false);
+
+    for (const auto blockIndex : routingOrder)
+    {
+        if (blockIndex < 0 || blockIndex >= static_cast<int> (effectBlockCount))
+        {
+            lastMessageText = "Cannot reorder effects: invalid routing order";
+            return false;
+        }
+
+        if (seen[static_cast<std::size_t> (blockIndex)])
+        {
+            lastMessageText = "Cannot reorder effects: duplicate block in routing order";
+            return false;
+        }
+
+        seen[static_cast<std::size_t> (blockIndex)] = true;
+    }
+
+    const auto bytes = buildReorderEffects (routingOrder, fxLoopSend, fxLoopReturn);
+
+    auto message =
+        juce::MidiMessage::createSysExMessage (bytes.data () + 1, static_cast<int> (bytes.size () - 2));
+
+    midiOutput->sendMessageNow (message);
+
+    updateCurrentPresetRoutingOrder (routingOrder);
+
+    lastMessageText = "Sent effect chain reorder to GP-200";
+
+    return true;
+}
+
+bool MidiConnection::storeCurrentPresetToGP200 ()
+{
+    const juce::ScopedLock lock (stateLock);
+    if (midiOutput == nullptr)
+    {
+        lastMessageText = "Cannot store preset: MIDI output not open";
+        return false;
+    }
+
+    if (currentSlot < 0 || currentSlot > 255)
+    {
+        lastMessageText = "Cannot store preset: current slot unknown";
+        return false;
+    }
+
+    const auto presetName = sanitizePresetNameForStore (currentPresetName);
+
+    if (presetName.isEmpty ())
+    {
+        lastMessageText = "Cannot store preset: current preset name unknown";
+        return false;
+    }
+
+    const auto bytes = buildStorePresetCommit (currentSlot, presetName);
+
+    auto message =
+        juce::MidiMessage::createSysExMessage (bytes.data () + 1, static_cast<int> (bytes.size () - 2));
+
+    midiOutput->sendMessageNow (message);
+
+    lastMessageText =
+        "Stored current preset to GP-200 slot " + juce::String (currentSlot) + ": " + presetName;
+
+    return true;
+}
+bool MidiConnection::renameCurrentPresetOnGP200 (const juce::String& newName)
+{
+    const juce::ScopedLock lock (stateLock);
+    if (midiOutput == nullptr)
+    {
+        lastMessageText = "Cannot rename preset: MIDI output not open";
+        return false;
+    }
+
+    if (currentSlot < 0 || currentSlot > 255)
+    {
+        lastMessageText = "Cannot rename preset: current slot unknown";
+        return false;
+    }
+
+    const auto safeName = sanitizePresetNameForStore (newName);
+
+    if (safeName.isEmpty ())
+    {
+        lastMessageText = "Cannot rename preset: invalid name";
+        return false;
+    }
+
+    currentPresetName = safeName;
+
+    constexpr auto presetNameLength = presetNameMaxLength;
+
+    if (currentPresetDecodedData.getSize () >= presetNameOffset + presetNameLength)
+    {
+        auto* data = static_cast<juce::uint8*> (currentPresetDecodedData.getData ());
+
+        if (data != nullptr)
+        {
+            for (std::size_t i = 0; i < presetNameLength; ++i)
+                data[presetNameOffset + i] = 0;
+
+            for (int i = 0; i < safeName.length () && i < static_cast<int> (presetNameLength); ++i)
+            {
+                const auto c = safeName[i];
+
+                if (c >= 32 && c <= 126)
+                    data[presetNameOffset + static_cast<std::size_t> (i)] = static_cast<juce::uint8> (c);
+                else
+                    data[presetNameOffset + static_cast<std::size_t> (i)] = static_cast<juce::uint8> (' ');
+            }
+        }
+
+        ++presetRevision;
+    }
+
+    if (!storeCurrentPresetToGP200 ())
+        return false;
+
+    lastMessageText = "Renamed current preset to: " + safeName;
+
+    return true;
+}
+
+void MidiConnection::updateCurrentPresetEffectEnabled (int blockIndex, bool enabled)
+{
+    const juce::ScopedLock lock (stateLock);
+    if (blockIndex < 0 || blockIndex >= static_cast<int> (effectBlockCount))
+        return;
+
+    const auto base = effectBlockStart + static_cast<std::size_t> (blockIndex) * effectBlockSize;
+    const auto enabledByteOffset = base + enabledOffset;
+
+    if (currentPresetDecodedData.getSize () <= enabledByteOffset)
+        return;
+
+    auto* data = static_cast<juce::uint8*> (currentPresetDecodedData.getData ());
+
+    if (data == nullptr)
+        return;
+
+    data[enabledByteOffset] = enabled ? 1 : 0;
+    ++presetRevision;
+}
+
+void MidiConnection::updateCurrentPresetEffectId (int blockIndex, juce::uint32 effectId)
+{
+    const juce::ScopedLock lock (stateLock);
+    if (blockIndex < 0 || blockIndex >= static_cast<int> (effectBlockCount))
+        return;
+
+    const auto base = effectBlockStart + static_cast<std::size_t> (blockIndex) * effectBlockSize;
+    const auto effectIdByteOffset = base + effectIdOffset;
+    const auto paramsByteOffset = base + paramsOffset;
+
+    if (currentPresetDecodedData.getSize () < paramsByteOffset + effectParamCount * 4)
+        return;
+
+    auto* data = static_cast<juce::uint8*> (currentPresetDecodedData.getData ());
+
+    if (data == nullptr)
+        return;
+
+    data[effectIdByteOffset + 0] = static_cast<juce::uint8> (effectId & 0xFF);
+    data[effectIdByteOffset + 1] = static_cast<juce::uint8> ((effectId >> 8) & 0xFF);
+    data[effectIdByteOffset + 2] = static_cast<juce::uint8> ((effectId >> 16) & 0xFF);
+    data[effectIdByteOffset + 3] = static_cast<juce::uint8> ((effectId >> 24) & 0xFF);
+
+    EffectParameters defaultParams{};
+
+    if (const auto* paramSet = GP200EffectParamDatabase::findParamsForEffect (effectId))
+    {
+        for (int i = 0; i < paramSet->count; ++i)
+        {
+            const auto& param = paramSet->params[i];
+
+            if (param.idx >= 0 && param.idx < static_cast<int> (defaultParams.size ()))
+                defaultParams[static_cast<std::size_t> (param.idx)] = param.defaultValue;
+        }
+    }
+
+    for (std::size_t i = 0; i < defaultParams.size (); ++i)
+    {
+        const auto offset = paramsByteOffset + i * 4;
+        const auto value = defaultParams[i];
+        std::memcpy (data + offset, &value, sizeof (float));
+    }
+
+    ++presetRevision;
+}
+
+void MidiConnection::updateCurrentPresetEffectParam (int blockIndex, int paramIndex, float value)
+{
+    const juce::ScopedLock lock (stateLock);
+    if (blockIndex < 0 || blockIndex >= static_cast<int> (effectBlockCount))
+        return;
+
+    if (paramIndex < 0 || paramIndex >= static_cast<int> (effectParamCount))
+        return;
+
+    const auto base = effectBlockStart + static_cast<std::size_t> (blockIndex) * effectBlockSize;
+    const auto paramsByteOffset = base + paramsOffset;
+    const auto valueOffset = paramsByteOffset + static_cast<std::size_t> (paramIndex) * 4;
+
+    if (currentPresetDecodedData.getSize () < valueOffset + sizeof (float))
+        return;
+
+    auto* data = static_cast<juce::uint8*> (currentPresetDecodedData.getData ());
+
+    if (data == nullptr)
+        return;
+
+    std::memcpy (data + valueOffset, &value, sizeof (float));
+    ++presetRevision;
+}
+
+void MidiConnection::updateCurrentPresetRoutingOrder (const RoutingOrder& routingOrder)
+{
+    const juce::ScopedLock lock (stateLock);
+    if (currentPresetDecodedData.getSize () < routingOrderOffset + effectBlockCount)
+        return;
+
+    auto* data = static_cast<juce::uint8*> (currentPresetDecodedData.getData ());
+
+    if (data == nullptr)
+        return;
+
+    for (std::size_t i = 0; i < effectBlockCount; ++i)
+        data[routingOrderOffset + i] = static_cast<juce::uint8> (routingOrder[i] & 0xFF);
+
+    ++presetRevision;
+}
+
+int MidiConnection::getEffectOnOffCCForBlockIndex (int blockIndex)
+{
+    switch (blockIndex)
+    {
+    case 0:
+        return 48; // PRE
+    case 1:
+        return 57; // WAH
+    case 2:
+        return 49; // DST
+    case 3:
+        return 50; // AMP
+    case 4:
+        return 51; // NR
+    case 5:
+        return 52; // CAB
+    case 6:
+        return 53; // EQ
+    case 7:
+        return 54; // MOD
+    case 8:
+        return 55; // DLY
+    case 9:
+        return 56; // RVB
+
+    case 10:
+        return -1; // VOL: not listed as ON/OFF CC in the manual
+
+    default:
+        return -1;
+    }
+}
+
+bool MidiConnection::sendPresetChange (int slot)
+{
+    const juce::ScopedLock lock (stateLock);
+    if (slot < 0 || slot > 255)
+    {
+        lastMessageText = "Cannot restore preset: invalid slot";
+        return false;
+    }
+
+    if (midiOutput == nullptr)
+    {
+        lastMessageText = "Cannot restore preset: MIDI output not open";
+        return false;
+    }
+
+    const auto bytes = buildPresetChange (slot);
+
+    auto message =
+        juce::MidiMessage::createSysExMessage (bytes.data () + 1, static_cast<int> (bytes.size () - 2));
+
+    midiOutput->sendMessageNow (message);
+
+    currentSlot = slot;
+    currentPresetName = "requesting...";
+    presetNameRequestPending = true;
+    lastRequestedNameSlot = -1;
+    resetPresetDumpCaptureForSlot (slot);
+
+    lastMessageText = "Sent DAW saved preset to GP-200: slot " + juce::String (slot);
+
+    return true;
+}
+
+juce::String MidiConnection::getStatusText () const
+{
+    const juce::ScopedLock lock (stateLock);
+    return statusText;
+}
+
+juce::String MidiConnection::getLastMessageText () const
+{
+    const juce::ScopedLock lock (stateLock);
+    return lastMessageText;
+}
+
+int MidiConnection::getCurrentSlot () const
+{
+    const juce::ScopedLock lock (stateLock);
+    return currentSlot;
+}
+
+juce::String MidiConnection::getCurrentSlotText () const
+{
+    const juce::ScopedLock lock (stateLock);
+    if (currentSlot < 0)
+        return "Current preset slot: unknown";
+
+    const int bank = currentSlot / presetsPerBank + 1;
+    const int slotInBank = currentSlot % presetsPerBank;
+
+    const juce::String slotLetter = juce::String ("ABCD").substring (slotInBank, slotInBank + 1);
+
+    return "Current preset slot: " + juce::String (currentSlot) + "  (" +
+           juce::String (bank).paddedLeft ('0', 2) + "-" + slotLetter + ")";
+}
+
+juce::String MidiConnection::getCurrentPresetName () const
+{
+    const juce::ScopedLock lock (stateLock);
+    return currentPresetName;
+}
+
+juce::String MidiConnection::getCurrentPresetNameText () const
+{
+    const juce::ScopedLock lock (stateLock);
+    return "Current preset name: " + currentPresetName;
+}
+
+juce::String MidiConnection::getCurrentPresetDumpStatusText () const
+{
+    const juce::ScopedLock lock (stateLock);
+    return currentPresetDumpStatusText;
+}
+
+int MidiConnection::getCurrentPresetDumpSize () const
+{
+    const juce::ScopedLock lock (stateLock);
+    return static_cast<int> (currentPresetDecodedData.getSize ());
+}
+
+juce::MemoryBlock MidiConnection::getCurrentPresetDumpDataCopy () const
+{
+    const juce::ScopedLock lock (stateLock);
+    return currentPresetDecodedData;
+}
+
+std::uint64_t MidiConnection::getPresetRevision () const
+{
+    const juce::ScopedLock lock (stateLock);
+    return presetRevision;
+}
+
+std::uint64_t MidiConnection::getAssignmentNamesRevision () const
+{
+    const juce::ScopedLock lock (stateLock);
+    return assignmentNamesRevision;
+}
+
+void MidiConnection::adoptCurrentPresetSnapshot (int slot,
+                                                 const juce::String& presetName,
+                                                 const juce::MemoryBlock& presetData)
+{
+    const juce::ScopedLock lock (stateLock);
+    if (slot >= 0 && slot <= 255)
+        currentSlot = slot;
+
+    auto safeName = sanitizePresetNameForStore (presetName);
+
+    if (safeName.isEmpty () && presetData.getSize () >= 44)
+    {
+        const auto* data = static_cast<const juce::uint8*> (presetData.getData ());
+
+        if (data != nullptr)
+        {
+            juce::String nameFromData;
+
+            for (int i = 0; i < presetNameMaxLength; ++i)
+            {
+                const auto b = data[presetNameOffset + static_cast<std::size_t> (i)];
+
+                if (b == 0)
+                    break;
+
+                if (b >= 32 && b <= 126)
+                    nameFromData += juce::String::charToString (static_cast<juce_wchar> (b));
+            }
+
+            safeName = sanitizePresetNameForStore (nameFromData);
+        }
+    }
+
+    currentPresetName = safeName.isNotEmpty () ? safeName : "unknown";
+
+    presetNameRequestPending = false;
+    lastRequestedNameSlot = currentSlot;
+    presetDumpSlot = -1;
+    presetReadChunks.clear ();
+
+    currentPresetDecodedData = presetData;
+    ++presetRevision;
+
+    currentPresetDumpStatusText = "Current full preset data: restored snapshot, " +
+                                  juce::String (static_cast<int> (currentPresetDecodedData.getSize ())) +
+                                  " bytes";
+
+    lastMessageText = "Loaded DAW preset snapshot into editor: slot " + juce::String (currentSlot) + " / " +
+                      currentPresetName;
+}
+
+bool MidiConnection::requestPresetNameForCurrentSlotIfNeeded ()
+{
+    const juce::ScopedLock lock (stateLock);
+    if (!presetNameRequestPending)
+        return false;
+
+    if (currentSlot < 0)
+        return false;
+
+    if (lastRequestedNameSlot == currentSlot)
+        return false;
+
+    return sendReadRequestForSlot (currentSlot);
+}
+
+bool MidiConnection::sendReadRequestForSlot (int slot)
+{
+    if (midiOutput == nullptr)
+    {
+        lastMessageText = "Cannot request preset data: MIDI output not open";
+        return false;
+    }
+
+    const auto bytes = buildReadRequest (slot);
+
+    auto message =
+        juce::MidiMessage::createSysExMessage (bytes.data () + 1, static_cast<int> (bytes.size () - 2));
+
+    midiOutput->sendMessageNow (message);
+
+    lastRequestedNameSlot = slot;
+    resetPresetDumpCaptureForSlot (slot);
+
+    lastMessageText = "Requested full preset data for slot " + juce::String (slot);
+
+    return true;
+}
+
+void MidiConnection::resetPresetDumpCaptureForSlot (int slot)
+{
+    presetDumpSlot = slot;
+    presetReadChunks.clear ();
+    currentPresetDecodedData.setSize (0);
+    ++presetRevision;
+
+    currentPresetDumpStatusText = "Current full preset data: requesting slot " + juce::String (slot);
+}
+
+void MidiConnection::collectPresetReadChunk (const juce::uint8* data, int size)
+{
+    if (presetDumpSlot < 0)
+        return;
+
+    // Real preset read chunks are large. This avoids confusing small
+    // real-time parameter messages, which also use CMD=0x12 / SUB=0x18.
+    if (size < 100)
+        return;
+
+    const int offset = getChunkOffset (data, size);
+
+    if (offset < 0)
+        return;
+
+    for (const auto& existingChunk : presetReadChunks)
+    {
+        if (getChunkOffset (existingChunk.data (), static_cast<int> (existingChunk.size ())) == offset)
+            return;
+    }
+
+    presetReadChunks.emplace_back (data, data + size);
+
+    currentPresetDumpStatusText = "Current full preset data: receiving " +
+                                  juce::String (static_cast<int> (presetReadChunks.size ())) + "/7 chunks";
+
+    if (presetReadChunks.size () >= 7)
+    {
+        currentPresetDecodedData = assemblePresetReadChunks (presetReadChunks);
+        ++presetRevision;
+
+        currentPresetDumpStatusText = "Current full preset data: captured, " +
+                                      juce::String (static_cast<int> (currentPresetDecodedData.getSize ())) +
+                                      " bytes";
+
+        presetDumpSlot = -1;
+    }
+}
+
+int MidiConnection::getChunkOffset (const juce::uint8* data, int size)
+{
+    if (data == nullptr || size <= 12)
+        return -1;
+
+    return data[11] | (data[12] << 8);
+}
+
+std::vector<juce::uint8> MidiConnection::buildStateDumpRequest ()
+{
+    return {0xF0, 0x21, 0x25, 0x7E, 0x47, 0x50, 0x2D, 0x32, 0x11, 0x04, 0x00,
+            0x00, 0x00, 0x00, 0x06, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0xF7};
+}
+
+std::vector<juce::uint8> MidiConnection::buildAssignmentNameQuery (int section, int page, int block)
+{
+    const std::vector<juce::uint8> section0Header{0x00, 0x00, 0x00, 0x00, 0x09, 0x01, 0x00, 0x01, 0x08};
+
+    const std::vector<juce::uint8> section1Header{0x00, 0x00, 0x00, 0x01, 0x02, 0x01, 0x00, 0x01, 0x08};
+
+    const auto& sectionHeader = section == 1 ? section1Header : section0Header;
+
+    const std::vector<juce::uint8> referenceData{
+        0x01, 0x00, 0x00, 0x0C, 0x0E, 0x07, 0x03, 0x0B, 0x02, 0x00, 0x00, 0x07, 0x02, 0x04, 0x0F,
+        0x06, 0x05, 0x00, 0x09, 0x00, 0x0C, 0x0F, 0x0E, 0x0D, 0x0A, 0x00, 0x0B, 0x09, 0x08, 0x07,
+        0x05, 0x0E, 0x08, 0x00, 0x02, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+
+    std::vector<juce::uint8> message;
+
+    message.reserve (70);
+
+    message.push_back (0xF0);
+    message.push_back (0x21);
+    message.push_back (0x25);
+    message.push_back (0x7E);
+    message.push_back (0x47);
+    message.push_back (0x50);
+    message.push_back (0x2D);
+    message.push_back (0x32);
+    message.push_back (0x11);
+    message.push_back (0x1C);
+
+    message.insert (message.end (), sectionHeader.begin (), sectionHeader.end ());
+
+    message.push_back (0x00);
+    message.push_back (0x00);
+    message.push_back (static_cast<juce::uint8> (page & 0xFF));
+    message.push_back (static_cast<juce::uint8> (block & 0x0F));
+    message.push_back (0x00);
+    message.push_back (0x00);
+    message.push_back (0x00);
+
+    message.insert (message.end (), referenceData.begin (), referenceData.end ());
+
+    message.push_back (0xF7);
+
+    return message;
+}
+std::vector<juce::uint8> MidiConnection::buildPresetChange (int slot)
+{
+    const auto sh = static_cast<juce::uint8> ((slot >> 4) & 0x0F);
+    const auto sl = static_cast<juce::uint8> (slot & 0x0F);
+
+    return {0xF0, 0x21, 0x25, 0x7E, 0x47, 0x50, 0x2D, 0x32, 0x12, 0x08, 0x00, 0x00, 0x00, 0x00, 0x08,
+            0x01, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, sh,   sl,   0x00, 0x00, 0xF7};
+}
+
+std::vector<juce::uint8> MidiConnection::buildEffectChange (int blockIndex, juce::uint32 effectId)
+{
+    const auto moduleType = static_cast<juce::uint8> ((effectId >> 24) & 0xFF);
+    const auto subCategory = static_cast<juce::uint8> ((effectId >> 16) & 0xFF);
+    const auto variant = static_cast<juce::uint8> (effectId & 0xFF);
+
+    return {0xF0,
+            0x21,
+            0x25,
+            0x7E,
+            0x47,
+            0x50,
+            0x2D,
+            0x32,
+            0x12,
+            0x14,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x04,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x01,
+            0x06,
+            0x00,
+            0x00,
+            0x00,
+            0x08,
+            0x00,
+            0x00,
+            0x00,
+            static_cast<juce::uint8> (blockIndex & 0x0F),
+            0x00,
+            0x00,
+            0x07,
+            0x06,
+            0x00,
+            0x02,
+            static_cast<juce::uint8> ((variant >> 4) & 0x0F),
+            static_cast<juce::uint8> (variant & 0x0F),
+            0x00,
+            0x00,
+            static_cast<juce::uint8> ((subCategory >> 4) & 0x0F),
+            static_cast<juce::uint8> (subCategory & 0x0F),
+            0x00,
+            moduleType,
+            0xF7};
+}
+
+std::vector<juce::uint8> MidiConnection::buildPatchSetting (int target, int value)
+{
+    const auto safeTarget = juce::jlimit (0, 15, target);
+    const auto safeValue = juce::jlimit (0, 511, value);
+
+    std::vector<juce::uint8> message{0xF0,
+                                     0x21,
+                                     0x25,
+                                     0x7E,
+                                     0x47,
+                                     0x50,
+                                     0x2D,
+                                     0x32,
+                                     0x12,
+                                     0x10,
+                                     0x00,
+                                     0x00,
+                                     0x00,
+                                     0x00,
+                                     0x00,
+                                     0x00,
+                                     0x00,
+                                     0x00,
+                                     0x04,
+                                     0x00,
+                                     0x00,
+                                     0x00,
+                                     0x00,
+                                     0x00,
+                                     0x00,
+                                     0x00,
+                                     0x00,
+                                     0x00,
+                                     0x00,
+                                     0x00,
+                                     0x06,
+                                     0x00,
+                                     0x00,
+                                     0x00,
+                                     0x04,
+                                     0x00,
+                                     0x00,
+                                     0x00,
+                                     static_cast<juce::uint8> (safeTarget & 0x0F),
+                                     0x00,
+                                     0x00,
+                                     static_cast<juce::uint8> ((safeValue >> 4) & 0x0F),
+                                     static_cast<juce::uint8> (safeValue & 0x0F),
+                                     0x00,
+                                     0x00,
+                                     0xF7};
+
+    if (safeTarget == 0x06 && safeValue > 127)
+    {
+        message[43] = 0x0F;
+        message[44] = 0x0F;
+    }
+
+    return message;
+}
+
+std::vector<juce::uint8>
+MidiConnection::buildParamChange (int blockIndex, int paramIndex, juce::uint32 effectId, float value)
+{
+    juce::uint8 decoded[24]{};
+
+    decoded[2] = 0x04;
+    decoded[8] = 0x05;
+    decoded[10] = 0x0C;
+    decoded[12] = static_cast<juce::uint8> (blockIndex & 0x0F);
+    decoded[13] = static_cast<juce::uint8> (paramIndex & 0x0F);
+
+    const auto displayValue = encodeDisplayValue (value);
+    decoded[14] = displayValue[0];
+    decoded[15] = displayValue[1];
+
+    decoded[16] = static_cast<juce::uint8> (effectId & 0xFF);
+    decoded[17] = static_cast<juce::uint8> ((effectId >> 8) & 0xFF);
+    decoded[18] = static_cast<juce::uint8> ((effectId >> 16) & 0xFF);
+    decoded[19] = static_cast<juce::uint8> ((effectId >> 24) & 0xFF);
+
+    std::memcpy (decoded + 20, &value, sizeof (float));
+
+    const auto nibbles = nibbleEncode (decoded, 24);
+
+    std::vector<juce::uint8> message;
+    message.reserve (62);
+
+    message.push_back (0xF0);
+    message.push_back (0x21);
+    message.push_back (0x25);
+    message.push_back (0x7E);
+    message.push_back (0x47);
+    message.push_back (0x50);
+    message.push_back (0x2D);
+    message.push_back (0x32);
+    message.push_back (0x12);
+    message.push_back (0x18);
+    message.push_back (0x00);
+    message.push_back (0x00);
+    message.push_back (0x00);
+
+    message.insert (message.end (), nibbles.begin (), nibbles.end ());
+
+    message.push_back (0xF7);
+
+    return message;
+}
+
+std::vector<juce::uint8>
+MidiConnection::buildReorderEffects (const RoutingOrder& routingOrder, int fxLoopSend, int fxLoopReturn)
+{
+    juce::uint8 decoded[32]{};
+
+    decoded[2] = 0x04;
+    decoded[8] = 0x08;
+    decoded[10] = 0x10;
+    decoded[14] = static_cast<juce::uint8> (fxLoopSend & 0xFF);
+    decoded[15] = static_cast<juce::uint8> (fxLoopReturn & 0xFF);
+
+    for (int i = 0; i < 11; ++i)
+        decoded[16 + i] = static_cast<juce::uint8> (routingOrder[static_cast<std::size_t> (i)] & 0xFF);
+
+    decoded[27] = 0x44;
+
+    const auto nibbles = nibbleEncode (decoded, 32);
+
+    std::vector<juce::uint8> message;
+    message.reserve (78);
+
+    message.push_back (0xF0);
+    message.push_back (0x21);
+    message.push_back (0x25);
+    message.push_back (0x7E);
+    message.push_back (0x47);
+    message.push_back (0x50);
+    message.push_back (0x2D);
+    message.push_back (0x32);
+    message.push_back (0x12);
+    message.push_back (0x20);
+    message.push_back (0x00);
+    message.push_back (0x00);
+    message.push_back (0x00);
+
+    message.insert (message.end (), nibbles.begin (), nibbles.end ());
+    message.push_back (0xF7);
+
+    return message;
+}
+
+std::vector<juce::uint8> MidiConnection::buildReadRequest (int slot)
+{
+    const auto sh = static_cast<juce::uint8> ((slot >> 4) & 0x0F);
+    const auto sl = static_cast<juce::uint8> (slot & 0x0F);
+
+    return {0xF0, 0x21, 0x25, 0x7E, 0x47, 0x50, 0x2D, 0x32, 0x11, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, sh,   sl,   0x00, 0x00, 0x00, 0x01, 0x00,
+            0x00, 0x00, 0x04, 0x00, 0x00, sh,   sl,   0x00, 0x00, sh,   sl,   0x00, 0x00, 0xF7};
+}
+
+std::vector<juce::uint8> MidiConnection::buildStorePresetCommit (int slot, const juce::String& presetName)
+{
+    juce::uint8 decoded[24]{};
+
+    decoded[0] = 0x03;
+    decoded[1] = 0x20;
+    decoded[2] = 0x14;
+
+    // Important: this is the sub-slot inside the current bank:
+    // A=0, B=1, C=2, D=3.
+    decoded[4] = static_cast<juce::uint8> (slot);
+
+    const auto safeName = sanitizePresetNameForStore (presetName);
+
+    for (int i = 0; i < 16 && i < safeName.length (); ++i)
+    {
+        const auto c = safeName[i];
+
+        if (c >= 32 && c <= 126)
+            decoded[8 + i] = static_cast<juce::uint8> (c);
+        else
+            decoded[8 + i] = static_cast<juce::uint8> (' ');
+    }
+
+    const auto nibbles = nibbleEncode (decoded, 24);
+
+    std::vector<juce::uint8> message;
+
+    message.reserve (62);
+
+    message.push_back (0xF0);
+    message.push_back (0x21);
+    message.push_back (0x25);
+    message.push_back (0x7E);
+    message.push_back (0x47);
+    message.push_back (0x50);
+    message.push_back (0x2D);
+    message.push_back (0x32);
+    message.push_back (0x12);
+    message.push_back (0x18);
+    message.push_back (0x00);
+    message.push_back (0x00);
+    message.push_back (0x00);
+
+    message.insert (message.end (), nibbles.begin (), nibbles.end ());
+
+    message.push_back (0xF7);
+
+    return message;
+}
+
+std::vector<juce::uint8> MidiConnection::nibbleEncode (const juce::uint8* data, int size)
+{
+    std::vector<juce::uint8> encoded;
+
+    if (data == nullptr || size <= 0)
+        return encoded;
+
+    encoded.reserve (static_cast<std::size_t> (size * 2));
+
+    for (int i = 0; i < size; ++i)
+    {
+        encoded.push_back (static_cast<juce::uint8> ((data[i] >> 4) & 0x0F));
+        encoded.push_back (static_cast<juce::uint8> (data[i] & 0x0F));
+    }
+
+    return encoded;
+}
+
+std::array<juce::uint8, 2> MidiConnection::encodeDisplayValue (float value)
+{
+    int encodedValue = 0;
+
+    if (std::isfinite (value) && value > 0.0f)
+    {
+        encodedValue = static_cast<int> (std::round (16367.0f + 16.0f * std::log2 (value)));
+        encodedValue = juce::jlimit (0, 0xFFFF, encodedValue);
+    }
+
+    return {static_cast<juce::uint8> (encodedValue & 0xFF),
+            static_cast<juce::uint8> ((encodedValue >> 8) & 0xFF)};
+}
+
+juce::String MidiConnection::parseAssignmentNameResponse (const juce::uint8* data, int size)
+{
+    if (data == nullptr || size <= 28)
+        return {};
+
+    const auto decoded = nibbleDecode (data + 27, size - 28);
+
+    int nameStart = 0;
+
+    while (nameStart < static_cast<int> (decoded.size ()) &&
+           decoded[static_cast<std::size_t> (nameStart)] == 0)
+    {
+        ++nameStart;
+    }
+
+    juce::String name;
+
+    for (int i = nameStart; i < static_cast<int> (decoded.size ()); ++i)
+    {
+        const auto b = decoded[static_cast<std::size_t> (i)];
+
+        if (b == 0)
+            break;
+
+        if (b >= 32 && b <= 126)
+            name += juce::String::charToString (static_cast<juce_wchar> (b));
+    }
+
+    return cleanAssignmentName (name);
+}
+
+juce::String MidiConnection::cleanAssignmentName (const juce::String& name)
+{
+    auto cleaned = name.trim ();
+
+    if (cleaned == "User IR" || cleaned == "SnapTone" || cleaned == "Empty")
+    {
+        return {};
+    }
+
+    return cleaned.substring (0, 32);
+}
+
+juce::String MidiConnection::sanitizePresetNameForStore (const juce::String& presetName)
+{
+    const auto name = presetName.trim ();
+
+    if (name.isEmpty () || name == "unknown" || name == "requesting...")
+    {
+        return {};
+    }
+
+    return name.substring (0, presetNameMaxLength);
+}
+
+void MidiConnection::handleIncomingMidiMessage (juce::MidiInput*, const juce::MidiMessage& message)
+{
+    const juce::ScopedLock lock (stateLock);
+    if (message.isSysEx ())
+    {
+        handleIncomingSysEx (message);
+        return;
+    }
+
+    lastMessageText = "Received non-SysEx MIDI message";
+}
+
+void MidiConnection::handleIncomingSysEx (const juce::MidiMessage& message)
+{
+    const auto* sysExData = message.getSysExData ();
+    const auto sysExSize = message.getSysExDataSize ();
+
+    std::vector<juce::uint8> fullMessage;
+    fullMessage.reserve (static_cast<std::size_t> (sysExSize + 2));
+
+    fullMessage.push_back (0xF0);
+
+    for (int i = 0; i < sysExSize; ++i)
+        fullMessage.push_back (sysExData[i]);
+
+    fullMessage.push_back (0xF7);
+
+    juce::String hex;
+    hex << "Received SysEx: F0 ";
+
+    const int bytesToShow = juce::jmin (sysExSize, 20);
+
+    for (int i = 0; i < bytesToShow; ++i)
+    {
+        hex << juce::String::toHexString (static_cast<int> (sysExData[i])).paddedLeft ('0', 2).toUpperCase ()
+            << " ";
+    }
+
+    if (sysExSize > bytesToShow)
+        hex << "... ";
+
+    hex << "F7";
+
+    lastMessageText = hex;
+
+    parseGP200SysEx (fullMessage.data (), static_cast<int> (fullMessage.size ()));
+}
+
+void MidiConnection::parseGP200SysEx (const juce::uint8* data, int size)
+{
+    if (size < 15)
+        return;
+
+    const bool isGP200Header = data[0] == 0xF0 && data[1] == 0x21 && data[2] == 0x25 && data[3] == 0x7E &&
+                               data[4] == 0x47 && data[5] == 0x50 && data[6] == 0x2D && data[7] == 0x32;
+
+    if (!isGP200Header)
+        return;
+
+    const auto command = data[8];
+    const auto subCommand = data[9];
+
+    if (command == 0x12 && subCommand == 0x1C)
+    {
+        handleAssignmentNameResponse (data, size);
+        return;
+    }
+
+    // GP-200 spontaneous preset change notification.
+    if (command == 0x12 && subCommand == 0x08 && size >= 28)
+    {
+        if (data[14] == 0x08)
+        {
+            const int slot = ((data[25] & 0x0F) << 4) | (data[26] & 0x0F);
+
+            if (slot >= 0 && slot < 256)
+            {
+                if (slot != currentSlot)
+                {
+                    currentSlot = slot;
+                    currentPresetName = "requesting...";
+                    presetNameRequestPending = true;
+                    lastRequestedNameSlot = -1;
+                    resetPresetDumpCaptureForSlot (slot);
+                }
+
+                lastMessageText = "GP-200 preset changed: " + getCurrentSlotText ();
+            }
+        }
+
+        return;
+    }
+
+    // Response to preset read request. We use the same 7 chunks for:
+    // - preset name
+    // - full decoded preset dump capture
+    if (command == 0x12 && subCommand == 0x18 && size > 14)
+    {
+        const int offset = data[11] | (data[12] << 8);
+
+        if (offset == 0)
+        {
+            const auto name = extractPresetNameFromReadChunk (data, size);
+
+            if (name.isNotEmpty ())
+            {
+                if (lastRequestedNameSlot >= 0)
+                    currentSlot = lastRequestedNameSlot;
+
+                currentPresetName = name;
+                presetNameRequestPending = false;
+
+                lastMessageText = "Preset name received: " + name + " for slot " + juce::String (currentSlot);
+            }
+        }
+
+        collectPresetReadChunk (data, size);
+
+        return;
+    }
+
+    // Response to current-state query.
+    // This tells us what preset is currently active, then we trigger a full
+    // read request for that slot via requestPresetNameForCurrentSlotIfNeeded().
+    if (command == 0x12 && subCommand == 0x4E && size > 14)
+    {
+        const int offset = data[11] | (data[12] << 8);
+
+        if (offset != 0)
+            return;
+
+        const auto decoded = nibbleDecode (data + 13, size - 14);
+
+        if (decoded.size () >= 44)
+        {
+            const int slot = decoded[8] | (decoded[9] << 8);
+
+            if (slot >= 0 && slot < 256)
+            {
+                currentSlot = slot;
+
+                const auto name = extractPresetNameFromDecodedPresetData (decoded);
+
+                if (name.isNotEmpty ())
+                    currentPresetName = name;
+                else
+                    currentPresetName = "requesting...";
+
+                // Even if the state dump gives us the name, request the full
+                // 7-chunk preset read so we can capture all preset bytes.
+                presetNameRequestPending = true;
+                lastRequestedNameSlot = -1;
+                resetPresetDumpCaptureForSlot (slot);
+
+                lastMessageText =
+                    "Current GP-200 preset received: " + juce::String (slot) + " / " + currentPresetName;
+            }
+        }
+
+        return;
+    }
+}
+
+void MidiConnection::handleAssignmentNameResponse (const juce::uint8* data, int size)
+{
+    if (!assignmentNameRequestInProgress)
+        return;
+
+    const auto query = currentAssignmentNameQuery;
+    const auto name = parseAssignmentNameResponse (data, size);
+
+    if (query.section == 0)
+    {
+        const int index = query.page * 16 + query.block;
+
+        if (index >= 0 && index < static_cast<int> (userIRNames.size ()))
+            userIRNames[static_cast<std::size_t> (index)] = name;
+    }
+    else if (query.section == 1)
+    {
+        const int index = query.block;
+
+        if (index >= 0 && index < static_cast<int> (snapToneNames.size ()))
+            snapToneNames[static_cast<std::size_t> (index)] = name;
+    }
+
+    ++assignmentNamesRevision;
+    assignmentNameRequestInProgress = false;
+
+    if (name.isNotEmpty ())
+        lastMessageText = "Assignment name received: " + name;
+    else
+        lastMessageText = "Assignment name received: empty";
+
+    sendNextAssignmentNameQuery ();
+}
+
+std::vector<juce::uint8> MidiConnection::nibbleDecode (const juce::uint8* data, int size)
+{
+    std::vector<juce::uint8> decoded;
+
+    if (size <= 1)
+        return decoded;
+
+    decoded.reserve (static_cast<std::size_t> (size / 2));
+
+    for (int i = 0; i + 1 < size; i += 2)
+    {
+        const auto value = static_cast<juce::uint8> (((data[i] & 0x0F) << 4) | (data[i + 1] & 0x0F));
+
+        decoded.push_back (value);
+    }
+
+    return decoded;
+}
+
+juce::MemoryBlock
+MidiConnection::assemblePresetReadChunks (const std::vector<std::vector<juce::uint8>>& chunks)
+{
+    auto sortedChunks = chunks;
+
+    std::sort (sortedChunks.begin (),
+               sortedChunks.end (),
+               [] (const auto& a, const auto& b)
+               {
+                   return getChunkOffset (a.data (), static_cast<int> (a.size ())) <
+                          getChunkOffset (b.data (), static_cast<int> (b.size ()));
+               });
+
+    std::vector<juce::uint8> allNibbles;
+
+    for (const auto& chunk : sortedChunks)
+    {
+        if (chunk.size () <= 14)
+            continue;
+
+        const auto* nibbleStart = chunk.data () + 13;
+        const auto nibbleSize = static_cast<int> (chunk.size ()) - 14;
+
+        allNibbles.insert (allNibbles.end (), nibbleStart, nibbleStart + nibbleSize);
+    }
+
+    const auto decoded = nibbleDecode (allNibbles.data (), static_cast<int> (allNibbles.size ()));
+
+    juce::MemoryBlock result;
+
+    if (!decoded.empty ())
+        result.append (decoded.data (), decoded.size ());
+
+    return result;
+}
+
+juce::String MidiConnection::extractPresetNameFromDecodedPresetData (const std::vector<juce::uint8>& decoded)
+{
+    if (decoded.size () < 44)
+        return {};
+
+    juce::String name;
+
+    for (int i = 0; i < 16; ++i)
+    {
+        const auto b = decoded[28 + i];
+
+        if (b == 0)
+            break;
+
+        name += juce::String::charToString (static_cast<juce_wchar> (b));
+    }
+
+    return name.trim ();
+}
+
+juce::String MidiConnection::extractPresetNameFromReadChunk (const juce::uint8* data, int size)
+{
+    if (size <= 14)
+        return {};
+
+    const auto* nibbleData = data + 13;
+    const int nibbleSize = size - 14;
+
+    const auto decoded = nibbleDecode (nibbleData, nibbleSize);
+
+    return extractPresetNameFromDecodedPresetData (decoded);
+}
+
+} // namespace gp200

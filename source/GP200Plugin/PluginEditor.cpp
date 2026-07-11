@@ -1,0 +1,1512 @@
+#include "PluginEditor.h"
+#include "../libgp200/GP200Preset.h"
+#include "../libgp200/GP200EffectParamDatabase.h"
+#include "../libgp200/GP200Constants.h"
+
+#include <cmath>
+#include <algorithm>
+#include <cstdint>
+
+namespace
+{
+const juce::Colour backgroundColour{0xff4f4f4f};
+const juce::Colour panelColour{0xff222b2f};
+const juce::Colour panelOutlineColour{0xffffa42a};
+const juce::Colour textColour{0xffffffff};
+const juce::Colour mutedTextColour{0xffd8d8d8};
+const juce::Colour statusOnColour{0xff57f05f};
+const juce::Colour statusOffColour{0xffd84545};
+} // namespace
+
+//==============================================================================
+AudioPluginAudioProcessorEditor::AudioPluginAudioProcessorEditor (AudioPluginAudioProcessor& p)
+    : AudioProcessorEditor (&p), processorRef (p)
+{
+    setSize (960, 760);
+
+    addAndMakeVisible (previousPresetButton);
+    addAndMakeVisible (nextPresetButton);
+
+    addAndMakeVisible (savePresetButton);
+    addAndMakeVisible (recallPresetButton);
+    addAndMakeVisible (storePresetButton);
+    addAndMakeVisible (patchVolumeSlider);
+    addAndMakeVisible (panSlider);
+    addAndMakeVisible (tempoSlider);
+    addAndMakeVisible (presetNameEditor);
+    addAndMakeVisible (renamePresetButton);
+    addAndMakeVisible (tunerButton);
+    addAndMakeVisible (allBlocksOffButton);
+
+    addAndMakeVisible (effectsViewport);
+
+    effectsViewport.setViewedComponent (&effectsContent, false);
+    effectsViewport.setScrollBarsShown (true, false);
+
+    dropIndicator.setInterceptsMouseClicks (false, false);
+    dropIndicator.setAlwaysOnTop (true);
+    dropIndicator.setVisible (false);
+    effectsContent.addChildComponent (dropIndicator);
+
+    auto setupButton = [] (juce::TextButton& button)
+    {
+        button.setColour (juce::TextButton::buttonColourId, panelColour);
+        button.setColour (juce::TextButton::buttonOnColourId, panelColour.brighter (0.2f));
+        button.setColour (juce::TextButton::textColourOffId, panelOutlineColour);
+        button.setColour (juce::TextButton::textColourOnId, panelOutlineColour);
+    };
+
+    setupButton (previousPresetButton);
+    setupButton (nextPresetButton);
+
+    setupButton (savePresetButton);
+    setupButton (recallPresetButton);
+    setupButton (storePresetButton);
+    setupButton (renamePresetButton);
+    setupButton (tunerButton);
+    setupButton (allBlocksOffButton);
+    updateTunerButtonText ();
+    updateAllBlocksOffButtonText ();
+
+    patchVolumeSlider.setSliderStyle (juce::Slider::LinearHorizontal);
+    patchVolumeSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 44, 18);
+    patchVolumeSlider.setRange (0.0, 100.0, 1.0);
+    patchVolumeSlider.setValue (50.0, juce::dontSendNotification);
+    patchVolumeSlider.setNumDecimalPlacesToDisplay (0);
+    patchVolumeSlider.setDoubleClickReturnValue (true, 50.0);
+
+    patchVolumeSlider.setColour (juce::Slider::backgroundColourId, panelColour.brighter (0.25f));
+    patchVolumeSlider.setColour (juce::Slider::trackColourId, panelOutlineColour);
+    patchVolumeSlider.setColour (juce::Slider::thumbColourId, panelOutlineColour);
+    patchVolumeSlider.setColour (juce::Slider::textBoxTextColourId, textColour);
+    patchVolumeSlider.setColour (juce::Slider::textBoxBackgroundColourId, panelColour);
+    patchVolumeSlider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+
+    panSlider.setSliderStyle (juce::Slider::LinearHorizontal);
+    panSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 44, 18);
+    panSlider.setRange (-100.0, 100.0, 1.0);
+    panSlider.setValue (0.0, juce::dontSendNotification);
+    panSlider.setNumDecimalPlacesToDisplay (0);
+    panSlider.setDoubleClickReturnValue (true, 0.0);
+
+    panSlider.setColour (juce::Slider::backgroundColourId, panelColour.brighter (0.25f));
+    panSlider.setColour (juce::Slider::trackColourId, panelOutlineColour);
+    panSlider.setColour (juce::Slider::thumbColourId, panelOutlineColour);
+    panSlider.setColour (juce::Slider::textBoxTextColourId, textColour);
+    panSlider.setColour (juce::Slider::textBoxBackgroundColourId, panelColour);
+    panSlider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+
+    panSlider.textFromValueFunction = [] (double value)
+
+    {
+        const auto pan = static_cast<int> (value);
+
+        if (pan == 0)
+            return juce::String ("C");
+
+        if (pan < 0)
+            return juce::String ("L") + juce::String (-pan);
+
+        return juce::String ("R") + juce::String (pan);
+    };
+
+    tempoSlider.setSliderStyle (juce::Slider::LinearHorizontal);
+    tempoSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 54, 18);
+    tempoSlider.setRange (40.0, 250.0, 1.0);
+    tempoSlider.setValue (120.0, juce::dontSendNotification);
+    tempoSlider.setNumDecimalPlacesToDisplay (0);
+    tempoSlider.setDoubleClickReturnValue (true, 120.0);
+
+    tempoSlider.setColour (juce::Slider::backgroundColourId, panelColour.brighter (0.25f));
+    tempoSlider.setColour (juce::Slider::trackColourId, panelOutlineColour);
+    tempoSlider.setColour (juce::Slider::thumbColourId, panelOutlineColour);
+    tempoSlider.setColour (juce::Slider::textBoxTextColourId, textColour);
+    tempoSlider.setColour (juce::Slider::textBoxBackgroundColourId, panelColour);
+    tempoSlider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+
+    tempoSlider.textFromValueFunction = [] (double value)
+    { return juce::String (static_cast<int> (value)) + " BPM"; };
+
+    presetNameEditor.setMultiLine (false);
+    presetNameEditor.setReturnKeyStartsNewLine (false);
+    presetNameEditor.setInputRestrictions (gp200::presetNameMaxLength);
+    presetNameEditor.setSelectAllWhenFocused (true);
+    presetNameEditor.setFont (juce::Font (18.0f));
+    presetNameEditor.setJustification (juce::Justification::centredLeft);
+    presetNameEditor.setTextToShowWhenEmpty ("Preset name", mutedTextColour);
+
+    presetNameEditor.setColour (juce::TextEditor::backgroundColourId, panelColour);
+    presetNameEditor.setColour (juce::TextEditor::textColourId, textColour);
+    presetNameEditor.setColour (juce::TextEditor::highlightColourId, panelOutlineColour.withAlpha (0.35f));
+    presetNameEditor.setColour (juce::TextEditor::highlightedTextColourId, textColour);
+
+    // Sin recuadro interior.
+    presetNameEditor.setColour (juce::TextEditor::outlineColourId, juce::Colours::transparentBlack);
+    presetNameEditor.setColour (juce::TextEditor::focusedOutlineColourId, juce::Colours::transparentBlack);
+
+    presetNameEditor.setIndents (4, 0);
+
+    patchVolumeSlider.onValueChange = [this] { sendPatchVolumeFromSlider (); };
+
+    panSlider.onValueChange = [this] { sendPatchPanFromSlider (); };
+
+    tempoSlider.onValueChange = [this] { sendPatchTempoFromSlider (); };
+
+    presetNameEditor.onReturnKey = [this] { renameCurrentPresetFromEditor (); };
+
+    renamePresetButton.onClick = [this] { renameCurrentPresetFromEditor (); };
+
+    tunerButton.onClick = [this] { toggleTuner (); };
+
+    allBlocksOffButton.onClick = [this] { toggleAllBlocksOff (); };
+
+    previousPresetButton.onClick = [this] { loadPreviousPreset (); };
+
+    nextPresetButton.onClick = [this] { loadNextPreset (); };
+
+    savePresetButton.onClick = [this] { saveCurrentPresetToProject (); };
+
+    recallPresetButton.onClick = [this] { recallSavedPresetToGP200 (); };
+    storePresetButton.onClick = [this] { storeCurrentPresetToGP200 (); };
+
+    midiConnection.connectToGP200 ();
+
+    midiConnection.requestCurrentPresetFromGP200 ();
+    midiConnection.requestAssignmentNamesFromGP200 ();
+
+    startTimerHz (idleTimerHz);
+}
+
+AudioPluginAudioProcessorEditor::~AudioPluginAudioProcessorEditor () = default;
+
+//==============================================================================
+void AudioPluginAudioProcessorEditor::paint (juce::Graphics& g)
+{
+    g.fillAll (backgroundColour);
+
+    // Title
+    g.setFont (24.0f);
+    g.setColour (textColour);
+    g.drawText ("GP200", 20, 8, 92, 30, juce::Justification::left);
+
+    g.setColour (panelOutlineColour);
+    g.drawText ("Studio", 110, 8, 120, 30, juce::Justification::left);
+
+    // Main top container
+    const juce::Rectangle<int> topPanel{12, 42, getWidth () - 24, 194};
+
+    g.setColour (juce::Colour (0xff303030));
+    g.fillRoundedRectangle (topPanel.toFloat (), 8.0f);
+
+    g.setColour (juce::Colour (0xff222222));
+    g.drawRoundedRectangle (topPanel.toFloat ().reduced (0.5f), 8.0f, 1.0f);
+
+    // Current preset card
+    const juce::Rectangle<int> currentPresetBox{20, 52, 370, 82};
+
+    g.setColour (panelColour);
+    g.fillRoundedRectangle (currentPresetBox.toFloat (), 7.0f);
+
+    g.setColour (panelOutlineColour);
+    g.drawRoundedRectangle (currentPresetBox.toFloat ().reduced (0.5f), 7.0f, 1.3f);
+
+    g.setFont (11.5f);
+    g.setColour (panelOutlineColour);
+    g.drawText ("CURRENT PRESET",
+                currentPresetBox.withTrimmedLeft (16).withHeight (24),
+                juce::Justification::centredLeft);
+
+    const auto currentSlot = midiConnection.getCurrentSlot ();
+    const auto slotText = currentSlot >= 0 ? formatSlotCompact (currentSlot) : "--";
+
+    g.setFont (18.0f);
+    g.setColour (textColour);
+    g.drawText (slotText,
+                juce::Rectangle<int>{currentPresetBox.getX () + 52, 80, 58, 34},
+                juce::Justification::centredLeft);
+
+    // Saved preset card
+    const juce::Rectangle<int> savedPresetBox{20, 144, 230, 42};
+
+    g.setColour (panelColour.darker (0.08f));
+    g.fillRoundedRectangle (savedPresetBox.toFloat (), 7.0f);
+
+    g.setColour (panelOutlineColour);
+    g.drawRoundedRectangle (savedPresetBox.toFloat ().reduced (0.5f), 7.0f, 1.1f);
+
+    g.setFont (11.5f);
+    g.setColour (panelOutlineColour);
+    g.drawText ("SAVED PRESET",
+                savedPresetBox.withTrimmedLeft (16).withHeight (19),
+                juce::Justification::centredLeft);
+
+    g.setFont (14.5f);
+    g.setColour (textColour);
+    g.drawText (getSavedPresetCompactText (),
+                juce::Rectangle<int>{savedPresetBox.getX () + 16, savedPresetBox.getY () + 18, 200, 22},
+                juce::Justification::centredLeft);
+
+    // Tuner card
+    const juce::Rectangle<int> tunerBox{260, 144, 130, 42};
+
+    g.setColour (panelColour.darker (0.08f));
+    g.fillRoundedRectangle (tunerBox.toFloat (), 7.0f);
+
+    g.setColour (panelOutlineColour);
+    g.drawRoundedRectangle (tunerBox.toFloat ().reduced (0.5f), 7.0f, 1.1f);
+
+    // Action area background
+    const juce::Rectangle<int> actionArea{420, 52, 270, 134};
+
+    g.setColour (juce::Colour (0xff252b2e));
+    g.fillRoundedRectangle (actionArea.toFloat (), 7.0f);
+
+    g.setColour (panelOutlineColour);
+    g.drawRoundedRectangle (actionArea.toFloat ().reduced (0.5f), 7.0f, 1.1f);
+
+    // Patch settings
+    const juce::Rectangle<int> patchPanel{720, 52, 200, 142};
+
+    g.setColour (panelColour);
+    g.fillRoundedRectangle (patchPanel.toFloat (), 7.0f);
+
+    g.setColour (panelOutlineColour);
+    g.drawRoundedRectangle (patchPanel.toFloat ().reduced (0.5f), 7.0f, 1.2f);
+
+    g.setFont (12.0f);
+    g.setColour (panelOutlineColour);
+    g.drawText (
+        "PATCH SETTINGS", patchPanel.withTrimmedLeft (12).withHeight (26), juce::Justification::centredLeft);
+
+    g.setFont (10.5f);
+    g.setColour (textColour);
+
+    g.drawText ("VOL", juce::Rectangle<int>{732, 84, 34, 16}, juce::Justification::centredLeft);
+
+    g.drawText ("PAN", juce::Rectangle<int>{732, 124, 34, 16}, juce::Justification::centredLeft);
+
+    g.drawText ("BPM", juce::Rectangle<int>{732, 164, 34, 16}, juce::Justification::centredLeft);
+}
+
+void AudioPluginAudioProcessorEditor::resized ()
+{
+    // Current preset card
+    previousPresetButton.setBounds (32, 84, 36, 32);
+    nextPresetButton.setBounds (346, 84, 36, 32);
+
+    presetNameEditor.setBounds (122, 80, 214, 34);
+
+    // Action buttons
+    savePresetButton.setBounds (438, 66, 112, 48);
+    recallPresetButton.setBounds (562, 66, 112, 48);
+
+    storePresetButton.setBounds (438, 126, 112, 44);
+    renamePresetButton.setBounds (562, 126, 112, 44);
+
+    // Patch settings
+    patchVolumeSlider.setBounds (766, 82, 142, 20);
+    panSlider.setBounds (766, 122, 142, 20);
+    tempoSlider.setBounds (766, 162, 142, 20);
+
+    tunerButton.setBounds (270, 151, 110, 28);
+
+    // Effects list
+    allBlocksOffButton.setBounds (20, 242, 120, 28);
+
+    effectsViewport.setBounds (20, 278, getWidth () - 40, getHeight () - 298);
+
+    layoutEffectBlocks ();
+}
+
+//==============================================================================
+void AudioPluginAudioProcessorEditor::timerCallback ()
+{
+    if (presetRestoreInProgress)
+    {
+        constexpr int restoreStepsPerTimerTick = 4;
+
+        for (int i = 0; i < restoreStepsPerTimerTick && presetRestoreInProgress; ++i)
+            processFullPresetRestoreStep ();
+
+        if (presetRestoreInProgress)
+        {
+            repaint ();
+            return;
+        }
+    }
+    else
+    {
+        midiConnection.requestPresetNameForCurrentSlotIfNeeded ();
+    }
+
+    syncPresetNameEditorFromCurrentPreset ();
+
+    updateEffectBlocksUI ();
+
+    repaint ();
+}
+
+//==============================================================================
+
+void AudioPluginAudioProcessorEditor::saveCurrentPresetToProject ()
+{
+    const auto currentSlot = midiConnection.getCurrentSlot ();
+
+    if (currentSlot < 0)
+        return;
+
+    const auto presetData = midiConnection.getCurrentPresetDumpDataCopy ();
+
+    if (presetData.getSize () == 0)
+    {
+        effectsStatusText = "Save Preset failed: no full preset data captured yet";
+        repaint ();
+        return;
+    }
+
+    processorRef.setGP200PresetSnapshotState (
+        currentSlot, midiConnection.getCurrentPresetName (), presetData);
+
+    effectsStatusText = "Saved full preset snapshot to DAW";
+    updateEffectBlocksUI ();
+    repaint ();
+}
+
+void AudioPluginAudioProcessorEditor::recallSavedPresetToGP200 ()
+{
+    startFullPresetRestoreFromSnapshot ();
+}
+
+void AudioPluginAudioProcessorEditor::startFullPresetRestoreFromSnapshot ()
+{
+    if (presetRestoreInProgress)
+    {
+        effectsStatusText = "Recall Preset: restore already in progress";
+        repaint ();
+        return;
+    }
+
+    if (!processorRef.hasSavedGP200PresetData ())
+    {
+        effectsStatusText = "Recall Preset failed: no preset snapshot saved in DAW";
+        repaint ();
+        return;
+    }
+
+    const auto presetData = processorRef.getSavedGP200PresetDataCopy ();
+
+    if (presetData.getSize () == 0)
+    {
+        effectsStatusText = "Recall Preset failed: saved preset data is empty";
+        repaint ();
+        return;
+    }
+
+    const auto preset = gp200::GP200PresetCodec::decodeLivePresetDump (presetData);
+
+    if (!preset.isValid)
+    {
+        effectsStatusText = "Recall Preset failed: saved preset data could not be decoded";
+        repaint ();
+        return;
+    }
+
+    const auto targetSlot = midiConnection.getCurrentSlot ();
+
+    if (targetSlot < 0 || targetSlot > 255)
+    {
+        effectsStatusText = "Recall Preset failed: current GP-200 slot is unknown";
+        repaint ();
+        return;
+    }
+
+    auto savedName = processorRef.getSavedGP200PresetSnapshotName ();
+
+    if (!isUsefulPresetName (savedName))
+        savedName = preset.patchName;
+
+    // Important: do not change slot here.
+    // Recall Preset restores the saved sound into the currently selected GP-200 slot,
+    // so the user can then press Store preset and save it wherever they are.
+    presetRestoreSnapshotData = presetData;
+    presetRestoreSlot = targetSlot;
+    presetRestoreName = savedName;
+
+    buildFullPresetRestoreSteps (preset, presetData);
+
+    if (presetRestoreSteps.empty ())
+    {
+        effectsStatusText = "Recall Preset failed: no restore steps were generated";
+        repaint ();
+        return;
+    }
+
+    presetRestoreStepIndex = 0;
+    presetRestoreInProgress = true;
+    startTimerHz (restoreTimerHz);
+
+    effectBlocksSignature.clear ();
+    patchVolumeSourceSignature.clear ();
+    presetNameEditorSignature.clear ();
+
+    effectsStatusText = "Recall Preset: restoring snapshot into current slot 0/" +
+                        juce::String (static_cast<int> (presetRestoreSteps.size ()));
+
+    updateEffectBlocksUI ();
+    repaint ();
+}
+
+void AudioPluginAudioProcessorEditor::buildFullPresetRestoreSteps (const gp200::GP200Preset& preset,
+                                                                   const juce::MemoryBlock& presetData)
+{
+    presetRestoreSteps.clear ();
+
+    auto addParameterStep = [this] (const gp200::GP200EffectSlot& effect, int paramIndex)
+    {
+        if (effect.blockIndex < 0 || effect.blockIndex >= static_cast<int> (gp200::effectBlockCount))
+            return;
+
+        if (paramIndex < 0 || paramIndex >= static_cast<int> (effect.params.size ()))
+            return;
+
+        const auto value = effect.params[static_cast<std::size_t> (paramIndex)];
+
+        if (!std::isfinite (value))
+            return;
+
+        PresetRestoreStep step;
+        step.type = PresetRestoreStepType::ParamChange;
+        step.blockIndex = effect.blockIndex;
+        step.paramIndex = paramIndex;
+        step.effectId = effect.effectId;
+        step.value = value;
+
+        presetRestoreSteps.push_back (step);
+    };
+
+    if (presetData.getSize () > gp200::patchVolumeOffset)
+    {
+        const auto* data = static_cast<const juce::uint8*> (presetData.getData ());
+
+        if (data != nullptr)
+        {
+            PresetRestoreStep step;
+            step.type = PresetRestoreStepType::PatchVolume;
+            step.value =
+                static_cast<float> (juce::jlimit (0, 100, static_cast<int> (data[gp200::patchVolumeOffset])));
+
+            presetRestoreSteps.push_back (step);
+        }
+    }
+
+    if (presetData.getSize () > gp200::patchTempoOffset)
+    {
+        const auto* data = static_cast<const juce::uint8*> (presetData.getData ());
+
+        if (data != nullptr)
+        {
+            PresetRestoreStep step;
+            step.type = PresetRestoreStepType::PatchTempo;
+            step.value =
+                static_cast<float> (juce::jlimit (40, 250, static_cast<int> (data[gp200::patchTempoOffset])));
+
+            presetRestoreSteps.push_back (step);
+        }
+    }
+
+    for (const auto& effect : preset.effects)
+    {
+        if (effect.blockIndex < 0 || effect.blockIndex >= static_cast<int> (gp200::effectBlockCount))
+            continue;
+
+        PresetRestoreStep step;
+        step.type = PresetRestoreStepType::EffectChange;
+        step.blockIndex = effect.blockIndex;
+        step.effectId = effect.effectId;
+
+        presetRestoreSteps.push_back (step);
+    }
+
+    auto addKnownParameterPass = [this, &preset, &addParameterStep]
+    {
+        for (const auto& effect : preset.effects)
+        {
+            if (effect.blockIndex < 0 || effect.blockIndex >= static_cast<int> (gp200::effectBlockCount))
+                continue;
+
+            const auto* paramSet = gp200::GP200EffectParamDatabase::findParamsForEffect (effect.effectId);
+
+            // Only restore parameters that are known for this effect.
+            // Do not send reserved/unused parameter slots from the raw 15-float dump.
+            if (paramSet == nullptr || paramSet->count <= 0 || paramSet->params == nullptr)
+                continue;
+
+            for (int i = 0; i < paramSet->count; ++i)
+                addParameterStep (effect, paramSet->params[i].idx);
+        }
+    };
+
+    auto resendFirstKnownParameter = [this, &preset, &addParameterStep]
+    {
+        for (const auto& effect : preset.effects)
+        {
+            if (effect.blockIndex < 0 || effect.blockIndex >= static_cast<int> (gp200::effectBlockCount))
+                continue;
+
+            const auto* paramSet = gp200::GP200EffectParamDatabase::findParamsForEffect (effect.effectId);
+
+            if (paramSet == nullptr || paramSet->count <= 0 || paramSet->params == nullptr)
+                continue;
+
+            for (int i = 0; i < paramSet->count; ++i)
+            {
+                const auto paramIndex = paramSet->params[i].idx;
+
+                if (paramIndex >= 0 && paramIndex < static_cast<int> (effect.params.size ()))
+                {
+                    addParameterStep (effect, paramIndex);
+                    break;
+                }
+            }
+        }
+    };
+
+    addKnownParameterPass ();
+
+    // The GP-200 can ignore the first value after an effect type change.
+    // Re-send the first known parameter for each effect. For CAB/User IR this is P1,
+    // not P0, so we avoid writing reserved IR internals.
+    resendFirstKnownParameter ();
+
+    for (const auto& effect : preset.effects)
+    {
+        if (effect.blockIndex < 0 || effect.blockIndex >= static_cast<int> (gp200::effectBlockCount))
+            continue;
+
+        PresetRestoreStep step;
+        step.type = PresetRestoreStepType::ToggleEffect;
+        step.blockIndex = effect.blockIndex;
+        step.shouldBeOn = effect.enabled;
+
+        presetRestoreSteps.push_back (step);
+    }
+
+    addKnownParameterPass ();
+
+    PresetRestoreStep reorderStep;
+    reorderStep.type = PresetRestoreStepType::ReorderEffects;
+    reorderStep.routingOrder = preset.routingOrder;
+    reorderStep.fxLoopSend = preset.fxLoopSend;
+    reorderStep.fxLoopReturn = preset.fxLoopReturn;
+
+    presetRestoreSteps.push_back (reorderStep);
+}
+
+void AudioPluginAudioProcessorEditor::processFullPresetRestoreStep ()
+{
+    if (!presetRestoreInProgress)
+        return;
+
+    if (presetRestoreStepIndex >= static_cast<int> (presetRestoreSteps.size ()))
+    {
+        finishFullPresetRestore ();
+        return;
+    }
+
+    const auto& step = presetRestoreSteps[static_cast<std::size_t> (presetRestoreStepIndex)];
+
+    bool sent = false;
+
+    switch (step.type)
+    {
+    case PresetRestoreStepType::PatchVolume:
+        sent = midiConnection.sendPatchVolume (static_cast<int> (std::round (step.value)));
+        break;
+
+    case PresetRestoreStepType::PatchTempo:
+        sent = midiConnection.sendPatchTempoBpm (static_cast<int> (std::round (step.value)));
+        break;
+
+    case PresetRestoreStepType::EffectChange:
+        sent = midiConnection.sendEffectChange (step.blockIndex, step.effectId);
+        break;
+
+    case PresetRestoreStepType::ParamChange:
+        sent = midiConnection.sendParamChange (step.blockIndex, step.paramIndex, step.effectId, step.value);
+        break;
+
+    case PresetRestoreStepType::ToggleEffect:
+        sent = midiConnection.sendEffectOnOff (step.blockIndex, step.shouldBeOn);
+        break;
+
+    case PresetRestoreStepType::ReorderEffects:
+        sent = midiConnection.sendReorderEffects (step.routingOrder, step.fxLoopSend, step.fxLoopReturn);
+        break;
+    }
+
+    if (!sent)
+    {
+        presetRestoreInProgress = false;
+        startTimerHz (idleTimerHz);
+        effectsStatusText = "Recall Preset failed: " + midiConnection.getLastMessageText ();
+        return;
+    }
+
+    ++presetRestoreStepIndex;
+
+    effectsStatusText = "Recall Preset: restoring snapshot into current slot " +
+                        juce::String (presetRestoreStepIndex) + "/" +
+                        juce::String (static_cast<int> (presetRestoreSteps.size ()));
+
+    if (presetRestoreStepIndex >= static_cast<int> (presetRestoreSteps.size ()))
+        finishFullPresetRestore ();
+}
+
+void AudioPluginAudioProcessorEditor::finishFullPresetRestore ()
+{
+    presetRestoreInProgress = false;
+    startTimerHz (idleTimerHz);
+
+    midiConnection.adoptCurrentPresetSnapshot (
+        presetRestoreSlot, presetRestoreName, presetRestoreSnapshotData);
+
+    presetRestoreSteps.clear ();
+    presetRestoreStepIndex = 0;
+
+    effectBlocksSignature.clear ();
+    patchVolumeSourceSignature.clear ();
+    presetNameEditorSignature.clear ();
+
+    hasSavedBlockEnabledStates = false;
+    allBlocksAreTemporarilyOff = false;
+    savedBlockEnabledSlot = -1;
+    updateAllBlocksOffButtonText ();
+
+    effectsStatusText =
+        "Recall Preset: snapshot restored into current slot. Press Store preset to save it here.";
+
+    updateEffectBlocksUI ();
+}
+
+void AudioPluginAudioProcessorEditor::storeCurrentPresetToGP200 ()
+{
+    midiConnection.storeCurrentPresetToGP200 ();
+
+    repaint ();
+}
+
+void AudioPluginAudioProcessorEditor::sendPatchVolumeFromSlider ()
+{
+    const auto value = static_cast<int> (patchVolumeSlider.getValue ());
+
+    midiConnection.sendPatchVolume (value);
+
+    repaint ();
+}
+
+void AudioPluginAudioProcessorEditor::sendPatchPanFromSlider ()
+{
+    const auto value = static_cast<int> (panSlider.getValue ());
+
+    midiConnection.sendPatchPan (value);
+
+    repaint ();
+}
+
+void AudioPluginAudioProcessorEditor::sendPatchTempoFromSlider ()
+{
+    const auto bpm = static_cast<int> (tempoSlider.getValue ());
+
+    midiConnection.sendPatchTempoBpm (bpm);
+
+    repaint ();
+}
+
+void AudioPluginAudioProcessorEditor::renameCurrentPresetFromEditor ()
+{
+    auto newName = presetNameEditor.getText ().trim ();
+
+    if (newName.isEmpty ())
+    {
+        effectsStatusText = "Rename failed: empty preset name";
+        repaint ();
+        return;
+    }
+
+    if (newName.length () > gp200::presetNameMaxLength)
+        newName = newName.substring (0, gp200::presetNameMaxLength);
+
+    if (!midiConnection.renameCurrentPresetOnGP200 (newName))
+    {
+        effectsStatusText = midiConnection.getLastMessageText ();
+        repaint ();
+        return;
+    }
+
+    presetNameEditor.setText (midiConnection.getCurrentPresetName (), juce::dontSendNotification);
+
+    presetNameEditorSignature.clear ();
+    effectBlocksSignature.clear ();
+
+    effectsStatusText = "Renamed preset to: " + midiConnection.getCurrentPresetName ();
+
+    repaint ();
+}
+
+void AudioPluginAudioProcessorEditor::syncPresetNameEditorFromCurrentPreset ()
+{
+    const auto slot = midiConnection.getCurrentSlot ();
+    const auto name = midiConnection.getCurrentPresetName ();
+
+    if (slot < 0 || !isUsefulPresetName (name))
+        return;
+
+    const auto signature = juce::String (slot) + ":" + name;
+
+    if (signature == presetNameEditorSignature)
+        return;
+
+    if (presetNameEditor.hasKeyboardFocus (true))
+        return;
+
+    presetNameEditorSignature = signature;
+
+    presetNameEditor.setText (name.trim ().substring (0, gp200::presetNameMaxLength),
+                              juce::dontSendNotification);
+}
+
+void AudioPluginAudioProcessorEditor::toggleTuner ()
+{
+    const auto newState = !tunerIsOn;
+
+    if (!midiConnection.sendTunerOnOff (newState))
+    {
+        effectsStatusText = "Tuner failed: MIDI output not open";
+        repaint ();
+        return;
+    }
+
+    tunerIsOn = newState;
+
+    updateTunerButtonText ();
+
+    effectsStatusText = tunerIsOn ? "Tuner ON" : "Tuner OFF";
+
+    repaint ();
+}
+
+void AudioPluginAudioProcessorEditor::updateTunerButtonText ()
+{
+    tunerButton.setButtonText (tunerIsOn ? "Tuner ON" : "Tuner OFF");
+
+    tunerButton.setColour (juce::TextButton::buttonColourId, tunerIsOn ? statusOnColour : panelColour);
+
+    tunerButton.setColour (juce::TextButton::buttonOnColourId,
+                           tunerIsOn ? statusOnColour.brighter (0.1f) : panelColour.brighter (0.2f));
+
+    tunerButton.setColour (juce::TextButton::textColourOffId,
+                           tunerIsOn ? juce::Colours::black : panelOutlineColour);
+
+    tunerButton.setColour (juce::TextButton::textColourOnId,
+                           tunerIsOn ? juce::Colours::black : panelOutlineColour);
+}
+
+void AudioPluginAudioProcessorEditor::toggleAllBlocksOff ()
+{
+    if (presetRestoreInProgress)
+    {
+        effectsStatusText = "FX OFF disabled while Recall Preset is restoring";
+        repaint ();
+        return;
+    }
+
+    const auto currentSlot = midiConnection.getCurrentSlot ();
+
+    if (!allBlocksAreTemporarilyOff)
+    {
+        BlockEnabledStates currentStates{};
+
+        if (!captureCurrentBlockEnabledStates (currentStates))
+        {
+            effectsStatusText = "FX OFF failed: no current preset data";
+            repaint ();
+            return;
+        }
+
+        BlockEnabledStates offStates{};
+        offStates.fill (false);
+
+        if (!applyBlockEnabledStates (offStates))
+            return;
+
+        savedBlockEnabledStates = currentStates;
+        hasSavedBlockEnabledStates = true;
+        allBlocksAreTemporarilyOff = true;
+        savedBlockEnabledSlot = currentSlot;
+
+        effectsStatusText = "All FX OFF. Press Restore FX to recover previous block states.";
+        updateAllBlocksOffButtonText ();
+        repaint ();
+        return;
+    }
+
+    if (!hasSavedBlockEnabledStates)
+    {
+        allBlocksAreTemporarilyOff = false;
+        savedBlockEnabledSlot = -1;
+        updateAllBlocksOffButtonText ();
+
+        effectsStatusText = "Restore FX failed: no previous FX state saved";
+        repaint ();
+        return;
+    }
+
+    if (currentSlot != savedBlockEnabledSlot)
+    {
+        hasSavedBlockEnabledStates = false;
+        allBlocksAreTemporarilyOff = false;
+        savedBlockEnabledSlot = -1;
+        updateAllBlocksOffButtonText ();
+
+        effectsStatusText = "Restore FX cancelled: preset changed";
+        repaint ();
+        return;
+    }
+
+    if (!applyBlockEnabledStates (savedBlockEnabledStates))
+        return;
+
+    hasSavedBlockEnabledStates = false;
+    allBlocksAreTemporarilyOff = false;
+    savedBlockEnabledSlot = -1;
+
+    effectsStatusText = "Restored previous FX ON/OFF states.";
+    updateAllBlocksOffButtonText ();
+    repaint ();
+}
+
+bool AudioPluginAudioProcessorEditor::captureCurrentBlockEnabledStates (BlockEnabledStates& states)
+{
+    states.fill (false);
+
+    const auto currentDump = midiConnection.getCurrentPresetDumpDataCopy ();
+
+    if (currentDump.getSize () == 0)
+        return false;
+
+    const auto preset = gp200::GP200PresetCodec::decodeLivePresetDump (currentDump);
+
+    if (!preset.isValid)
+        return false;
+
+    for (const auto& effect : preset.effects)
+    {
+        const auto blockIndex = effect.blockIndex >= 0 ? effect.blockIndex : effect.slotIndex;
+
+        if (blockIndex >= 0 && blockIndex < static_cast<int> (states.size ()))
+            states[static_cast<std::size_t> (blockIndex)] = effect.enabled;
+    }
+
+    return true;
+}
+
+bool AudioPluginAudioProcessorEditor::applyBlockEnabledStates (const BlockEnabledStates& states)
+{
+    for (int blockIndex = 0; blockIndex < static_cast<int> (states.size ()); ++blockIndex)
+    {
+        const auto shouldBeOn = states[static_cast<std::size_t> (blockIndex)];
+
+        if (!midiConnection.sendEffectOnOff (blockIndex, shouldBeOn))
+        {
+            effectsStatusText = "FX toggle failed: " + midiConnection.getLastMessageText ();
+            repaint ();
+            return false;
+        }
+
+        for (auto& blockToUpdate : effectBlocks)
+        {
+            if (blockToUpdate != nullptr && blockToUpdate->getBlockIndex () == blockIndex)
+            {
+                blockToUpdate->setEnabledForDisplay (shouldBeOn);
+                break;
+            }
+        }
+    }
+
+    effectBlocksSignature.clear ();
+
+    return true;
+}
+
+void AudioPluginAudioProcessorEditor::updateAllBlocksOffButtonText ()
+{
+    allBlocksOffButton.setButtonText (allBlocksAreTemporarilyOff ? "Restore FX" : "FX OFF");
+
+    allBlocksOffButton.setColour (juce::TextButton::buttonColourId,
+                                  allBlocksAreTemporarilyOff ? statusOffColour.withAlpha (0.30f)
+                                                             : panelColour);
+
+    allBlocksOffButton.setColour (juce::TextButton::buttonOnColourId,
+                                  allBlocksAreTemporarilyOff ? statusOffColour.withAlpha (0.42f)
+                                                             : panelColour.brighter (0.2f));
+
+    allBlocksOffButton.setColour (juce::TextButton::textColourOffId,
+                                  allBlocksAreTemporarilyOff ? textColour : panelOutlineColour);
+
+    allBlocksOffButton.setColour (juce::TextButton::textColourOnId,
+                                  allBlocksAreTemporarilyOff ? textColour : panelOutlineColour);
+}
+
+void AudioPluginAudioProcessorEditor::syncPatchVolumeSliderFromPresetData (
+    const juce::MemoryBlock& presetData, const juce::String& presetDataSignature)
+{
+    if (presetDataSignature == patchVolumeSourceSignature)
+        return;
+
+    patchVolumeSourceSignature = presetDataSignature;
+
+    if (presetData.getSize () <= gp200::patchVolumeOffset)
+        return;
+
+    const auto* data = static_cast<const juce::uint8*> (presetData.getData ());
+
+    if (data == nullptr)
+        return;
+
+    const auto patchVolume = juce::jlimit (0, 100, static_cast<int> (data[gp200::patchVolumeOffset]));
+
+    patchVolumeSlider.setValue (static_cast<double> (patchVolume), juce::dontSendNotification);
+}
+
+//==============================================================================
+void AudioPluginAudioProcessorEditor::loadPreviousPreset ()
+{
+    loadPresetRelative (-1);
+}
+
+void AudioPluginAudioProcessorEditor::loadNextPreset ()
+{
+    loadPresetRelative (1);
+}
+
+void AudioPluginAudioProcessorEditor::loadPresetRelative (int delta)
+{
+    auto currentSlot = midiConnection.getCurrentSlot ();
+
+    if (currentSlot < 0)
+        currentSlot = processorRef.getSavedGP200Slot ();
+
+    if (currentSlot < 0)
+        return;
+
+    const auto targetSlot = wrapPresetSlot (currentSlot + delta);
+
+    midiConnection.sendPresetChange (targetSlot);
+
+    effectBlocksSignature.clear ();
+    effectBlocks.clear ();
+    effectsContent.removeAllChildren ();
+
+    hasSavedBlockEnabledStates = false;
+    allBlocksAreTemporarilyOff = false;
+    savedBlockEnabledSlot = -1;
+    updateAllBlocksOffButtonText ();
+
+    effectsStatusText = "Effects: changing preset...";
+
+    repaint ();
+}
+
+//==============================================================================
+void AudioPluginAudioProcessorEditor::updateEffectBlocksUI ()
+{
+    juce::MemoryBlock presetDataForDisplay;
+    juce::String sourceText;
+    std::uint64_t presetRevision = 0;
+
+    if (midiConnection.getCurrentPresetDumpSize () > 0)
+    {
+        presetDataForDisplay = midiConnection.getCurrentPresetDumpDataCopy ();
+        sourceText = "Current GP-200 preset";
+        presetRevision = midiConnection.getPresetRevision ();
+    }
+    else if (processorRef.hasSavedGP200PresetData ())
+    {
+        presetDataForDisplay = processorRef.getSavedGP200PresetDataCopy ();
+        sourceText = "DAW saved preset";
+        presetRevision = processorRef.getSavedPresetRevision ();
+    }
+    else
+    {
+        effectsStatusText = "Effects: waiting for preset data";
+        return;
+    }
+
+    const auto assignmentRevision = midiConnection.getAssignmentNamesRevision ();
+    const auto revisionText = juce::String (static_cast<juce::int64> (presetRevision));
+
+    const auto patchVolumeSignature = sourceText + ":" + revisionText;
+
+    const auto newSignature =
+        sourceText + ":" + revisionText + ":" + juce::String (static_cast<juce::int64> (assignmentRevision));
+
+    if (newSignature == effectBlocksSignature)
+        return;
+
+    const auto preset = gp200::GP200PresetCodec::decodeLivePresetDump (presetDataForDisplay);
+
+    if (!preset.isValid)
+    {
+        effectBlocksSignature = newSignature;
+        effectBlocks.clear ();
+        effectsContent.removeAllChildren ();
+        effectsStatusText = "Effects: could not decode preset data";
+        layoutEffectBlocks ();
+        return;
+    }
+
+    syncPatchVolumeSliderFromPresetData (presetDataForDisplay, patchVolumeSignature);
+
+    effectsStatusText = "Effects: " + sourceText + " | " + preset.getSignalChainText ();
+
+    rebuildEffectBlocks (preset, newSignature);
+}
+
+void AudioPluginAudioProcessorEditor::rebuildEffectBlocks (const gp200::GP200Preset& preset,
+                                                           const juce::String& newSignature)
+{
+    BlockEnabledStates wasExpanded{};
+    wasExpanded.fill (false);
+
+    for (const auto& block : effectBlocks)
+    {
+        if (block != nullptr)
+        {
+            const auto blockIndex = block->getSlotIndex ();
+
+            if (blockIndex >= 0 && blockIndex < static_cast<int> (wasExpanded.size ()))
+                wasExpanded[static_cast<std::size_t> (blockIndex)] = block->isExpanded ();
+        }
+    }
+
+    effectBlocks.clear ();
+    effectsContent.removeAllChildren ();
+
+    effectsContent.addChildComponent (dropIndicator);
+    dropIndicator.setVisible (false);
+
+    BlockEnabledStates alreadyAdded{};
+    alreadyAdded.fill (false);
+
+    for (const auto effectBlockIndex : preset.routingOrder)
+    {
+        if (effectBlockIndex < 0 || effectBlockIndex >= static_cast<int> (preset.effects.size ()))
+            continue;
+
+        const auto& effect = preset.effects[static_cast<std::size_t> (effectBlockIndex)];
+
+        const auto blockIndex = effect.blockIndex;
+
+        if (blockIndex < 0 || blockIndex >= static_cast<int> (alreadyAdded.size ()))
+            continue;
+
+        if (alreadyAdded[static_cast<std::size_t> (blockIndex)])
+            continue;
+
+        alreadyAdded[static_cast<std::size_t> (blockIndex)] = true;
+
+        auto block = std::make_unique<EffectBlockComponent> (
+            effect,
+            [this] (juce::uint32 effectId) -> juce::String
+            {
+                // CAB User IR 1-20: 0x0A100000 - 0x0A100013
+                if ((effectId & 0xFFFFFF00u) == 0x0A100000u)
+                {
+                    const auto index = static_cast<int> (effectId & 0xFFu);
+                    return midiConnection.getUserIRDisplayName (index);
+                }
+
+                // SnapTone 1-10: 0x0F000000 - 0x0F000009
+                if ((effectId & 0xFFFFFF00u) == 0x0F000000u)
+                {
+                    const auto index = static_cast<int> (effectId & 0xFFu);
+                    return midiConnection.getSnapToneDisplayName (index);
+                }
+
+                return {};
+            });
+
+        const auto currentPosition = static_cast<int> (effectBlocks.size ());
+        block->setMoveButtonsEnabled (currentPosition > 0,
+                                      currentPosition < static_cast<int> (preset.routingOrder.size ()) - 1);
+
+        block->setExpanded (wasExpanded[static_cast<std::size_t> (blockIndex)]);
+
+        block->onHeightChanged = [this] { layoutEffectBlocks (); };
+
+        block->onToggleRequested = [this] (int blockIndex, bool shouldBeOn)
+        {
+            if (midiConnection.sendEffectOnOff (blockIndex, shouldBeOn))
+            {
+                for (auto& blockToUpdate : effectBlocks)
+                {
+                    if (blockToUpdate != nullptr && blockToUpdate->getBlockIndex () == blockIndex)
+                    {
+                        blockToUpdate->setEnabledForDisplay (shouldBeOn);
+                        break;
+                    }
+                }
+            }
+
+            repaint ();
+        };
+
+        block->onEffectChangeRequested = [this] (int blockIndex, juce::uint32 effectId)
+        {
+            if (!midiConnection.sendEffectChange (blockIndex, effectId))
+            {
+                repaint ();
+                return;
+            }
+
+            juce::MessageManager::callAsync (
+                [this]
+                {
+                    effectBlocksSignature.clear ();
+                    updateEffectBlocksUI ();
+                    repaint ();
+                });
+        };
+
+        block->onParameterChangeRequested =
+            [this] (int blockIndex, int paramIndex, juce::uint32 effectId, float value)
+        {
+            if (midiConnection.sendParamChange (blockIndex, paramIndex, effectId, value))
+            {
+                for (auto& blockToUpdate : effectBlocks)
+                {
+                    if (blockToUpdate != nullptr && blockToUpdate->getBlockIndex () == blockIndex)
+                    {
+                        blockToUpdate->setParameterValueForDisplay (paramIndex, value);
+                        break;
+                    }
+                }
+            }
+
+            repaint ();
+        };
+
+        block->onMoveRequested = [this] (int blockIndex, int direction)
+        {
+            int currentPosition = -1;
+
+            for (int i = 0; i < static_cast<int> (effectBlocks.size ()); ++i)
+            {
+                const auto* blockToCheck = effectBlocks[static_cast<std::size_t> (i)].get ();
+
+                if (blockToCheck != nullptr && blockToCheck->getBlockIndex () == blockIndex)
+                {
+                    currentPosition = i;
+                    break;
+                }
+            }
+
+            if (currentPosition < 0)
+            {
+                repaint ();
+                return;
+            }
+
+            const auto targetPosition = direction < 0 ? currentPosition - 1 : currentPosition + 2;
+
+            moveEffectBlockToPosition (blockIndex, targetPosition);
+        };
+
+        block->onDragReorderPreview = [this] (int blockIndex, int contentY)
+        {
+            juce::ignoreUnused (blockIndex);
+
+            updateDragDropIndicator (contentY);
+        };
+
+        block->onDragReorderRequested = [this] (int blockIndex, int contentY)
+        {
+            const auto targetPosition = getDropPositionForContentY (contentY);
+
+            hideDragDropIndicator ();
+
+            moveEffectBlockToPosition (blockIndex, targetPosition);
+        };
+
+        effectsContent.addAndMakeVisible (*block);
+        effectBlocks.push_back (std::move (block));
+    }
+
+    effectBlocksSignature = newSignature;
+
+    layoutEffectBlocks ();
+}
+
+void AudioPluginAudioProcessorEditor::layoutEffectBlocks ()
+{
+    const auto viewportWidth = effectsViewport.getWidth ();
+    const auto viewportHeight = effectsViewport.getHeight ();
+
+    const auto contentWidth = juce::jmax (100, viewportWidth - 16);
+
+    auto y = 0;
+
+    for (auto& block : effectBlocks)
+    {
+        if (block == nullptr)
+            continue;
+
+        const auto height = block->getPreferredHeight (contentWidth);
+
+        block->setBounds (0, y, contentWidth, height);
+
+        y += height + 8;
+    }
+
+    effectsContent.setSize (contentWidth, juce::jmax (y, viewportHeight));
+}
+
+int AudioPluginAudioProcessorEditor::getDropPositionForContentY (int contentY) const
+{
+    if (effectBlocks.empty ())
+        return 0;
+
+    for (int i = 0; i < static_cast<int> (effectBlocks.size ()); ++i)
+    {
+        const auto* block = effectBlocks[static_cast<std::size_t> (i)].get ();
+
+        if (block == nullptr)
+            continue;
+
+        const auto midpoint = block->getY () + block->getHeight () / 2;
+
+        if (contentY < midpoint)
+            return i;
+    }
+
+    return static_cast<int> (effectBlocks.size ());
+}
+
+int AudioPluginAudioProcessorEditor::getDropLineYForPosition (int dropPosition) const
+{
+    if (effectBlocks.empty ())
+        return 0;
+
+    const auto count = static_cast<int> (effectBlocks.size ());
+    const auto safePosition = juce::jlimit (0, count, dropPosition);
+
+    if (safePosition >= count)
+    {
+        const auto* lastBlock = effectBlocks.back ().get ();
+
+        if (lastBlock == nullptr)
+            return 0;
+
+        return lastBlock->getY () + lastBlock->getHeight () + 4;
+    }
+
+    const auto* block = effectBlocks[static_cast<std::size_t> (safePosition)].get ();
+
+    if (block == nullptr)
+        return 0;
+
+    return juce::jmax (0, block->getY () - 4);
+}
+
+void AudioPluginAudioProcessorEditor::updateDragDropIndicator (int contentY)
+{
+    const auto dropPosition = getDropPositionForContentY (contentY);
+    const auto lineY = getDropLineYForPosition (dropPosition);
+
+    dropIndicator.setBounds (0, juce::jmax (0, lineY - 3), effectsContent.getWidth (), 6);
+
+    dropIndicator.toFront (false);
+    dropIndicator.setVisible (true);
+    dropIndicator.repaint ();
+}
+
+void AudioPluginAudioProcessorEditor::hideDragDropIndicator ()
+{
+    dropIndicator.setVisible (false);
+}
+
+void AudioPluginAudioProcessorEditor::moveEffectBlockToPosition (int blockIndex, int targetPosition)
+{
+    const auto currentDump = midiConnection.getCurrentPresetDumpDataCopy ();
+
+    if (currentDump.getSize () == 0)
+    {
+        repaint ();
+        return;
+    }
+
+    const auto currentPreset = gp200::GP200PresetCodec::decodeLivePresetDump (currentDump);
+
+    if (!currentPreset.isValid)
+    {
+        repaint ();
+        return;
+    }
+
+    std::vector<int> order;
+    order.reserve (currentPreset.routingOrder.size ());
+
+    for (const auto index : currentPreset.routingOrder)
+    {
+        if (index >= 0 && index < static_cast<int> (gp200::effectBlockCount))
+            order.push_back (index);
+    }
+
+    auto currentIterator = std::find (order.begin (), order.end (), blockIndex);
+
+    if (currentIterator == order.end ())
+    {
+        repaint ();
+        return;
+    }
+
+    const auto currentPosition = static_cast<int> (std::distance (order.begin (), currentIterator));
+
+    const auto safeTargetPosition = juce::jlimit (0, static_cast<int> (order.size ()), targetPosition);
+
+    auto adjustedTargetPosition = safeTargetPosition;
+
+    if (currentPosition < adjustedTargetPosition)
+        --adjustedTargetPosition;
+
+    if (adjustedTargetPosition == currentPosition)
+        return;
+
+    const auto movedBlock = *currentIterator;
+
+    order.erase (currentIterator);
+
+    adjustedTargetPosition = juce::jlimit (0, static_cast<int> (order.size ()), adjustedTargetPosition);
+
+    order.insert (order.begin () + adjustedTargetPosition, movedBlock);
+
+    auto newOrder = currentPreset.routingOrder;
+
+    for (int i = 0; i < static_cast<int> (newOrder.size ()) && i < static_cast<int> (order.size ()); ++i)
+        newOrder[static_cast<std::size_t> (i)] = order[static_cast<std::size_t> (i)];
+
+    if (!midiConnection.sendReorderEffects (newOrder, currentPreset.fxLoopSend, currentPreset.fxLoopReturn))
+    {
+        repaint ();
+        return;
+    }
+
+    juce::MessageManager::callAsync (
+        [this]
+        {
+            effectBlocksSignature.clear ();
+            updateEffectBlocksUI ();
+            repaint ();
+        });
+}
+
+//==============================================================================
+void AudioPluginAudioProcessorEditor::drawInfoBox (juce::Graphics& g,
+                                                   juce::Rectangle<int> bounds,
+                                                   const juce::String& title,
+                                                   const juce::String& value) const
+{
+    g.setColour (panelColour);
+    g.fillRoundedRectangle (bounds.toFloat (), 5.0f);
+
+    g.setColour (panelOutlineColour);
+    g.drawRoundedRectangle (bounds.toFloat ().reduced (0.5f), 5.0f, 1.2f);
+
+    if (value.isEmpty ())
+    {
+        g.setFont (15.0f);
+        g.setColour (panelOutlineColour);
+        g.drawText (title, bounds.reduced (8, 0), juce::Justification::centred);
+        return;
+    }
+
+    g.setFont (12.5f);
+    g.setColour (mutedTextColour);
+    g.drawText (title, bounds.withHeight (18).reduced (8, 0), juce::Justification::centred);
+
+    g.setFont (15.0f);
+    g.setColour (textColour);
+    g.drawText (value, bounds.withTrimmedTop (18).reduced (8, 0), juce::Justification::centred);
+}
+
+void AudioPluginAudioProcessorEditor::drawStatusPill (juce::Graphics& g, juce::Rectangle<int> bounds) const
+{
+    const auto connected = midiConnection.isConnected ();
+
+    g.setColour (connected ? statusOnColour : statusOffColour);
+    g.fillRoundedRectangle (bounds.toFloat (), 5.0f);
+
+    g.setColour (juce::Colours::black);
+    g.setFont (15.0f);
+    g.drawText (connected ? "ON" : "OFF", bounds, juce::Justification::centred);
+}
+
+//==============================================================================
+juce::String AudioPluginAudioProcessorEditor::getCurrentPresetCompactText () const
+{
+    return formatPresetCompact (midiConnection.getCurrentSlot (), midiConnection.getCurrentPresetName ());
+}
+
+juce::String AudioPluginAudioProcessorEditor::getSavedPresetCompactText () const
+{
+    const auto slot = processorRef.getSavedGP200PresetSnapshotSlot ();
+
+    if (slot < 0 || !processorRef.hasSavedGP200PresetData ())
+        return "unknown";
+
+    return formatPresetCompact (slot, processorRef.getSavedGP200PresetSnapshotName ());
+}
+
+int AudioPluginAudioProcessorEditor::wrapPresetSlot (int slot)
+{
+    while (slot < 0)
+        slot += 256;
+
+    while (slot > 255)
+        slot -= 256;
+
+    return slot;
+}
+
+juce::String AudioPluginAudioProcessorEditor::formatSlotCompact (int slot)
+{
+    if (slot < 0)
+        return "unknown";
+
+    const int bank = slot / 4 + 1;
+    const int slotInBank = slot % 4;
+
+    const juce::String slotLetter = juce::String ("ABCD").substring (slotInBank, slotInBank + 1);
+
+    return juce::String (bank).paddedLeft ('0', 2) + "-" + slotLetter;
+}
+
+juce::String AudioPluginAudioProcessorEditor::formatPresetCompact (int slot, const juce::String& presetName)
+{
+    if (slot < 0)
+        return "unknown";
+
+    auto text = formatSlotCompact (slot);
+
+    if (isUsefulPresetName (presetName))
+        text << "  " << presetName.trim ();
+
+    return text;
+}
+
+bool AudioPluginAudioProcessorEditor::isUsefulPresetName (const juce::String& presetName)
+{
+    const auto name = presetName.trim ();
+
+    return name.isNotEmpty () && name != "unknown" && name != "requesting...";
+}
