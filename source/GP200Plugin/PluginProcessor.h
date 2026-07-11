@@ -2,12 +2,15 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include <array>
+
 #include <cstdint>
 
 class AudioPluginAudioProcessor final : public juce::AudioProcessor
 {
   public:
-    AudioPluginAudioProcessor ();
+    static constexpr int compareSnapshotCount = 2;
+	AudioPluginAudioProcessor ();
     ~AudioPluginAudioProcessor () override;
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
@@ -41,38 +44,46 @@ class AudioPluginAudioProcessor final : public juce::AudioProcessor
     void setGP200SessionState (int slot, const juce::String& presetName, const juce::MemoryBlock& presetData);
 
     void setGP200SlotReferenceState (int slot, const juce::String& presetName);
-    void setGP200PresetSnapshotState (int slot,
-                                      const juce::String& presetName,
-                                      const juce::MemoryBlock& presetData);
+    void setGP200PresetSnapshotState (int snapshotIndex,
+                                  int slot,
+                                  const juce::String& presetName,
+                                  const juce::MemoryBlock& presetData);
 
     int getSavedGP200Slot () const;
     juce::String getSavedGP200PresetName () const;
     juce::String getSavedGP200SlotText () const;
 
-    int getSavedGP200PresetSnapshotSlot () const;
-    juce::String getSavedGP200PresetSnapshotName () const;
-    juce::String getSavedGP200PresetSnapshotSlotText () const;
+    int getSavedGP200PresetSnapshotSlot (int snapshotIndex) const;
+juce::String getSavedGP200PresetSnapshotName (int snapshotIndex) const;
+juce::String getSavedGP200PresetSnapshotSlotText (int snapshotIndex) const;
 
-    int getSavedGP200PresetDataSize () const;
-    bool hasSavedGP200PresetData () const;
-    juce::MemoryBlock getSavedGP200PresetDataCopy () const;
-    juce::String getSavedGP200PresetDataStatusText () const;
-    std::uint64_t getSavedPresetRevision () const;
+int getSavedGP200PresetDataSize (int snapshotIndex) const;
+bool hasSavedGP200PresetData (int snapshotIndex) const;
+juce::MemoryBlock getSavedGP200PresetDataCopy (int snapshotIndex) const;
+juce::String getSavedGP200PresetDataStatusText (int snapshotIndex) const;
+std::uint64_t getSavedPresetRevision (int snapshotIndex) const;
 
     static juce::String formatGP200Slot (int slot);
 
   private:
     static bool isUsefulPresetName (const juce::String& presetName);
+	
+	    struct GP200PresetSnapshot
+    {
+        int slot{-1};
+        juce::String name{"unknown"};
+        juce::MemoryBlock data;
+        std::uint64_t revision{0};
+    };
+
+    static bool isValidSnapshotIndex (int snapshotIndex);
 
     mutable juce::CriticalSection stateLock;
 
     int savedGP200Slot{-1};
     juce::String savedGP200PresetName{"unknown"};
 
-    int savedGP200PresetSnapshotSlot{-1};
-    juce::String savedGP200PresetSnapshotName{"unknown"};
-    juce::MemoryBlock savedGP200PresetData;
-    std::uint64_t savedPresetRevision{0};
+    std::array<GP200PresetSnapshot, compareSnapshotCount> savedGP200PresetSnapshots;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioPluginAudioProcessor)
 };

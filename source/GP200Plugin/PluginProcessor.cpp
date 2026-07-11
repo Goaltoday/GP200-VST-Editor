@@ -141,6 +141,12 @@ bool AudioPluginAudioProcessor::isUsefulPresetName (const juce::String& presetNa
     return name.isNotEmpty () && name != "unknown" && name != "requesting...";
 }
 
+bool AudioPluginAudioProcessor::isValidSnapshotIndex (int snapshotIndex)
+{
+    return snapshotIndex >= 0 &&
+           snapshotIndex < compareSnapshotCount;
+}
+
 //==============================================================================
 void AudioPluginAudioProcessor::setGP200SessionState (int slot, const juce::String& presetName)
 {
@@ -154,7 +160,7 @@ void AudioPluginAudioProcessor::setGP200SessionState (int slot,
     setGP200SlotReferenceState (slot, presetName);
 
     if (presetData.getSize () > 0)
-        setGP200PresetSnapshotState (slot, presetName, presetData);
+        setGP200PresetSnapshotState (0, slot, presetName, presetData);
 }
 
 void AudioPluginAudioProcessor::setGP200SlotReferenceState (int slot, const juce::String& presetName)
@@ -169,21 +175,29 @@ void AudioPluginAudioProcessor::setGP200SlotReferenceState (int slot, const juce
         savedGP200PresetName = "unknown";
 }
 
-void AudioPluginAudioProcessor::setGP200PresetSnapshotState (int slot,
-                                                             const juce::String& presetName,
-                                                             const juce::MemoryBlock& presetData)
+void AudioPluginAudioProcessor::setGP200PresetSnapshotState (
+    int snapshotIndex,
+    int slot,
+    const juce::String& presetName,
+    const juce::MemoryBlock& presetData)
 {
+    if (!isValidSnapshotIndex (snapshotIndex))
+        return;
+
     const juce::ScopedLock lock (stateLock);
 
-    savedGP200PresetSnapshotSlot = slot;
+    auto& snapshot =
+        savedGP200PresetSnapshots[static_cast<std::size_t> (snapshotIndex)];
+
+    snapshot.slot = slot;
 
     if (isUsefulPresetName (presetName))
-        savedGP200PresetSnapshotName = presetName.trim ();
+        snapshot.name = presetName.trim ();
     else
-        savedGP200PresetSnapshotName = "unknown";
+        snapshot.name = "unknown";
 
-    savedGP200PresetData = presetData;
-    ++savedPresetRevision;
+    snapshot.data = presetData;
+    ++snapshot.revision;
 }
 
 int AudioPluginAudioProcessor::getSavedGP200Slot () const
@@ -210,67 +224,116 @@ juce::String AudioPluginAudioProcessor::getSavedGP200SlotText () const
     return "Saved slot in DAW: " + formatGP200Slot (savedGP200Slot);
 }
 
-int AudioPluginAudioProcessor::getSavedGP200PresetSnapshotSlot () const
+int AudioPluginAudioProcessor::getSavedGP200PresetSnapshotSlot (
+    int snapshotIndex) const
 {
+    if (!isValidSnapshotIndex (snapshotIndex))
+        return -1;
+
     const juce::ScopedLock lock (stateLock);
 
-    return savedGP200PresetSnapshotSlot;
+    return savedGP200PresetSnapshots[
+        static_cast<std::size_t> (snapshotIndex)].slot;
 }
 
-juce::String AudioPluginAudioProcessor::getSavedGP200PresetSnapshotName () const
+juce::String AudioPluginAudioProcessor::getSavedGP200PresetSnapshotName (
+    int snapshotIndex) const
 {
+    if (!isValidSnapshotIndex (snapshotIndex))
+        return "unknown";
+
     const juce::ScopedLock lock (stateLock);
 
-    return savedGP200PresetSnapshotName;
+    return savedGP200PresetSnapshots[
+        static_cast<std::size_t> (snapshotIndex)].name;
 }
 
-juce::String AudioPluginAudioProcessor::getSavedGP200PresetSnapshotSlotText () const
+juce::String AudioPluginAudioProcessor::getSavedGP200PresetSnapshotSlotText (
+    int snapshotIndex) const
 {
-    const juce::ScopedLock lock (stateLock);
-
-    if (savedGP200PresetSnapshotSlot < 0)
+    if (!isValidSnapshotIndex (snapshotIndex))
         return "Saved preset in DAW: unknown";
 
-    return "Saved preset in DAW: " + formatGP200Slot (savedGP200PresetSnapshotSlot);
-}
-
-int AudioPluginAudioProcessor::getSavedGP200PresetDataSize () const
-{
     const juce::ScopedLock lock (stateLock);
 
-    return static_cast<int> (savedGP200PresetData.getSize ());
+    const auto& snapshot =
+        savedGP200PresetSnapshots[static_cast<std::size_t> (snapshotIndex)];
+
+    if (snapshot.slot < 0)
+        return "Saved preset in DAW: unknown";
+
+    return "Saved preset in DAW: " + formatGP200Slot (snapshot.slot);
 }
 
-bool AudioPluginAudioProcessor::hasSavedGP200PresetData () const
+int AudioPluginAudioProcessor::getSavedGP200PresetDataSize (
+    int snapshotIndex) const
 {
+    if (!isValidSnapshotIndex (snapshotIndex))
+        return 0;
+
     const juce::ScopedLock lock (stateLock);
 
-    return savedGP200PresetData.getSize () > 0;
+    return static_cast<int> (
+        savedGP200PresetSnapshots[
+            static_cast<std::size_t> (snapshotIndex)].data.getSize ());
 }
 
-juce::MemoryBlock AudioPluginAudioProcessor::getSavedGP200PresetDataCopy () const
+bool AudioPluginAudioProcessor::hasSavedGP200PresetData (
+    int snapshotIndex) const
 {
+    if (!isValidSnapshotIndex (snapshotIndex))
+        return false;
+
     const juce::ScopedLock lock (stateLock);
 
-    return savedGP200PresetData;
+    return savedGP200PresetSnapshots[
+        static_cast<std::size_t> (snapshotIndex)].data.getSize () > 0;
 }
 
-juce::String AudioPluginAudioProcessor::getSavedGP200PresetDataStatusText () const
+juce::MemoryBlock AudioPluginAudioProcessor::getSavedGP200PresetDataCopy (
+    int snapshotIndex) const
 {
+    if (!isValidSnapshotIndex (snapshotIndex))
+        return {};
+
     const juce::ScopedLock lock (stateLock);
 
-    if (savedGP200PresetData.getSize () == 0)
+    return savedGP200PresetSnapshots[
+        static_cast<std::size_t> (snapshotIndex)].data;
+}
+
+juce::String AudioPluginAudioProcessor::getSavedGP200PresetDataStatusText (
+    int snapshotIndex) const
+{
+    if (!isValidSnapshotIndex (snapshotIndex))
+        return "Saved preset in DAW: invalid snapshot";
+
+    const juce::ScopedLock lock (stateLock);
+
+    const auto& snapshot =
+        savedGP200PresetSnapshots[static_cast<std::size_t> (snapshotIndex)];
+
+    if (snapshot.data.getSize () == 0)
         return "Saved preset in DAW: not saved";
 
-    return "Saved preset in DAW: " + formatGP200Slot (savedGP200PresetSnapshotSlot) + "  " +
-           savedGP200PresetSnapshotName + "  " +
-           juce::String (static_cast<int> (savedGP200PresetData.getSize ())) + " bytes";
+    return "Saved preset in DAW: " +
+           formatGP200Slot (snapshot.slot) + "  " +
+           snapshot.name + "  " +
+           juce::String (
+               static_cast<int> (snapshot.data.getSize ())) +
+           " bytes";
 }
 
-std::uint64_t AudioPluginAudioProcessor::getSavedPresetRevision () const
+std::uint64_t AudioPluginAudioProcessor::getSavedPresetRevision (
+    int snapshotIndex) const
 {
+    if (!isValidSnapshotIndex (snapshotIndex))
+        return 0;
+
     const juce::ScopedLock lock (stateLock);
-    return savedPresetRevision;
+
+    return savedGP200PresetSnapshots[
+        static_cast<std::size_t> (snapshotIndex)].revision;
 }
 
 juce::String AudioPluginAudioProcessor::formatGP200Slot (int slot)
@@ -287,27 +350,43 @@ juce::String AudioPluginAudioProcessor::formatGP200Slot (int slot)
 }
 
 //==============================================================================
-void AudioPluginAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
+void AudioPluginAudioProcessor::getStateInformation (
+    juce::MemoryBlock& destData)
 {
-    auto xml = std::make_unique<juce::XmlElement> ("GP200StudioState");
+    auto xml =
+        std::make_unique<juce::XmlElement> ("GP200StudioState");
 
     {
         const juce::ScopedLock lock (stateLock);
 
-        xml->setAttribute ("version", 4);
+        xml->setAttribute ("version", 5);
 
         xml->setAttribute ("slotReferenceSlot", savedGP200Slot);
-        xml->setAttribute ("slotReferenceName", savedGP200PresetName);
+        xml->setAttribute ("slotReferenceName",
+                           savedGP200PresetName);
 
-        xml->setAttribute ("presetSnapshotSlot", savedGP200PresetSnapshotSlot);
-        xml->setAttribute ("presetSnapshotName", savedGP200PresetSnapshotName);
-        xml->setAttribute ("presetSnapshotDataBase64", savedGP200PresetData.toBase64Encoding ());
+        const auto& snapshotA = savedGP200PresetSnapshots[0];
+        const auto& snapshotB = savedGP200PresetSnapshots[1];
+
+        xml->setAttribute ("snapshotASlot", snapshotA.slot);
+        xml->setAttribute ("snapshotAName", snapshotA.name);
+        xml->setAttribute (
+            "snapshotADataBase64",
+            snapshotA.data.toBase64Encoding ());
+
+        xml->setAttribute ("snapshotBSlot", snapshotB.slot);
+        xml->setAttribute ("snapshotBName", snapshotB.name);
+        xml->setAttribute (
+            "snapshotBDataBase64",
+            snapshotB.data.toBase64Encoding ());
     }
 
     copyXmlToBinary (*xml, destData);
 }
 
-void AudioPluginAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
+void AudioPluginAudioProcessor::setStateInformation (
+    const void* data,
+    int sizeInBytes)
 {
     const auto xml = getXmlFromBinary (data, sizeInBytes);
 
@@ -319,28 +398,109 @@ void AudioPluginAudioProcessor::setStateInformation (const void* data, int sizeI
 
     const juce::ScopedLock lock (stateLock);
 
-    savedGP200Slot = xml->getIntAttribute ("slotReferenceSlot", xml->getIntAttribute ("gp200Slot", -1));
+    savedGP200Slot = xml->getIntAttribute (
+        "slotReferenceSlot",
+        xml->getIntAttribute ("gp200Slot", -1));
 
-    savedGP200PresetName =
-        xml->getStringAttribute ("slotReferenceName", xml->getStringAttribute ("gp200PresetName", "unknown"));
+    savedGP200PresetName = xml->getStringAttribute (
+        "slotReferenceName",
+        xml->getStringAttribute (
+            "gp200PresetName",
+            "unknown"));
 
-    savedGP200PresetSnapshotSlot =
-        xml->getIntAttribute ("presetSnapshotSlot", xml->getIntAttribute ("gp200Slot", -1));
+    for (auto& snapshot : savedGP200PresetSnapshots)
+    {
+        snapshot.slot = -1;
+        snapshot.name = "unknown";
+        snapshot.data.setSize (0);
+        ++snapshot.revision;
+    }
 
-    savedGP200PresetSnapshotName = xml->getStringAttribute (
-        "presetSnapshotName", xml->getStringAttribute ("gp200PresetName", "unknown"));
+    const auto hasNewSnapshotFormat =
+        xml->hasAttribute ("snapshotASlot") ||
+        xml->hasAttribute ("snapshotAName") ||
+        xml->hasAttribute ("snapshotADataBase64") ||
+        xml->hasAttribute ("snapshotBSlot") ||
+        xml->hasAttribute ("snapshotBName") ||
+        xml->hasAttribute ("snapshotBDataBase64");
 
-    savedGP200PresetData.setSize (0);
+    if (hasNewSnapshotFormat)
+    {
+        auto& snapshotA = savedGP200PresetSnapshots[0];
+        auto& snapshotB = savedGP200PresetSnapshots[1];
 
-    auto presetDataBase64 = xml->getStringAttribute ("presetSnapshotDataBase64", {});
+        snapshotA.slot =
+            xml->getIntAttribute ("snapshotASlot", -1);
 
-    if (presetDataBase64.isEmpty ())
-        presetDataBase64 = xml->getStringAttribute ("gp200PresetDataBase64", {});
+        snapshotA.name =
+            xml->getStringAttribute (
+                "snapshotAName",
+                "unknown");
 
-    if (presetDataBase64.isNotEmpty ())
-        savedGP200PresetData.fromBase64Encoding (presetDataBase64);
+        const auto snapshotADataBase64 =
+            xml->getStringAttribute (
+                "snapshotADataBase64",
+                {});
 
-    ++savedPresetRevision;
+        if (snapshotADataBase64.isNotEmpty ())
+        {
+            snapshotA.data.fromBase64Encoding (
+                snapshotADataBase64);
+        }
+
+        snapshotB.slot =
+            xml->getIntAttribute ("snapshotBSlot", -1);
+
+        snapshotB.name =
+            xml->getStringAttribute (
+                "snapshotBName",
+                "unknown");
+
+        const auto snapshotBDataBase64 =
+            xml->getStringAttribute (
+                "snapshotBDataBase64",
+                {});
+
+        if (snapshotBDataBase64.isNotEmpty ())
+        {
+            snapshotB.data.fromBase64Encoding (
+                snapshotBDataBase64);
+        }
+
+        return;
+    }
+
+    // Compatibilidad con proyectos que guardaban un único snapshot.
+    auto& snapshotA = savedGP200PresetSnapshots[0];
+
+    snapshotA.slot = xml->getIntAttribute (
+        "presetSnapshotSlot",
+        xml->getIntAttribute ("gp200Slot", -1));
+
+    snapshotA.name = xml->getStringAttribute (
+        "presetSnapshotName",
+        xml->getStringAttribute (
+            "gp200PresetName",
+            "unknown"));
+
+    auto oldPresetDataBase64 =
+        xml->getStringAttribute (
+            "presetSnapshotDataBase64",
+            {});
+
+    if (oldPresetDataBase64.isEmpty ())
+    {
+        oldPresetDataBase64 =
+            xml->getStringAttribute (
+                "gp200PresetDataBase64",
+                {});
+    }
+
+    if (oldPresetDataBase64.isNotEmpty ())
+    {
+        snapshotA.data.fromBase64Encoding (
+            oldPresetDataBase64);
+    }
 }
 
 //==============================================================================

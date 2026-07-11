@@ -27,9 +27,11 @@ AudioPluginAudioProcessorEditor::AudioPluginAudioProcessorEditor (AudioPluginAud
     addAndMakeVisible (previousPresetButton);
     addAndMakeVisible (nextPresetButton);
 
-    addAndMakeVisible (savePresetButton);
-    addAndMakeVisible (recallPresetButton);
-    addAndMakeVisible (storePresetButton);
+    addAndMakeVisible (compareAButton);
+addAndMakeVisible (compareBButton);
+addAndMakeVisible (savePresetButton);
+addAndMakeVisible (recallPresetButton);
+addAndMakeVisible (storePresetButton);
     addAndMakeVisible (patchVolumeSlider);
     addAndMakeVisible (panSlider);
     addAndMakeVisible (tempoSlider);
@@ -58,6 +60,9 @@ AudioPluginAudioProcessorEditor::AudioPluginAudioProcessorEditor (AudioPluginAud
 
     setupButton (previousPresetButton);
     setupButton (nextPresetButton);
+	
+	setupButton (compareAButton);
+setupButton (compareBButton);
 
    setupButton (savePresetButton);
 setupButton (recallPresetButton);
@@ -200,11 +205,23 @@ storePresetButton.setColour (
     previousPresetButton.onClick = [this] { loadPreviousPreset (); };
 
     nextPresetButton.onClick = [this] { loadNextPreset (); };
+	
+	compareAButton.onClick = [this]
+{
+    selectCompareSnapshot (CompareSnapshot::A);
+};
+
+compareBButton.onClick = [this]
+{
+    selectCompareSnapshot (CompareSnapshot::B);
+};
 
     savePresetButton.onClick = [this] { saveCurrentPresetToProject (); };
 
     recallPresetButton.onClick = [this] { recallSavedPresetToGP200 (); };
     storePresetButton.onClick = [this] { storeCurrentPresetToGP200 (); };
+	
+	updateCompareSnapshotButtons ();
 
     midiConnection.connectToGP200 ();
 
@@ -331,13 +348,14 @@ void AudioPluginAudioProcessorEditor::paint (juce::Graphics& g)
     g.setColour (mutedTextColour.withAlpha (0.72f));
 
     g.drawText (
-        "Saved in DAW:",
-        currentPresetBox.getX() + 16,
-        currentPresetBox.getY() + 92,
-        100,
-        22,
-        juce::Justification::centredLeft
-    );
+    "Snapshot " +
+        getSelectedCompareSnapshotLabel () + ":",
+    currentPresetBox.getX() + 16,
+    currentPresetBox.getY() + 92,
+    100,
+    22,
+    juce::Justification::centredLeft
+);
 
     g.setFont (juce::Font (13.5f, juce::Font::bold));
     g.setColour (textColour);
@@ -489,6 +507,9 @@ void AudioPluginAudioProcessorEditor::resized ()
 
     previousPresetButton.setBounds (30, 92, 36, 36);
     nextPresetButton.setBounds (342, 92, 36, 36);
+	
+	compareAButton.setBounds (300, 58, 32, 24);
+compareBButton.setBounds (338, 58, 32, 24);
 
     presetNameEditor.setBounds (138, 93, 194, 34);
 
@@ -577,6 +598,86 @@ void AudioPluginAudioProcessorEditor::timerCallback ()
 
 //==============================================================================
 
+void AudioPluginAudioProcessorEditor::selectCompareSnapshot (
+    CompareSnapshot snapshot)
+{
+    if (presetRestoreInProgress)
+    {
+        effectsStatusText =
+            "A/B selection disabled while Recall is restoring";
+
+        repaint ();
+        return;
+    }
+
+    selectedCompareSnapshot = snapshot;
+
+    updateCompareSnapshotButtons ();
+
+    effectsStatusText =
+        "Selected DAW snapshot " +
+        getSelectedCompareSnapshotLabel ();
+
+    effectBlocksSignature.clear ();
+
+    updateEffectBlocksUI ();
+    repaint ();
+}
+
+void AudioPluginAudioProcessorEditor::updateCompareSnapshotButtons ()
+{
+    const auto selectedA =
+        selectedCompareSnapshot == CompareSnapshot::A;
+
+    const auto selectedB =
+        selectedCompareSnapshot == CompareSnapshot::B;
+
+    auto updateButton =
+        [] (juce::TextButton& button, bool selected)
+    {
+        button.setColour (
+            juce::TextButton::buttonColourId,
+            selected
+                ? panelOutlineColour.withAlpha (0.28f)
+                : panelColour);
+
+        button.setColour (
+            juce::TextButton::buttonOnColourId,
+            selected
+                ? panelOutlineColour.withAlpha (0.38f)
+                : panelColour.brighter (0.2f));
+
+        button.setColour (
+            juce::TextButton::textColourOffId,
+            selected ? textColour : panelOutlineColour);
+
+        button.setColour (
+            juce::TextButton::textColourOnId,
+            selected ? textColour : panelOutlineColour);
+
+        button.repaint ();
+    };
+
+    updateButton (compareAButton, selectedA);
+    updateButton (compareBButton, selectedB);
+}
+
+int AudioPluginAudioProcessorEditor::
+    getSelectedCompareSnapshotIndex () const
+{
+    return selectedCompareSnapshot == CompareSnapshot::A
+               ? 0
+               : 1;
+}
+
+juce::String AudioPluginAudioProcessorEditor::
+    getSelectedCompareSnapshotLabel () const
+{
+    return selectedCompareSnapshot == CompareSnapshot::A
+               ? "A"
+               : "B";
+}
+
 void AudioPluginAudioProcessorEditor::saveCurrentPresetToProject ()
 {
     const auto currentSlot = midiConnection.getCurrentSlot ();
@@ -593,10 +694,17 @@ void AudioPluginAudioProcessorEditor::saveCurrentPresetToProject ()
         return;
     }
 
-    processorRef.setGP200PresetSnapshotState (
-        currentSlot, midiConnection.getCurrentPresetName (), presetData);
+    const auto snapshotIndex =
+    getSelectedCompareSnapshotIndex ();
+
+processorRef.setGP200PresetSnapshotState (
+    snapshotIndex,
+    currentSlot,
+    midiConnection.getCurrentPresetName (),
+    presetData);
 
     effectsStatusText = "Saved full preset snapshot to DAW";
+	getSelectedCompareSnapshotLabel ();
     updateEffectBlocksUI ();
     repaint ();
 }
@@ -614,15 +722,25 @@ void AudioPluginAudioProcessorEditor::startFullPresetRestoreFromSnapshot ()
         repaint ();
         return;
     }
+	const auto snapshotIndex =
+    getSelectedCompareSnapshotIndex ();
 
-    if (!processorRef.hasSavedGP200PresetData ())
+const auto snapshotLabel =
+    getSelectedCompareSnapshotLabel ();
+
+    if (!processorRef.hasSavedGP200PresetData (
+        snapshotIndex))
     {
-        effectsStatusText = "Recall Preset failed: no preset snapshot saved in DAW";
+        effectsStatusText =
+    "Recall snapshot " + snapshotLabel +
+    " failed: no preset saved";
         repaint ();
         return;
     }
 
-    const auto presetData = processorRef.getSavedGP200PresetDataCopy ();
+    const auto presetData =
+    processorRef.getSavedGP200PresetDataCopy (
+        snapshotIndex);
 
     if (presetData.getSize () == 0)
     {
@@ -649,7 +767,9 @@ void AudioPluginAudioProcessorEditor::startFullPresetRestoreFromSnapshot ()
         return;
     }
 
-    auto savedName = processorRef.getSavedGP200PresetSnapshotName ();
+    auto savedName =
+    processorRef.getSavedGP200PresetSnapshotName (
+        snapshotIndex);
 
     if (!isUsefulPresetName (savedName))
         savedName = preset.patchName;
@@ -1356,11 +1476,23 @@ void AudioPluginAudioProcessorEditor::updateEffectBlocksUI ()
         sourceText = "Current GP-200 preset";
         presetRevision = midiConnection.getPresetRevision ();
     }
-    else if (processorRef.hasSavedGP200PresetData ())
+    else if (processorRef.hasSavedGP200PresetData (
+             getSelectedCompareSnapshotIndex ()))
     {
-        presetDataForDisplay = processorRef.getSavedGP200PresetDataCopy ();
-        sourceText = "DAW saved preset";
-        presetRevision = processorRef.getSavedPresetRevision ();
+        const auto snapshotIndex =
+    getSelectedCompareSnapshotIndex ();
+
+presetDataForDisplay =
+    processorRef.getSavedGP200PresetDataCopy (
+        snapshotIndex);
+
+sourceText =
+    "DAW snapshot " +
+    getSelectedCompareSnapshotLabel ();
+
+presetRevision =
+    processorRef.getSavedPresetRevision (
+        snapshotIndex);
     }
     else
     {
@@ -1783,14 +1915,27 @@ juce::String AudioPluginAudioProcessorEditor::getCurrentPresetCompactText () con
     return formatPresetCompact (midiConnection.getCurrentSlot (), midiConnection.getCurrentPresetName ());
 }
 
-juce::String AudioPluginAudioProcessorEditor::getSavedPresetCompactText () const
+juce::String AudioPluginAudioProcessorEditor::
+    getSavedPresetCompactText () const
 {
-    const auto slot = processorRef.getSavedGP200PresetSnapshotSlot ();
+    const auto snapshotIndex =
+        getSelectedCompareSnapshotIndex ();
 
-    if (slot < 0 || !processorRef.hasSavedGP200PresetData ())
-        return "unknown";
+    const auto slot =
+        processorRef.getSavedGP200PresetSnapshotSlot (
+            snapshotIndex);
 
-    return formatPresetCompact (slot, processorRef.getSavedGP200PresetSnapshotName ());
+    if (slot < 0 ||
+        !processorRef.hasSavedGP200PresetData (
+            snapshotIndex))
+    {
+        return "empty";
+    }
+
+    return formatPresetCompact (
+        slot,
+        processorRef.getSavedGP200PresetSnapshotName (
+            snapshotIndex));
 }
 
 int AudioPluginAudioProcessorEditor::wrapPresetSlot (int slot)

@@ -21,9 +21,20 @@ class AudioPluginAudioProcessorEditor final : public juce::AudioProcessorEditor,
 
   private:
     using BlockEnabledStates = std::array<bool, gp200::effectBlockCount>;
+	
+	enum class CompareSnapshot
+{
+    A = 0,
+    B = 1
+};
 
     void saveCurrentPresetToProject ();
     void recallSavedPresetToGP200 ();
+	
+	void selectCompareSnapshot (CompareSnapshot snapshot);
+void updateCompareSnapshotButtons ();
+int getSelectedCompareSnapshotIndex () const;
+juce::String getSelectedCompareSnapshotLabel () const;
 
     void startFullPresetRestoreFromSnapshot ();
     void buildFullPresetRestoreSteps (const gp200::GP200Preset& preset, const juce::MemoryBlock& presetData);
@@ -119,10 +130,16 @@ class AudioPluginAudioProcessorEditor final : public juce::AudioProcessorEditor,
 
     juce::TextButton previousPresetButton{"<"};
 	juce::TextButton nextPresetButton{">"};
-	juce::TextButton savePresetButton{"Save to DAW"};
-	juce::TextButton recallPresetButton{"Recall from DAW"};
-	juce::TextButton storePresetButton{"Store to GP-200"};
-	juce::TextButton allBlocksOffButton{"FX OFF"};
+	juce::TextButton compareAButton{"A"};
+juce::TextButton compareBButton{"B"};
+juce::TextButton savePresetButton{"Save to DAW"};
+juce::TextButton recallPresetButton{"Recall from DAW"};
+juce::TextButton storePresetButton{"Store to GP-200"};
+juce::TextButton allBlocksOffButton{"FX OFF"};
+
+CompareSnapshot selectedCompareSnapshot{
+    CompareSnapshot::A
+};
 
     class DropIndicatorComponent final : public juce::Component
     {
