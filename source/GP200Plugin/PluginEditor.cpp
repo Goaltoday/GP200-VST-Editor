@@ -190,7 +190,7 @@ void AudioPluginAudioProcessorEditor::paint (juce::Graphics& g)
     g.drawText ("GP200", 20, 8, 92, 30, juce::Justification::left);
 
     g.setColour (panelOutlineColour);
-    g.drawText ("Studio", 110, 8, 120, 30, juce::Justification::left);
+    g.drawText ("Studio 0.1", 110, 8, 120, 30, juce::Justification::left); //Cambiar nombre
 
     // Main top container
     const juce::Rectangle<int> topPanel{12, 42, getWidth () - 24, 194};
