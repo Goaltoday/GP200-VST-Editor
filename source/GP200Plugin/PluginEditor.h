@@ -35,7 +35,6 @@ class AudioPluginAudioProcessorEditor final : public juce::AudioProcessorEditor,
     void sendPatchPanFromSlider ();
     void sendPatchTempoFromSlider ();
 
-    void renameCurrentPresetFromEditor ();
     void syncPresetNameEditorFromCurrentPreset ();
 
     void toggleTuner ();
@@ -142,7 +141,6 @@ class AudioPluginAudioProcessorEditor final : public juce::AudioProcessorEditor,
     juce::Slider panSlider;
     juce::Slider tempoSlider;
     juce::TextEditor presetNameEditor;
-    juce::TextButton renamePresetButton{"Rename"};
     juce::TextButton tunerButton{"Tuner OFF"};
     bool tunerIsOn{false};
 

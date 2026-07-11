@@ -34,7 +34,6 @@ AudioPluginAudioProcessorEditor::AudioPluginAudioProcessorEditor (AudioPluginAud
     addAndMakeVisible (panSlider);
     addAndMakeVisible (tempoSlider);
     addAndMakeVisible (presetNameEditor);
-    addAndMakeVisible (renamePresetButton);
     addAndMakeVisible (tunerButton);
     addAndMakeVisible (allBlocksOffButton);
 
@@ -62,7 +61,6 @@ AudioPluginAudioProcessorEditor::AudioPluginAudioProcessorEditor (AudioPluginAud
     setupButton (savePresetButton);
     setupButton (recallPresetButton);
     setupButton (storePresetButton);
-    setupButton (renamePresetButton);
     setupButton (tunerButton);
     setupButton (allBlocksOffButton);
     updateTunerButtonText ();
@@ -152,9 +150,7 @@ AudioPluginAudioProcessorEditor::AudioPluginAudioProcessorEditor (AudioPluginAud
 
     tempoSlider.onValueChange = [this] { sendPatchTempoFromSlider (); };
 
-    presetNameEditor.onReturnKey = [this] { renameCurrentPresetFromEditor (); };
-
-    renamePresetButton.onClick = [this] { renameCurrentPresetFromEditor (); };
+    presetNameEditor.onReturnKey = [this] { storeCurrentPresetToGP200 (); };
 
     tunerButton.onClick = [this] { toggleTuner (); };
 
@@ -300,8 +296,7 @@ void AudioPluginAudioProcessorEditor::resized ()
     savePresetButton.setBounds (438, 66, 112, 48);
     recallPresetButton.setBounds (562, 66, 112, 48);
 
-    storePresetButton.setBounds (438, 126, 112, 44);
-    renamePresetButton.setBounds (562, 126, 112, 44);
+    storePresetButton.setBounds (438, 126, 236, 44);
 
     // Patch settings
     patchVolumeSlider.setBounds (766, 82, 142, 20);
@@ -690,7 +685,44 @@ void AudioPluginAudioProcessorEditor::finishFullPresetRestore ()
 
 void AudioPluginAudioProcessorEditor::storeCurrentPresetToGP200 ()
 {
-    midiConnection.storeCurrentPresetToGP200 ();
+    auto newName = presetNameEditor.getText ().trim ();
+
+    if (newName.isEmpty ())
+    {
+        effectsStatusText = "Store Preset failed: empty preset name";
+        repaint ();
+        return;
+    }
+
+    if (newName.length () > gp200::presetNameMaxLength)
+        newName = newName.substring (0, gp200::presetNameMaxLength);
+
+    const auto currentName = midiConnection.getCurrentPresetName ().trim ();
+
+    if (newName != currentName)
+    {
+        if (!midiConnection.renameCurrentPresetOnGP200 (newName))
+        {
+            effectsStatusText = midiConnection.getLastMessageText ();
+            repaint ();
+            return;
+        }
+
+        presetNameEditor.setText (midiConnection.getCurrentPresetName (),
+                                  juce::dontSendNotification);
+
+        presetNameEditorSignature.clear ();
+        effectBlocksSignature.clear ();
+    }
+
+    if (!midiConnection.storeCurrentPresetToGP200 ())
+    {
+        effectsStatusText = midiConnection.getLastMessageText ();
+        repaint ();
+        return;
+    }
+
+    effectsStatusText = "Stored preset: " + midiConnection.getCurrentPresetName ();
 
     repaint ();
 }
@@ -718,37 +750,6 @@ void AudioPluginAudioProcessorEditor::sendPatchTempoFromSlider ()
     const auto bpm = static_cast<int> (tempoSlider.getValue ());
 
     midiConnection.sendPatchTempoBpm (bpm);
-
-    repaint ();
-}
-
-void AudioPluginAudioProcessorEditor::renameCurrentPresetFromEditor ()
-{
-    auto newName = presetNameEditor.getText ().trim ();
-
-    if (newName.isEmpty ())
-    {
-        effectsStatusText = "Rename failed: empty preset name";
-        repaint ();
-        return;
-    }
-
-    if (newName.length () > gp200::presetNameMaxLength)
-        newName = newName.substring (0, gp200::presetNameMaxLength);
-
-    if (!midiConnection.renameCurrentPresetOnGP200 (newName))
-    {
-        effectsStatusText = midiConnection.getLastMessageText ();
-        repaint ();
-        return;
-    }
-
-    presetNameEditor.setText (midiConnection.getCurrentPresetName (), juce::dontSendNotification);
-
-    presetNameEditorSignature.clear ();
-    effectBlocksSignature.clear ();
-
-    effectsStatusText = "Renamed preset to: " + midiConnection.getCurrentPresetName ();
 
     repaint ();
 }
