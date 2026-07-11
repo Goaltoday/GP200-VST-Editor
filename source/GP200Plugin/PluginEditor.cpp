@@ -348,11 +348,10 @@ void AudioPluginAudioProcessorEditor::paint (juce::Graphics& g)
     g.setColour (mutedTextColour.withAlpha (0.72f));
 
     g.drawText (
-    "Snapshot " +
-        getSelectedCompareSnapshotLabel () + ":",
+    "Snapshot:",
     currentPresetBox.getX() + 16,
     currentPresetBox.getY() + 92,
-    100,
+    68,
     22,
     juce::Justification::centredLeft
 );
@@ -366,13 +365,13 @@ void AudioPluginAudioProcessorEditor::paint (juce::Graphics& g)
         savedPresetText = "unknown";
 
     g.drawText (
-        savedPresetText,
-        currentPresetBox.getX() + 112,
-        currentPresetBox.getY() + 92,
-        currentPresetBox.getWidth() - 128,
-        22,
-        juce::Justification::centredLeft
-    );
+    savedPresetText,
+    currentPresetBox.getX() + 154,
+    currentPresetBox.getY() + 92,
+    currentPresetBox.getWidth() - 170,
+    22,
+    juce::Justification::centredLeft
+);
 
     // ============================================================
     // Action area
@@ -508,8 +507,8 @@ void AudioPluginAudioProcessorEditor::resized ()
     previousPresetButton.setBounds (30, 92, 36, 36);
     nextPresetButton.setBounds (342, 92, 36, 36);
 	
-	compareAButton.setBounds (300, 58, 32, 24);
-compareBButton.setBounds (338, 58, 32, 24);
+	compareAButton.setBounds (96, 146, 30, 22);
+compareBButton.setBounds (132, 146, 30, 22);
 
     presetNameEditor.setBounds (138, 93, 194, 34);
 
