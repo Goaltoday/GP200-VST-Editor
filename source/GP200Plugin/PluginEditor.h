@@ -148,7 +148,8 @@ class AudioPluginAudioProcessorEditor final : public juce::AudioProcessorEditor,
     bool tunerIsOn{false};
 	
 	double lastTapTimeMs{0.0};
-std::deque<double> tapTempoIntervals;
+    double tapFlashUntilMs{0.0};
+    std::deque<double> tapTempoIntervals;
 
     BlockEnabledStates savedBlockEnabledStates{};
     bool hasSavedBlockEnabledStates{false};

@@ -534,6 +534,22 @@ tapTempoButton.setBounds (882, 150, 46, 24);
 //==============================================================================
 void AudioPluginAudioProcessorEditor::timerCallback ()
 {
+    const auto nowMs = juce::Time::getMillisecondCounterHiRes();
+
+    if (tapFlashUntilMs > 0.0 && nowMs >= tapFlashUntilMs)
+    {
+        tapFlashUntilMs = 0.0;
+
+        tapTempoButton.setColour (juce::TextButton::buttonColourId, panelColour);
+        tapTempoButton.setColour (juce::TextButton::buttonOnColourId,
+                                  panelColour.brighter (0.2f));
+        tapTempoButton.setColour (juce::TextButton::textColourOffId,
+                                  panelOutlineColour);
+        tapTempoButton.setColour (juce::TextButton::textColourOnId,
+                                  panelOutlineColour.brighter (0.15f));
+        tapTempoButton.repaint();
+    }
+
     if (presetRestoreInProgress)
     {
         constexpr int restoreStepsPerTimerTick = 4;
@@ -976,6 +992,19 @@ void AudioPluginAudioProcessorEditor::handleTapTempo ()
 {
     const auto nowMs = juce::Time::getMillisecondCounterHiRes();
 
+    // Immediate visual feedback, including the first tap.
+    tapFlashUntilMs = nowMs + 150.0;
+
+    tapTempoButton.setColour (juce::TextButton::buttonColourId,
+                              panelOutlineColour);
+    tapTempoButton.setColour (juce::TextButton::buttonOnColourId,
+                              panelOutlineColour.brighter (0.1f));
+    tapTempoButton.setColour (juce::TextButton::textColourOffId,
+                              juce::Colours::black);
+    tapTempoButton.setColour (juce::TextButton::textColourOnId,
+                              juce::Colours::black);
+    tapTempoButton.repaint();
+
     if (lastTapTimeMs <= 0.0)
     {
         lastTapTimeMs = nowMs;
@@ -1012,20 +1041,33 @@ void AudioPluginAudioProcessorEditor::handleTapTempo ()
     while (tapTempoIntervals.size() > 4)
         tapTempoIntervals.pop_front();
 
-    double totalIntervalMs = 0.0;
+    // Use the median so an imprecise tap has less influence.
+    std::vector<double> sortedIntervals (tapTempoIntervals.begin(),
+                                         tapTempoIntervals.end());
 
-    for (const auto interval : tapTempoIntervals)
-        totalIntervalMs += interval;
+    std::sort (sortedIntervals.begin(), sortedIntervals.end());
 
-    const auto averageIntervalMs =
-        totalIntervalMs / static_cast<double> (tapTempoIntervals.size());
+    const auto intervalCount = sortedIntervals.size();
+    double medianIntervalMs = 0.0;
+
+    if ((intervalCount % 2) == 1)
+    {
+        medianIntervalMs = sortedIntervals[intervalCount / 2];
+    }
+    else
+    {
+        medianIntervalMs =
+            (sortedIntervals[intervalCount / 2 - 1] +
+             sortedIntervals[intervalCount / 2]) * 0.5;
+    }
 
     const auto calculatedBpm = juce::jlimit (
         40,
         250,
-        static_cast<int> (std::round (60000.0 / averageIntervalMs))
+        static_cast<int> (std::round (60000.0 / medianIntervalMs))
     );
 
+    // The first valid interval exists on the second tap, so MIDI is sent from here.
     tempoSlider.setValue (
         static_cast<double> (calculatedBpm),
         juce::sendNotificationSync
