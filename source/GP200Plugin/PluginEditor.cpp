@@ -33,6 +33,7 @@ AudioPluginAudioProcessorEditor::AudioPluginAudioProcessorEditor (AudioPluginAud
     addAndMakeVisible (patchVolumeSlider);
     addAndMakeVisible (panSlider);
     addAndMakeVisible (tempoSlider);
+	addAndMakeVisible (tapTempoButton);
     addAndMakeVisible (presetNameEditor);
     addAndMakeVisible (tunerButton);
     addAndMakeVisible (allBlocksOffButton);
@@ -62,6 +63,18 @@ AudioPluginAudioProcessorEditor::AudioPluginAudioProcessorEditor (AudioPluginAud
 setupButton (recallPresetButton);
 setupButton (storePresetButton);
 setupButton (tunerButton);
+setupButton (tapTempoButton);
+
+tapTempoButton.setColour (
+    juce::TextButton::textColourOffId,
+    panelOutlineColour
+);
+
+tapTempoButton.setColour (
+    juce::TextButton::textColourOnId,
+    panelOutlineColour.brighter (0.15f)
+);
+
 setupButton (allBlocksOffButton);
 
 // Store to GP-200 is the main hardware action.
@@ -145,6 +158,8 @@ storePresetButton.setColour (
 
     tempoSlider.textFromValueFunction = [] (double value)
     { return juce::String (static_cast<int> (value)) + " BPM"; };
+	
+	
 
     presetNameEditor.setMultiLine (false);
     presetNameEditor.setReturnKeyStartsNewLine (false);
@@ -173,6 +188,8 @@ storePresetButton.setColour (
     panSlider.onValueChange = [this] { sendPatchPanFromSlider (); };
 
     tempoSlider.onValueChange = [this] { sendPatchTempoFromSlider (); };
+	
+	tapTempoButton.onClick = [this] { handleTapTempo (); };
 
     presetNameEditor.onReturnKey = [this] { storeCurrentPresetToGP200 (); };
 
@@ -490,7 +507,8 @@ void AudioPluginAudioProcessorEditor::resized ()
 
     patchVolumeSlider.setBounds (758, 84, 170, 20);
     panSlider.setBounds (758, 118, 170, 20);
-    tempoSlider.setBounds (758, 152, 170, 20);
+    tempoSlider.setBounds (758, 152, 118, 20);
+tapTempoButton.setBounds (882, 150, 46, 24);
 
     // ============================================================
     // Utility bar
@@ -952,6 +970,71 @@ void AudioPluginAudioProcessorEditor::sendPatchTempoFromSlider ()
     midiConnection.sendPatchTempoBpm (bpm);
 
     repaint ();
+}
+
+void AudioPluginAudioProcessorEditor::handleTapTempo ()
+{
+    const auto nowMs = juce::Time::getMillisecondCounterHiRes();
+
+    if (lastTapTimeMs <= 0.0)
+    {
+        lastTapTimeMs = nowMs;
+        tapTempoIntervals.clear();
+
+        effectsStatusText = "Tap Tempo: waiting for next tap";
+        repaint();
+        return;
+    }
+
+    const auto intervalMs = nowMs - lastTapTimeMs;
+    lastTapTimeMs = nowMs;
+
+    // A pause longer than two seconds starts a new measurement.
+    if (intervalMs > 2000.0)
+    {
+        tapTempoIntervals.clear();
+
+        effectsStatusText = "Tap Tempo: measurement restarted";
+        repaint();
+        return;
+    }
+
+    // Ignore accidental extremely fast double-clicks.
+    if (intervalMs < 240.0)
+    {
+        effectsStatusText = "Tap Tempo: tap too fast";
+        repaint();
+        return;
+    }
+
+    tapTempoIntervals.push_back (intervalMs);
+
+    while (tapTempoIntervals.size() > 4)
+        tapTempoIntervals.pop_front();
+
+    double totalIntervalMs = 0.0;
+
+    for (const auto interval : tapTempoIntervals)
+        totalIntervalMs += interval;
+
+    const auto averageIntervalMs =
+        totalIntervalMs / static_cast<double> (tapTempoIntervals.size());
+
+    const auto calculatedBpm = juce::jlimit (
+        40,
+        250,
+        static_cast<int> (std::round (60000.0 / averageIntervalMs))
+    );
+
+    tempoSlider.setValue (
+        static_cast<double> (calculatedBpm),
+        juce::sendNotificationSync
+    );
+
+    effectsStatusText =
+        "Tap Tempo: " + juce::String (calculatedBpm) + " BPM";
+
+    repaint();
 }
 
 void AudioPluginAudioProcessorEditor::syncPresetNameEditorFromCurrentPreset ()

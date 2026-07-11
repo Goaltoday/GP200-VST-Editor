@@ -5,6 +5,7 @@
 #include "../libgp200/MidiConnection.h"
 
 #include <array>
+#include <deque>
 #include <memory>
 #include <vector>
 
@@ -34,6 +35,7 @@ class AudioPluginAudioProcessorEditor final : public juce::AudioProcessorEditor,
     void sendPatchVolumeFromSlider ();
     void sendPatchPanFromSlider ();
     void sendPatchTempoFromSlider ();
+	void handleTapTempo ();
 
     void syncPresetNameEditorFromCurrentPreset ();
 
@@ -140,9 +142,13 @@ class AudioPluginAudioProcessorEditor final : public juce::AudioProcessorEditor,
     juce::Slider patchVolumeSlider;
     juce::Slider panSlider;
     juce::Slider tempoSlider;
+	juce::TextButton tapTempoButton{"TAP"};
     juce::TextEditor presetNameEditor;
     juce::TextButton tunerButton{"Tuner OFF"};
     bool tunerIsOn{false};
+	
+	double lastTapTimeMs{0.0};
+std::deque<double> tapTempoIntervals;
 
     BlockEnabledStates savedBlockEnabledStates{};
     bool hasSavedBlockEnabledStates{false};
