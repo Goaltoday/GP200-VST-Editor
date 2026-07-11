@@ -116,11 +116,11 @@ class AudioPluginAudioProcessorEditor final : public juce::AudioProcessorEditor,
     juce::String presetRestoreName;
 
     juce::TextButton previousPresetButton{"<"};
-    juce::TextButton nextPresetButton{">"};
-    juce::TextButton savePresetButton{"Save Preset"};
-    juce::TextButton recallPresetButton{"Recall Preset"};
-    juce::TextButton storePresetButton{"Store preset"};
-    juce::TextButton allBlocksOffButton{"FX OFF"};
+	juce::TextButton nextPresetButton{">"};
+	juce::TextButton savePresetButton{"Save to DAW"};
+	juce::TextButton recallPresetButton{"Recall from DAW"};
+	juce::TextButton storePresetButton{"Store to GP-200"};
+	juce::TextButton allBlocksOffButton{"FX OFF"};
 
     class DropIndicatorComponent final : public juce::Component
     {

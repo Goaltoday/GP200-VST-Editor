@@ -58,11 +58,32 @@ AudioPluginAudioProcessorEditor::AudioPluginAudioProcessorEditor (AudioPluginAud
     setupButton (previousPresetButton);
     setupButton (nextPresetButton);
 
-    setupButton (savePresetButton);
-    setupButton (recallPresetButton);
-    setupButton (storePresetButton);
-    setupButton (tunerButton);
-    setupButton (allBlocksOffButton);
+   setupButton (savePresetButton);
+setupButton (recallPresetButton);
+setupButton (storePresetButton);
+setupButton (tunerButton);
+setupButton (allBlocksOffButton);
+
+// Store to GP-200 is the main hardware action.
+storePresetButton.setColour (
+    juce::TextButton::buttonColourId,
+    panelOutlineColour.withAlpha (0.12f)
+);
+
+storePresetButton.setColour (
+    juce::TextButton::buttonOnColourId,
+    panelOutlineColour.withAlpha (0.22f)
+);
+
+storePresetButton.setColour (
+    juce::TextButton::textColourOffId,
+    panelOutlineColour
+);
+
+storePresetButton.setColour (
+    juce::TextButton::textColourOnId,
+    panelOutlineColour.brighter (0.15f)
+);
     updateTunerButtonText ();
     updateAllBlocksOffButtonText ();
 
@@ -129,11 +150,14 @@ AudioPluginAudioProcessorEditor::AudioPluginAudioProcessorEditor (AudioPluginAud
     presetNameEditor.setReturnKeyStartsNewLine (false);
     presetNameEditor.setInputRestrictions (gp200::presetNameMaxLength);
     presetNameEditor.setSelectAllWhenFocused (true);
-    presetNameEditor.setFont (juce::Font (18.0f));
+    presetNameEditor.setFont (juce::Font (17.0f));
     presetNameEditor.setJustification (juce::Justification::centredLeft);
     presetNameEditor.setTextToShowWhenEmpty ("Preset name", mutedTextColour);
 
-    presetNameEditor.setColour (juce::TextEditor::backgroundColourId, panelColour);
+    presetNameEditor.setColour (
+    juce::TextEditor::backgroundColourId,
+    juce::Colours::transparentBlack
+);
     presetNameEditor.setColour (juce::TextEditor::textColourId, textColour);
     presetNameEditor.setColour (juce::TextEditor::highlightColourId, panelOutlineColour.withAlpha (0.35f));
     presetNameEditor.setColour (juce::TextEditor::highlightedTextColourId, textColour);
@@ -180,137 +204,313 @@ void AudioPluginAudioProcessorEditor::paint (juce::Graphics& g)
 {
     g.fillAll (backgroundColour);
 
-    // Title
-    g.setFont (24.0f);
+    // ============================================================
+    // Plugin title
+    // ============================================================
+
+    g.setFont (juce::Font (24.0f, juce::Font::bold));
     g.setColour (textColour);
-    g.drawText ("GP200", 20, 8, 92, 30, juce::Justification::left);
+    g.drawText ("GP200",
+                20, 8, 92, 30,
+                juce::Justification::centredLeft);
 
+    g.setFont (juce::Font (21.0f));
+    g.setColour (mutedTextColour);
+    g.drawText ("Studio",
+                112, 9, 74, 29,
+                juce::Justification::centredLeft);
+
+    g.setFont (juce::Font (14.0f, juce::Font::bold));
     g.setColour (panelOutlineColour);
-    g.drawText ("Studio 0.1", 110, 8, 120, 30, juce::Justification::left); //Cambiar nombre
+    g.drawText ("0.1",
+                184, 11, 42, 26,
+                juce::Justification::centredLeft);
 
+    // ============================================================
     // Main top container
-    const juce::Rectangle<int> topPanel{12, 42, getWidth () - 24, 194};
+    // ============================================================
+
+    const juce::Rectangle<int> topPanel
+    {
+        8,
+        42,
+        getWidth() - 16,
+        194
+    };
 
     g.setColour (juce::Colour (0xff303030));
-    g.fillRoundedRectangle (topPanel.toFloat (), 8.0f);
+    g.fillRoundedRectangle (topPanel.toFloat(), 8.0f);
 
-    g.setColour (juce::Colour (0xff222222));
-    g.drawRoundedRectangle (topPanel.toFloat ().reduced (0.5f), 8.0f, 1.0f);
+    g.setColour (juce::Colour (0xff1d1d1d));
+    g.drawRoundedRectangle (
+        topPanel.toFloat().reduced (0.5f),
+        8.0f,
+        1.0f
+    );
 
+    // ============================================================
     // Current preset card
-    const juce::Rectangle<int> currentPresetBox{20, 52, 370, 82};
+    // ============================================================
 
-    g.setColour (panelColour);
-    g.fillRoundedRectangle (currentPresetBox.toFloat (), 7.0f);
+    const juce::Rectangle<int> currentPresetBox
+    {
+        18,
+        52,
+        372,
+        124
+    };
 
-    g.setColour (panelOutlineColour);
-    g.drawRoundedRectangle (currentPresetBox.toFloat ().reduced (0.5f), 7.0f, 1.3f);
-
-    g.setFont (11.5f);
-    g.setColour (panelOutlineColour);
-    g.drawText ("CURRENT PRESET",
-                currentPresetBox.withTrimmedLeft (16).withHeight (24),
-                juce::Justification::centredLeft);
-
-    const auto currentSlot = midiConnection.getCurrentSlot ();
-    const auto slotText = currentSlot >= 0 ? formatSlotCompact (currentSlot) : "--";
-
-    g.setFont (18.0f);
-    g.setColour (textColour);
-    g.drawText (slotText,
-                juce::Rectangle<int>{currentPresetBox.getX () + 52, 80, 58, 34},
-                juce::Justification::centredLeft);
-
-    // Saved preset card
-    const juce::Rectangle<int> savedPresetBox{20, 144, 230, 42};
-
-    g.setColour (panelColour.darker (0.08f));
-    g.fillRoundedRectangle (savedPresetBox.toFloat (), 7.0f);
+    g.setColour (juce::Colour (0xff202528));
+    g.fillRoundedRectangle (currentPresetBox.toFloat(), 7.0f);
 
     g.setColour (panelOutlineColour);
-    g.drawRoundedRectangle (savedPresetBox.toFloat ().reduced (0.5f), 7.0f, 1.1f);
+    g.drawRoundedRectangle (
+        currentPresetBox.toFloat().reduced (0.5f),
+        7.0f,
+        1.25f
+    );
 
-    g.setFont (11.5f);
+    g.setFont (juce::Font (12.0f, juce::Font::bold));
     g.setColour (panelOutlineColour);
-    g.drawText ("SAVED PRESET",
-                savedPresetBox.withTrimmedLeft (16).withHeight (19),
-                juce::Justification::centredLeft);
 
-    g.setFont (14.5f);
-    g.setColour (textColour);
-    g.drawText (getSavedPresetCompactText (),
-                juce::Rectangle<int>{savedPresetBox.getX () + 16, savedPresetBox.getY () + 18, 200, 22},
-                juce::Justification::centredLeft);
-
-    // Tuner card
-    const juce::Rectangle<int> tunerBox{260, 144, 130, 42};
-
-    g.setColour (panelColour.darker (0.08f));
-    g.fillRoundedRectangle (tunerBox.toFloat (), 7.0f);
-
-    g.setColour (panelOutlineColour);
-    g.drawRoundedRectangle (tunerBox.toFloat ().reduced (0.5f), 7.0f, 1.1f);
-
-    // Action area background
-    const juce::Rectangle<int> actionArea{420, 52, 270, 134};
-
-    g.setColour (juce::Colour (0xff252b2e));
-    g.fillRoundedRectangle (actionArea.toFloat (), 7.0f);
-
-    g.setColour (panelOutlineColour);
-    g.drawRoundedRectangle (actionArea.toFloat ().reduced (0.5f), 7.0f, 1.1f);
-
-    // Patch settings
-    const juce::Rectangle<int> patchPanel{720, 52, 200, 142};
-
-    g.setColour (panelColour);
-    g.fillRoundedRectangle (patchPanel.toFloat (), 7.0f);
-
-    g.setColour (panelOutlineColour);
-    g.drawRoundedRectangle (patchPanel.toFloat ().reduced (0.5f), 7.0f, 1.2f);
-
-    g.setFont (12.0f);
-    g.setColour (panelOutlineColour);
     g.drawText (
-        "PATCH SETTINGS", patchPanel.withTrimmedLeft (12).withHeight (26), juce::Justification::centredLeft);
+        "CURRENT PRESET",
+        currentPresetBox.getX() + 16,
+        currentPresetBox.getY() + 8,
+        currentPresetBox.getWidth() - 32,
+        22,
+        juce::Justification::centredLeft
+    );
 
-    g.setFont (10.5f);
+    const auto currentSlot = midiConnection.getCurrentSlot();
+
+    const auto slotText =
+        currentSlot >= 0
+            ? formatSlotCompact (currentSlot)
+            : "--";
+
+    g.setFont (juce::Font (18.0f));
     g.setColour (textColour);
 
-    g.drawText ("VOL", juce::Rectangle<int>{732, 84, 34, 16}, juce::Justification::centredLeft);
+    g.drawText (
+        slotText,
+        currentPresetBox.getX() + 54,
+        currentPresetBox.getY() + 40,
+        66,
+        34,
+        juce::Justification::centredLeft
+    );
 
-    g.drawText ("PAN", juce::Rectangle<int>{732, 124, 34, 16}, juce::Justification::centredLeft);
+    // Divider between current and saved preset information.
+    g.setColour (juce::Colour (0xff4b4f51));
 
-    g.drawText ("BPM", juce::Rectangle<int>{732, 164, 34, 16}, juce::Justification::centredLeft);
+    g.drawHorizontalLine (
+        currentPresetBox.getY() + 84,
+        static_cast<float> (currentPresetBox.getX() + 16),
+        static_cast<float> (currentPresetBox.getRight() - 16)
+    );
+
+    g.setFont (juce::Font (13.5f));
+    g.setColour (mutedTextColour.withAlpha (0.72f));
+
+    g.drawText (
+        "Saved in DAW:",
+        currentPresetBox.getX() + 16,
+        currentPresetBox.getY() + 92,
+        100,
+        22,
+        juce::Justification::centredLeft
+    );
+
+    g.setFont (juce::Font (13.5f, juce::Font::bold));
+    g.setColour (textColour);
+
+    auto savedPresetText = getSavedPresetCompactText();
+
+    if (savedPresetText.isEmpty())
+        savedPresetText = "unknown";
+
+    g.drawText (
+        savedPresetText,
+        currentPresetBox.getX() + 112,
+        currentPresetBox.getY() + 92,
+        currentPresetBox.getWidth() - 128,
+        22,
+        juce::Justification::centredLeft
+    );
+
+    // ============================================================
+    // Action area
+    // ============================================================
+
+    const juce::Rectangle<int> actionArea
+    {
+        408,
+        52,
+        278,
+        124
+    };
+
+    g.setColour (juce::Colour (0xff22272a));
+    g.fillRoundedRectangle (actionArea.toFloat(), 7.0f);
+
+    g.setColour (juce::Colour (0xff4b4f51));
+    g.drawRoundedRectangle (
+        actionArea.toFloat().reduced (0.5f),
+        7.0f,
+        1.0f
+    );
+
+    // Extra outline around the main Store action.
+    const juce::Rectangle<int> storeOutline
+    {
+        actionArea.getX() + 10,
+        actionArea.getY() + 72,
+        actionArea.getWidth() - 20,
+        42
+    };
+
+    g.setColour (panelOutlineColour.withAlpha (0.85f));
+    g.drawRoundedRectangle (
+        storeOutline.toFloat().reduced (0.5f),
+        5.0f,
+        1.2f
+    );
+
+    // ============================================================
+    // Patch settings
+    // ============================================================
+
+    const juce::Rectangle<int> patchPanel
+    {
+        704,
+        52,
+        238,
+        124
+    };
+
+    g.setColour (juce::Colour (0xff202528));
+    g.fillRoundedRectangle (patchPanel.toFloat(), 7.0f);
+
+    g.setColour (juce::Colour (0xff56595b));
+    g.drawRoundedRectangle (
+        patchPanel.toFloat().reduced (0.5f),
+        7.0f,
+        1.0f
+    );
+
+    g.setFont (juce::Font (12.0f, juce::Font::bold));
+    g.setColour (panelOutlineColour);
+
+    g.drawText (
+        "PATCH SETTINGS",
+        patchPanel.getX() + 14,
+        patchPanel.getY() + 6,
+        patchPanel.getWidth() - 28,
+        22,
+        juce::Justification::centredLeft
+    );
+
+    g.setFont (juce::Font (11.0f, juce::Font::bold));
+    g.setColour (textColour);
+
+    g.drawText (
+        "VOL",
+        patchPanel.getX() + 14,
+        patchPanel.getY() + 34,
+        38,
+        18,
+        juce::Justification::centredLeft
+    );
+
+    g.drawText (
+        "PAN",
+        patchPanel.getX() + 14,
+        patchPanel.getY() + 68,
+        38,
+        18,
+        juce::Justification::centredLeft
+    );
+
+    g.drawText (
+        "BPM",
+        patchPanel.getX() + 14,
+        patchPanel.getY() + 102,
+        38,
+        18,
+        juce::Justification::centredLeft
+    );
+
+    // ============================================================
+    // Utility bar
+    // ============================================================
+
+    const juce::Rectangle<int> utilityBar
+    {
+        18,
+        184,
+        getWidth() - 36,
+        42
+    };
+
+    g.setColour (juce::Colour (0xff252a2d));
+    g.fillRoundedRectangle (utilityBar.toFloat(), 6.0f);
+
+    g.setColour (juce::Colour (0xff44484a));
+    g.drawRoundedRectangle (
+        utilityBar.toFloat().reduced (0.5f),
+        6.0f,
+        1.0f
+    );
 }
 
 void AudioPluginAudioProcessorEditor::resized ()
 {
-    // Current preset card
-    previousPresetButton.setBounds (32, 84, 36, 32);
-    nextPresetButton.setBounds (346, 84, 36, 32);
+    // ============================================================
+    // Current preset
+    // ============================================================
 
-    presetNameEditor.setBounds (122, 80, 214, 34);
+    previousPresetButton.setBounds (30, 92, 36, 36);
+    nextPresetButton.setBounds (342, 92, 36, 36);
 
-    // Action buttons
-    savePresetButton.setBounds (438, 66, 112, 48);
-    recallPresetButton.setBounds (562, 66, 112, 48);
+    presetNameEditor.setBounds (138, 93, 194, 34);
 
-    storePresetButton.setBounds (438, 126, 236, 44);
+    // ============================================================
+    // DAW / GP-200 actions
+    // ============================================================
 
+    savePresetButton.setBounds (418, 62, 126, 46);
+    recallPresetButton.setBounds (550, 62, 126, 46);
+
+    storePresetButton.setBounds (418, 124, 258, 42);
+
+    // ============================================================
     // Patch settings
-    patchVolumeSlider.setBounds (766, 82, 142, 20);
-    panSlider.setBounds (766, 122, 142, 20);
-    tempoSlider.setBounds (766, 162, 142, 20);
+    // ============================================================
 
-    tunerButton.setBounds (270, 151, 110, 28);
+    patchVolumeSlider.setBounds (758, 84, 170, 20);
+    panSlider.setBounds (758, 118, 170, 20);
+    tempoSlider.setBounds (758, 152, 170, 20);
 
+    // ============================================================
+    // Utility bar
+    // ============================================================
+
+    tunerButton.setBounds (30, 191, 130, 28);
+    allBlocksOffButton.setBounds (170, 191, 120, 28);
+
+    // ============================================================
     // Effects list
-    allBlocksOffButton.setBounds (20, 242, 120, 28);
+    // ============================================================
 
-    effectsViewport.setBounds (20, 278, getWidth () - 40, getHeight () - 298);
+    effectsViewport.setBounds (
+        20,
+        246,
+        getWidth() - 40,
+        getHeight() - 266
+    );
 
-    layoutEffectBlocks ();
+    layoutEffectBlocks();
 }
 
 //==============================================================================
