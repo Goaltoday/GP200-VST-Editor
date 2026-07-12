@@ -39,6 +39,10 @@ target_sources(GP200Plugin
         source/GP200Plugin/PluginEditor.h
         source/GP200Plugin/EffectBlockComponent.cpp
         source/GP200Plugin/EffectBlockComponent.h
+        source/GP200Plugin/TunerDisplayComponent.cpp
+        source/GP200Plugin/TunerDisplayComponent.h
+	source/GP200Plugin/TunerEngine.cpp
+	source/GP200Plugin/TunerEngine.h
 
         source/libgp200/GP200Constants.h
         source/libgp200/MidiDeviceScanner.cpp
@@ -73,6 +77,7 @@ target_link_libraries(GP200Plugin
         juce::juce_audio_processors
         juce::juce_audio_utils
         juce::juce_gui_extra
+  	juce::juce_dsp
 
     PUBLIC
         juce::juce_recommended_config_flags
@@ -99,6 +104,10 @@ source_group(
         source/GP200Plugin/PluginEditor.h
         source/GP200Plugin/EffectBlockComponent.cpp
         source/GP200Plugin/EffectBlockComponent.h
+        source/GP200Plugin/TunerDisplayComponent.cpp
+        source/GP200Plugin/TunerDisplayComponent.h
+	source/GP200Plugin/TunerEngine.cpp
+	source/GP200Plugin/TunerEngine.h
 
         source/libgp200/GP200Constants.h
         source/libgp200/MidiDeviceScanner.cpp

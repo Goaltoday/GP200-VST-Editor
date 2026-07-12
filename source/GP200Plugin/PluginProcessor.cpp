@@ -82,12 +82,31 @@ void AudioPluginAudioProcessor::changeProgramName (int index, const juce::String
 }
 
 //==============================================================================
-void AudioPluginAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
+void AudioPluginAudioProcessor::prepareToPlay (double sampleRate,
+                                               int samplesPerBlock)
 {
-    juce::ignoreUnused (sampleRate, samplesPerBlock);
+    juce::ignoreUnused (samplesPerBlock);
+
+    tunerEngine.prepare (sampleRate);
 }
 
 void AudioPluginAudioProcessor::releaseResources () {}
+
+void AudioPluginAudioProcessor::setTunerEnabled (
+    bool shouldBeEnabled) noexcept
+{
+    tunerEngine.setEnabled (shouldBeEnabled);
+}
+
+bool AudioPluginAudioProcessor::isTunerEnabled () const noexcept
+{
+    return tunerEngine.isEnabled ();
+}
+
+TunerResult AudioPluginAudioProcessor::getTunerResult () const noexcept
+{
+    return tunerEngine.getResult ();
+}
 
 bool AudioPluginAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
 {
@@ -114,6 +133,8 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     juce::ignoreUnused (midiMessages);
 
     juce::ScopedNoDenormals noDenormals;
+
+    tunerEngine.process (buffer);
 
     const auto totalNumInputChannels = getTotalNumInputChannels ();
     const auto totalNumOutputChannels = getTotalNumOutputChannels ();
@@ -301,6 +322,7 @@ juce::MemoryBlock AudioPluginAudioProcessor::getSavedGP200PresetDataCopy (
     return savedGP200PresetSnapshots[
         static_cast<std::size_t> (snapshotIndex)].data;
 }
+
 
 juce::String AudioPluginAudioProcessor::getSavedGP200PresetDataStatusText (
     int snapshotIndex) const

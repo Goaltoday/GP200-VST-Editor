@@ -3,6 +3,7 @@
 #include "EffectBlockComponent.h"
 #include "PluginProcessor.h"
 #include "../libgp200/MidiConnection.h"
+#include "TunerDisplayComponent.h"
 
 #include <array>
 #include <deque>
@@ -88,6 +89,7 @@ juce::String getSelectedCompareSnapshotLabel () const;
     static juce::String formatSlotCompact (int slot);
     static juce::String formatPresetCompact (int slot, const juce::String& presetName);
     static bool isUsefulPresetName (const juce::String& presetName);
+	static juce::String midiNoteToName (int midiNote);
 
     enum class PresetRestoreStepType
     {
@@ -162,6 +164,7 @@ CompareSnapshot selectedCompareSnapshot{
 	juce::TextButton tapTempoButton{"TAP"};
     juce::TextEditor presetNameEditor;
     juce::TextButton tunerButton{"Tuner OFF"};
+	TunerDisplayComponent tunerDisplay;
     bool tunerIsOn{false};
 	
 	double lastTapTimeMs{0.0};

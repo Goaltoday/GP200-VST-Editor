@@ -6,6 +6,8 @@
 
 #include <cstdint>
 
+#include "TunerEngine.h"
+
 class AudioPluginAudioProcessor final : public juce::AudioProcessor
 {
   public:
@@ -39,6 +41,11 @@ class AudioPluginAudioProcessor final : public juce::AudioProcessor
 
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
+	
+	void setTunerEnabled(bool shouldBeEnabled) noexcept;
+bool isTunerEnabled() const noexcept;
+
+TunerResult getTunerResult() const noexcept;
 
     void setGP200SessionState (int slot, const juce::String& presetName);
     void setGP200SessionState (int slot, const juce::String& presetName, const juce::MemoryBlock& presetData);
@@ -67,6 +74,8 @@ std::uint64_t getSavedPresetRevision (int snapshotIndex) const;
 
   private:
     static bool isUsefulPresetName (const juce::String& presetName);
+	
+	TunerEngine tunerEngine;
 	
 	    struct GP200PresetSnapshot
     {

@@ -39,6 +39,9 @@ addAndMakeVisible (storePresetButton);
     addAndMakeVisible (presetNameEditor);
     addAndMakeVisible (tunerButton);
     addAndMakeVisible (allBlocksOffButton);
+	
+	addChildComponent(tunerDisplay);
+tunerDisplay.setVisible(false);
 
     addAndMakeVisible (effectsViewport);
 
@@ -536,6 +539,13 @@ tapTempoButton.setBounds (882, 150, 46, 24);
 
     tunerButton.setBounds (30, 191, 130, 28);
     allBlocksOffButton.setBounds (170, 191, 120, 28);
+	
+	tunerDisplay.setBounds(
+    304,
+    189,
+    getWidth() - 334,
+    32
+);
 
     // ============================================================
     // Effects list
@@ -591,6 +601,24 @@ void AudioPluginAudioProcessorEditor::timerCallback ()
     syncPresetNameEditorFromCurrentPreset ();
 
     updateEffectBlocksUI ();
+	
+	if (tunerIsOn)
+{
+    const auto result = processorRef.getTunerResult ();
+
+    if (result.valid)
+    {
+        tunerDisplay.setTunerReading (
+            midiNoteToName (result.midiNote),
+            result.frequencyHz,
+            result.cents,
+            true);
+    }
+    else
+    {
+        tunerDisplay.clearReading ();
+    }
+}
 
     repaint ();
 }
@@ -1220,24 +1248,37 @@ void AudioPluginAudioProcessorEditor::syncPresetNameEditorFromCurrentPreset ()
                               juce::dontSendNotification);
 }
 
-void AudioPluginAudioProcessorEditor::toggleTuner ()
+void AudioPluginAudioProcessorEditor::toggleTuner()
 {
-    const auto newState = !tunerIsOn;
+    const bool newState = !tunerIsOn;
 
-    if (!midiConnection.sendTunerOnOff (newState))
-    {
-        effectsStatusText = "Tuner failed: MIDI output not open";
-        repaint ();
-        return;
-    }
+    const bool hardwareTunerSent =
+        midiConnection.sendTunerOnOff(newState);
 
     tunerIsOn = newState;
 
-    updateTunerButtonText ();
+    processorRef.setTunerEnabled(tunerIsOn);
 
-    effectsStatusText = tunerIsOn ? "Tuner ON" : "Tuner OFF";
+    tunerDisplay.setVisible(tunerIsOn);
+    tunerDisplay.clearReading();
 
-    repaint ();
+    if (hardwareTunerSent)
+    {
+        effectsStatusText =
+            tunerIsOn
+                ? "Plugin tuner ON | GP-200 tuner ON"
+                : "Plugin tuner OFF | GP-200 tuner OFF";
+    }
+    else
+    {
+        effectsStatusText =
+            tunerIsOn
+                ? "Plugin tuner ON | GP-200 tuner unavailable"
+                : "Plugin tuner OFF | GP-200 tuner unavailable";
+    }
+
+    updateTunerButtonText();
+    repaint();
 }
 
 void AudioPluginAudioProcessorEditor::updateTunerButtonText ()
@@ -1959,6 +2000,35 @@ juce::String AudioPluginAudioProcessorEditor::formatSlotCompact (int slot)
     const juce::String slotLetter = juce::String ("ABCD").substring (slotInBank, slotInBank + 1);
 
     return juce::String (bank).paddedLeft ('0', 2) + "-" + slotLetter;
+}
+
+juce::String AudioPluginAudioProcessorEditor::midiNoteToName (
+    int midiNote)
+{
+    if (midiNote < 0)
+        return "--";
+
+    static constexpr const char* noteNames[]
+    {
+        "C",
+        "C#",
+        "D",
+        "D#",
+        "E",
+        "F",
+        "F#",
+        "G",
+        "G#",
+        "A",
+        "A#",
+        "B"
+    };
+
+    const int noteIndex = midiNote % 12;
+    const int octave = midiNote / 12 - 1;
+
+    return juce::String (noteNames[noteIndex]) +
+           juce::String (octave);
 }
 
 juce::String AudioPluginAudioProcessorEditor::formatPresetCompact (int slot, const juce::String& presetName)
