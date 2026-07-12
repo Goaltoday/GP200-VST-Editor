@@ -7,6 +7,7 @@
 #include <atomic>
 #include <complex>
 #include <vector>
+#include <array>
 
 struct TunerResult
 {
@@ -48,6 +49,14 @@ private:
                        float confidence,
                        float levelDb,
                        int midiNote) noexcept;
+					   
+					    static constexpr int smoothingWindowSize = 5;
+					   
+	void resetSmoothing() noexcept;
+
+static float calculateMedian(
+    const std::array<float, smoothingWindowSize>& values,
+    int valueCount);
 
     static constexpr int analysisSize = 8192;
 
@@ -85,6 +94,15 @@ private:
 
     std::atomic<bool> enabled{false};
     std::atomic<bool> resetRequested{false};
+	
+	
+
+std::array<float, smoothingWindowSize> frequencyHistory{};
+std::array<float, smoothingWindowSize> centsHistory{};
+
+int smoothingWritePosition{0};
+int smoothingSampleCount{0};
+int smoothingMidiNote{-1};
 
     std::atomic<float> resultFrequencyHz{0.0f};
     std::atomic<float> resultCents{0.0f};

@@ -92,6 +92,8 @@ void TunerEngine::prepare(double newSampleRate)
 
 void TunerEngine::reset()
 {
+	
+	resetSmoothing();
     resultFrequencyHz.store(0.0f);
     resultCents.store(0.0f);
     resultConfidence.store(0.0f);
@@ -219,6 +221,8 @@ void TunerEngine::run()
             historyWritePosition = 0;
             historySampleCount = 0;
             samplesSinceLastAnalysis = 0;
+			
+			resetSmoothing();
 
             std::fill(
                 historyBuffer.begin(),
@@ -754,15 +758,110 @@ void TunerEngine::publishResult(
     float levelDb,
     int midiNote) noexcept
 {
-    // valid se publica al final para que la GUI lea
-    // primero un conjunto de valores ya actualizado.
+    if (!std::isfinite(frequencyHz) ||
+        !std::isfinite(cents) ||
+        midiNote < 0)
+    {
+        publishInvalidResult(levelDb);
+        return;
+    }
+
+    /*
+        No mezclamos muestras de notas diferentes.
+
+        Por ejemplo, al pasar de E2 a A2 comenzamos
+        una nueva ventana de suavizado.
+    */
+    if (midiNote != smoothingMidiNote)
+    {
+        resetSmoothing();
+        smoothingMidiNote = midiNote;
+    }
+
+    frequencyHistory[
+        static_cast<std::size_t>(
+            smoothingWritePosition)] = frequencyHz;
+
+    centsHistory[
+        static_cast<std::size_t>(
+            smoothingWritePosition)] = cents;
+
+    smoothingWritePosition =
+        (smoothingWritePosition + 1) %
+        smoothingWindowSize;
+
+    smoothingSampleCount =
+        juce::jmin(
+            smoothingSampleCount + 1,
+            smoothingWindowSize);
+
+    const float medianFrequency =
+        calculateMedian(
+            frequencyHistory,
+            smoothingSampleCount);
+
+    const float medianCents =
+        calculateMedian(
+            centsHistory,
+            smoothingSampleCount);
+
+    /*
+        Publicamos valid al final, después de actualizar
+        todos los valores.
+    */
     resultValid.store(false);
 
-    resultFrequencyHz.store(frequencyHz);
-    resultCents.store(cents);
+    resultFrequencyHz.store(medianFrequency);
+    resultCents.store(medianCents);
     resultConfidence.store(confidence);
     resultLevelDb.store(levelDb);
     resultMidiNote.store(midiNote);
 
     resultValid.store(true);
+}
+
+void TunerEngine::resetSmoothing() noexcept
+{
+    frequencyHistory.fill(0.0f);
+    centsHistory.fill(0.0f);
+
+    smoothingWritePosition = 0;
+    smoothingSampleCount = 0;
+    smoothingMidiNote = -1;
+}
+
+float TunerEngine::calculateMedian(
+    const std::array<float, smoothingWindowSize>& values,
+    int valueCount)
+{
+    const int safeCount =
+        juce::jlimit(
+            0,
+            smoothingWindowSize,
+            valueCount);
+
+    if (safeCount <= 0)
+        return 0.0f;
+
+    auto sortedValues = values;
+
+    std::sort(
+        sortedValues.begin(),
+        sortedValues.begin() + safeCount);
+
+    if ((safeCount % 2) == 1)
+    {
+        return sortedValues[
+            static_cast<std::size_t>(safeCount / 2)];
+    }
+
+    const float lower =
+        sortedValues[
+            static_cast<std::size_t>(safeCount / 2 - 1)];
+
+    const float upper =
+        sortedValues[
+            static_cast<std::size_t>(safeCount / 2)];
+
+    return 0.5f * (lower + upper);
 }
