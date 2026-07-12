@@ -42,6 +42,7 @@ private:
     void consumeSamples(const float* samples, int numSamples);
     void copyHistoryToAnalysisBuffer();
     void analyseCurrentWindow();
+	float refinePeakLag(int selectedLag) const noexcept;
 
     void publishInvalidResult(float levelDb) noexcept;
     void publishResult(float frequencyHz,

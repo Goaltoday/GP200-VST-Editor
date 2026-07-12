@@ -408,24 +408,12 @@ void TunerEngine::analyseCurrentWindow()
 
     for (int index = 0; index < analysisSize; ++index)
     {
-        const float normalizedPosition =
-            static_cast<float>(index) /
-            static_cast<float>(analysisSize - 1);
-
-        const float hann =
-            0.5f -
-            0.5f *
-                std::cos(
-                    juce::MathConstants<float>::twoPi *
-                    normalizedPosition);
-
         const float sample =
-            static_cast<float>(
-                static_cast<double>(
-                    analysisBuffer[
-                        static_cast<std::size_t>(index)]) -
-                mean) *
-            hann;
+    static_cast<float>(
+        static_cast<double>(
+            analysisBuffer[
+                static_cast<std::size_t>(index)]) -
+        mean);;
 
         windowBuffer[
             static_cast<std::size_t>(index)] =
