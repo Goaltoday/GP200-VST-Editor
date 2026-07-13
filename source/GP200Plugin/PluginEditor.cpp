@@ -383,42 +383,10 @@ void AudioPluginAudioProcessorEditor::paint (juce::Graphics& g)
 );
 
     // ============================================================
-    // Action area
+    // DAW / GP-200 action buttons
     // ============================================================
-
-    const juce::Rectangle<int> actionArea
-    {
-        408,
-        52,
-        278,
-        124
-    };
-
-    g.setColour (juce::Colour (0xff22272a));
-    g.fillRoundedRectangle (actionArea.toFloat(), 7.0f);
-
-    g.setColour (juce::Colour (0xff4b4f51));
-    g.drawRoundedRectangle (
-        actionArea.toFloat().reduced (0.5f),
-        7.0f,
-        1.0f
-    );
-
-    // Extra outline around the main Store action.
-    const juce::Rectangle<int> storeOutline
-    {
-        actionArea.getX() + 10,
-        actionArea.getY() + 72,
-        actionArea.getWidth() - 20,
-        42
-    };
-
-    g.setColour (panelOutlineColour.withAlpha (0.85f));
-    g.drawRoundedRectangle (
-        storeOutline.toFloat().reduced (0.5f),
-        5.0f,
-        1.2f
-    );
+    // The four buttons draw their own backgrounds and borders.
+    // No additional panel or Store outline is painted here.
 
     // ============================================================
     // Patch settings
@@ -525,11 +493,42 @@ compareBButton.setBounds (132, 146, 30, 22);
     // DAW / GP-200 actions
     // ============================================================
 
-    savePresetButton.setBounds (418, 62, 126, 46);
-    recallPresetButton.setBounds (550, 62, 126, 46);
+const juce::Rectangle<int> actionsArea {
+    418, 54, 280, 114
+};
 
-    storePresetButton.setBounds (418, 124, 156, 42);
-importPrstButton.setBounds (580, 124, 96, 42);
+constexpr int horizontalGap = 10;
+constexpr int verticalGap = 10;
+
+const int buttonWidth =
+    (actionsArea.getWidth () - horizontalGap) / 2;
+
+const int buttonHeight =
+    (actionsArea.getHeight () - verticalGap) / 2;
+
+savePresetButton.setBounds (
+    actionsArea.getX (),
+    actionsArea.getY (),
+    buttonWidth,
+    buttonHeight);
+
+recallPresetButton.setBounds (
+    actionsArea.getX () + buttonWidth + horizontalGap,
+    actionsArea.getY (),
+    buttonWidth,
+    buttonHeight);
+
+storePresetButton.setBounds (
+    actionsArea.getX (),
+    actionsArea.getY () + buttonHeight + verticalGap,
+    buttonWidth,
+    buttonHeight);
+
+importPrstButton.setBounds (
+    actionsArea.getX () + buttonWidth + horizontalGap,
+    actionsArea.getY () + buttonHeight + verticalGap,
+    buttonWidth,
+    buttonHeight);
 
     // ============================================================
     // Patch settings
