@@ -542,8 +542,8 @@ importPrstButton.setBounds (
     buttonWidth,
     buttonHeight);
 
-    userIRSlotBox.setBounds (418, 178, 130, 28);
-    importIRButton.setBounds (558, 178, 140, 28);
+    userIRSlotBox.setBounds (418, 191, 130, 28);
+    importIRButton.setBounds (558, 191, 140, 28);
 
     // ============================================================
     // Patch settings
@@ -846,6 +846,28 @@ void AudioPluginAudioProcessorEditor::importIRFile(
     repaint();
 }
 
+void AudioPluginAudioProcessorEditor::syncUserIRSlotBoxFromCabEffectId(
+    juce::uint32 effectId)
+{
+    // User IR 1-20:
+    // 0x0A100000 ... 0x0A100013
+    if ((effectId & 0xFFFFFF00u) != 0x0A100000u)
+        return;
+
+    const auto zeroBasedSlot =
+        static_cast<int>(effectId & 0xFFu);
+
+    if (!juce::isPositiveAndBelow(zeroBasedSlot, 20))
+        return;
+
+    const auto comboBoxId = zeroBasedSlot + 1;
+
+    userIRSlotBox.setSelectedId(
+        comboBoxId,
+        juce::dontSendNotification);
+}
+
+
 void AudioPluginAudioProcessorEditor::
     openPrstFileChooser ()
 {
@@ -876,6 +898,10 @@ void AudioPluginAudioProcessorEditor::
                 importPrstFile (file);
         });
 }
+
+
+
+
 
 void AudioPluginAudioProcessorEditor::importPrstFile (
     const juce::File& file)
@@ -1887,6 +1913,13 @@ void AudioPluginAudioProcessorEditor::rebuildEffectBlocks (const gp200::GP200Pre
             continue;
 
         const auto& effect = preset.effects[static_cast<std::size_t> (effectBlockIndex)];
+		
+		if ((effect.effectId & 0xFFFFFF00u)
+    == 0x0A100000u)
+{
+    syncUserIRSlotBoxFromCabEffectId(
+        effect.effectId);
+}
 
         const auto blockIndex = effect.blockIndex;
 
@@ -1951,6 +1984,8 @@ void AudioPluginAudioProcessorEditor::rebuildEffectBlocks (const gp200::GP200Pre
                 repaint ();
                 return;
             }
+			
+			syncUserIRSlotBoxFromCabEffectId(effectId);
 
             juce::MessageManager::callAsync (
                 [this]

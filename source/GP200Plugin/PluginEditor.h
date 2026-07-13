@@ -36,6 +36,7 @@ class AudioPluginAudioProcessorEditor final : public juce::AudioProcessorEditor,
     void importPrstFile (const juce::File& file);
     void openIRFileChooser ();
     void importIRFile (const juce::File& file);
+	void syncUserIRSlotBoxFromCabEffectId(juce::uint32 effectId);
 	
 	void selectCompareSnapshot (CompareSnapshot snapshot);
 void updateCompareSnapshotButtons ();
