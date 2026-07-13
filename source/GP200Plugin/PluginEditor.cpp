@@ -236,7 +236,7 @@ compareBButton.onClick = [this]
 
     for (int i = 0; i < gp200::userIRCount; ++i)
         userIRSlotBox.addItem ("User IR " + juce::String (i + 1), i + 1);
-    userIRSlotBox.setSelectedId (2, juce::dontSendNotification);
+    userIRSlotBox.setSelectedId (1, juce::dontSendNotification);
     userIRSlotBox.setColour (juce::ComboBox::backgroundColourId, panelColour);
     userIRSlotBox.setColour (juce::ComboBox::textColourId, panelOutlineColour);
     userIRSlotBox.setColour (juce::ComboBox::outlineColourId, panelOutlineColour);
