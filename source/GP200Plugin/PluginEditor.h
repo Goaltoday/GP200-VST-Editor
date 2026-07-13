@@ -32,6 +32,9 @@ class AudioPluginAudioProcessorEditor final : public juce::AudioProcessorEditor,
     void saveCurrentPresetToProject ();
     void recallSavedPresetToGP200 ();
 	
+	void openPrstFileChooser ();
+void importPrstFile (const juce::File& file);
+	
 	void selectCompareSnapshot (CompareSnapshot snapshot);
 void updateCompareSnapshotButtons ();
 int getSelectedCompareSnapshotIndex () const;
@@ -137,7 +140,9 @@ juce::TextButton compareBButton{"B"};
 juce::TextButton savePresetButton{"Save to DAW"};
 juce::TextButton recallPresetButton{"Recall from DAW"};
 juce::TextButton storePresetButton{"Store to GP-200"};
+juce::TextButton importPrstButton{"Import PRST"};
 juce::TextButton allBlocksOffButton{"FX OFF"};
+std::unique_ptr<juce::FileChooser> prstFileChooser;
 
 CompareSnapshot selectedCompareSnapshot{
     CompareSnapshot::A
@@ -157,6 +162,7 @@ CompareSnapshot selectedCompareSnapshot{
             g.drawRoundedRectangle (line, 2.0f, 1.0f);
         }
     };
+
 
     juce::Slider patchVolumeSlider;
     juce::Slider panSlider;

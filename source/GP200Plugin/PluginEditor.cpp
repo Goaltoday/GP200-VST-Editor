@@ -32,6 +32,7 @@ addAndMakeVisible (compareBButton);
 addAndMakeVisible (savePresetButton);
 addAndMakeVisible (recallPresetButton);
 addAndMakeVisible (storePresetButton);
+addAndMakeVisible (importPrstButton);
     addAndMakeVisible (patchVolumeSlider);
     addAndMakeVisible (panSlider);
     addAndMakeVisible (tempoSlider);
@@ -70,6 +71,7 @@ setupButton (compareBButton);
    setupButton (savePresetButton);
 setupButton (recallPresetButton);
 setupButton (storePresetButton);
+setupButton (importPrstButton);
 setupButton (tunerButton);
 setupButton (tapTempoButton);
 
@@ -223,7 +225,11 @@ compareBButton.onClick = [this]
 
     recallPresetButton.onClick = [this] { recallSavedPresetToGP200 (); };
     storePresetButton.onClick = [this] { storeCurrentPresetToGP200 (); };
-	
+	importPrstButton.onClick =
+    [this]
+    {
+        openPrstFileChooser ();
+    };
 	updateCompareSnapshotButtons ();
 
     midiConnection.connectToGP200 ();
@@ -522,7 +528,8 @@ compareBButton.setBounds (132, 146, 30, 22);
     savePresetButton.setBounds (418, 62, 126, 46);
     recallPresetButton.setBounds (550, 62, 126, 46);
 
-    storePresetButton.setBounds (418, 124, 258, 42);
+    storePresetButton.setBounds (418, 124, 156, 42);
+importPrstButton.setBounds (580, 124, 96, 42);
 
     // ============================================================
     // Patch settings
@@ -732,6 +739,178 @@ processorRef.setGP200PresetSnapshotState (
 
     effectsStatusText = "Saved full preset snapshot to DAW";
 	getSelectedCompareSnapshotLabel ();
+    updateEffectBlocksUI ();
+    repaint ();
+}
+
+void AudioPluginAudioProcessorEditor::
+    openPrstFileChooser ()
+{
+    if (presetRestoreInProgress)
+    {
+        effectsStatusText =
+            "Import PRST unavailable: "
+            "preset restore already in progress";
+
+        repaint ();
+        return;
+    }
+
+    prstFileChooser =
+        std::make_unique<juce::FileChooser> (
+            "Import GP-200 preset",
+            juce::File{},
+            "*.prst");
+
+    prstFileChooser->launchAsync (
+        juce::FileBrowserComponent::openMode |
+            juce::FileBrowserComponent::canSelectFiles,
+        [this] (const juce::FileChooser& chooser)
+        {
+            const auto file = chooser.getResult ();
+
+            if (file.existsAsFile ())
+                importPrstFile (file);
+        });
+}
+
+void AudioPluginAudioProcessorEditor::importPrstFile (
+    const juce::File& file)
+{
+    if (presetRestoreInProgress)
+    {
+        effectsStatusText =
+            "Import PRST unavailable: "
+            "preset restore already in progress";
+
+        repaint ();
+        return;
+    }
+
+    juce::MemoryBlock prstData;
+
+    if (!file.loadFileAsData (prstData))
+    {
+        effectsStatusText =
+            "Import PRST failed: "
+            "could not read the selected file";
+
+        repaint ();
+        return;
+    }
+
+    const auto prstPreset =
+        gp200::GP200PresetCodec::decodePrstFile (
+            prstData);
+
+    if (!prstPreset.isValid)
+    {
+        effectsStatusText =
+            "Import PRST failed: invalid, damaged "
+            "or unsupported GP-200 preset";
+
+        repaint ();
+        return;
+    }
+
+    const auto targetSlot =
+        midiConnection.getCurrentSlot ();
+
+    if (targetSlot < 0 || targetSlot > 255)
+    {
+        effectsStatusText =
+            "Import PRST failed: "
+            "current GP-200 slot is unknown";
+
+        repaint ();
+        return;
+    }
+
+    const auto currentLivePresetData =
+        midiConnection.getCurrentPresetDumpDataCopy ();
+
+    if (currentLivePresetData.getSize () == 0)
+    {
+        effectsStatusText =
+            "Import PRST failed: current GP-200 "
+            "preset data is unavailable";
+
+        repaint ();
+        return;
+    }
+
+    const auto importSnapshotData =
+        gp200::GP200PresetCodec::
+            makeLivePresetDumpFromPrst (
+                prstPreset,
+                currentLivePresetData);
+
+    if (importSnapshotData.getSize () == 0)
+    {
+        effectsStatusText =
+            "Import PRST failed: could not build "
+            "a safe restore snapshot";
+
+        repaint ();
+        return;
+    }
+
+    // Se vuelve a decodificar con el decoder consolidado.
+    // Así el restaurador recibe exactamente su formato habitual.
+    const auto importPreset =
+        gp200::GP200PresetCodec::
+            decodeLivePresetDump (
+                importSnapshotData);
+
+    if (!importPreset.isValid)
+    {
+        effectsStatusText =
+            "Import PRST failed: generated restore "
+            "snapshot is invalid";
+
+        repaint ();
+        return;
+    }
+
+    // Mismos campos utilizados por Recall.
+    presetRestoreSnapshotData =
+        importSnapshotData;
+
+    presetRestoreSlot =
+        targetSlot;
+
+    presetRestoreName =
+        prstPreset.patchName;
+
+    // Función consolidada, sin cambios.
+    buildFullPresetRestoreSteps (
+        importPreset,
+        importSnapshotData);
+
+    if (presetRestoreSteps.empty ())
+    {
+        effectsStatusText =
+            "Import PRST failed: "
+            "no restore steps were generated";
+
+        repaint ();
+        return;
+    }
+
+    presetRestoreStepIndex = 0;
+    presetRestoreInProgress = true;
+
+    startTimerHz (restoreTimerHz);
+
+    effectBlocksSignature.clear ();
+    patchVolumeSourceSignature.clear ();
+    presetNameEditorSignature.clear ();
+
+    effectsStatusText =
+        "Import PRST: restoring \"" +
+        prstPreset.patchName +
+        "\" into the current slot";
+
     updateEffectBlocksUI ();
     repaint ();
 }

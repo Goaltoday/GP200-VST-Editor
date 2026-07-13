@@ -26,6 +26,51 @@ juce::String makeParamText (const juce::String& name, float value)
 {
     return name + "=" + formatParamValue (value);
 }
+
+constexpr std::size_t prstUserFileSize = 1224;
+constexpr std::size_t prstFactoryFileSize = 1176;
+
+constexpr std::size_t prstMagicOffset = 0x00;
+constexpr std::size_t prstDeviceIdOffset = 0x10;
+
+constexpr std::size_t prstPatchNameOffset = 0x44;
+constexpr std::size_t prstAuthorOffset = 0x54;
+constexpr std::size_t prstTextLength = 16;
+
+constexpr std::size_t prstFxLoopSendOffset = 0x92;
+constexpr std::size_t prstFxLoopReturnOffset = 0x93;
+constexpr std::size_t prstRoutingOrderOffset = 0x94;
+
+constexpr std::size_t prstEffectBlockStart = 0xA0;
+constexpr std::size_t prstEffectBlockSize = 0x48;
+
+constexpr std::size_t prstChecksumOffset = 0x4C6;
+
+bool matchesAscii (
+    const juce::uint8* data,
+    std::size_t dataSize,
+    std::size_t offset,
+    const char* expected,
+    std::size_t expectedLength)
+{
+    if (data == nullptr ||
+        expected == nullptr ||
+        offset + expectedLength > dataSize)
+    {
+        return false;
+    }
+
+    for (std::size_t i = 0; i < expectedLength; ++i)
+    {
+        if (data[offset + i] !=
+            static_cast<juce::uint8> (expected[i]))
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
 } // namespace
 
 juce::String GP200EffectSlot::getSummaryLine () const
@@ -224,6 +269,338 @@ GP200Preset GP200PresetCodec::decodeLivePresetDump (const juce::MemoryBlock& pre
     return preset;
 }
 
+GP200Preset GP200PresetCodec::decodePrstFile (
+    const juce::MemoryBlock& fileData)
+{
+    GP200Preset preset;
+
+    const auto dataSize = fileData.getSize ();
+
+    if (dataSize != prstUserFileSize &&
+        dataSize != prstFactoryFileSize)
+    {
+        return preset;
+    }
+
+    const auto* data =
+        static_cast<const juce::uint8*> (
+            fileData.getData ());
+
+    if (data == nullptr)
+        return preset;
+
+    if (!matchesAscii (
+            data,
+            dataSize,
+            prstMagicOffset,
+            "TSRP",
+            4))
+    {
+        return preset;
+    }
+
+    if (!matchesAscii (
+            data,
+            dataSize,
+            prstDeviceIdOffset,
+            "2-PG",
+            4))
+    {
+        return preset;
+    }
+
+    const auto requiredSize =
+        prstEffectBlockStart +
+        prstEffectBlockSize * effectBlockCount;
+
+    if (dataSize < requiredSize)
+        return preset;
+
+    // Los archivos de usuario de 1224 bytes tienen checksum.
+    if (dataSize == prstUserFileSize)
+    {
+        juce::uint32 calculatedChecksum = 0;
+
+        for (std::size_t i = 0;
+             i < prstChecksumOffset;
+             ++i)
+        {
+            calculatedChecksum += data[i];
+        }
+
+        calculatedChecksum &= 0xFFFFu;
+
+        const auto storedChecksum =
+            (static_cast<juce::uint32> (
+                 data[prstChecksumOffset]) << 8) |
+            static_cast<juce::uint32> (
+                data[prstChecksumOffset + 1]);
+
+        if (calculatedChecksum != storedChecksum)
+            return preset;
+    }
+
+    preset.patchName =
+        readAsciiString (
+            data,
+            dataSize,
+            prstPatchNameOffset,
+            prstTextLength);
+
+    if (preset.patchName.isEmpty ())
+        preset.patchName = "unknown";
+
+    preset.author =
+        readAsciiString (
+            data,
+            dataSize,
+            prstAuthorOffset,
+            prstTextLength);
+
+    const auto rawFxSend =
+        static_cast<int> (
+            data[prstFxLoopSendOffset]);
+
+    const auto rawFxReturn =
+        static_cast<int> (
+            data[prstFxLoopReturnOffset]);
+
+    preset.fxLoopSend =
+        rawFxSend >= 1 && rawFxSend <= 10
+            ? rawFxSend
+            : 4;
+
+    preset.fxLoopReturn =
+        rawFxReturn >= 1 && rawFxReturn <= 10
+            ? rawFxReturn
+            : 4;
+
+    // Validación estricta del routing.
+    std::array<bool, effectBlockCount> routingSeen{};
+
+    for (std::size_t i = 0;
+         i < effectBlockCount;
+         ++i)
+    {
+        const auto blockIndex =
+            static_cast<int> (
+                data[prstRoutingOrderOffset + i]);
+
+        if (blockIndex < 0 ||
+            blockIndex >=
+                static_cast<int> (effectBlockCount))
+        {
+            return GP200Preset{};
+        }
+
+        if (routingSeen[
+                static_cast<std::size_t> (blockIndex)])
+        {
+            return GP200Preset{};
+        }
+
+        routingSeen[
+            static_cast<std::size_t> (blockIndex)] = true;
+
+        preset.routingOrder[i] = blockIndex;
+    }
+
+    // Los bloques se conservan en orden físico/protocolo.
+    for (std::size_t block = 0;
+         block < effectBlockCount;
+         ++block)
+    {
+        const auto base =
+            prstEffectBlockStart +
+            block * prstEffectBlockSize;
+
+        const auto slotIndex =
+            static_cast<int> (
+                data[base + slotIndexOffset]);
+
+        // Evita importar un archivo corrupto en un bloque incorrecto.
+        if (slotIndex != static_cast<int> (block))
+            return GP200Preset{};
+
+        const auto enabledByte =
+            data[base + enabledOffset];
+
+        if (enabledByte > 1)
+            return GP200Preset{};
+
+        auto& effect = preset.effects[block];
+
+        effect.blockIndex =
+            static_cast<int> (block);
+
+        effect.slotIndex = slotIndex;
+        effect.enabled = enabledByte == 1;
+
+        effect.effectId =
+            readUInt32LE (
+                data,
+                dataSize,
+                base + effectIdOffset);
+
+        for (std::size_t param = 0;
+             param < effectParamCount;
+             ++param)
+        {
+            effect.params[param] =
+                readFloat32LE (
+                    data,
+                    dataSize,
+                    base +
+                        paramsOffset +
+                        param * sizeof (float));
+        }
+    }
+
+    preset.isValid = true;
+    return preset;
+}
+
+juce::MemoryBlock
+GP200PresetCodec::makeLivePresetDumpFromPrst (
+    const GP200Preset& preset,
+    const juce::MemoryBlock& livePresetTemplate)
+{
+    if (!preset.isValid)
+        return {};
+
+    const auto requiredSize =
+        effectBlockStart +
+        effectBlockSize * effectBlockCount;
+
+    if (livePresetTemplate.getSize () < requiredSize)
+        return {};
+
+    // Copia completa del preset actual.
+    // Todo lo que no conocemos queda intacto.
+    juce::MemoryBlock result (livePresetTemplate);
+
+    auto* data =
+        static_cast<juce::uint8*> (
+            result.getData ());
+
+    if (data == nullptr)
+        return {};
+
+    const auto dataSize = result.getSize ();
+
+    writeAsciiString (
+        data,
+        dataSize,
+        presetNameOffset,
+        presetNameMaxLength,
+        preset.patchName);
+
+    writeAsciiString (
+        data,
+        dataSize,
+        authorOffset,
+        presetNameMaxLength,
+        preset.author);
+
+    data[fxLoopSendOffset] =
+        static_cast<juce::uint8> (
+            juce::jlimit (
+                1,
+                10,
+                preset.fxLoopSend));
+
+    data[fxLoopReturnOffset] =
+        static_cast<juce::uint8> (
+            juce::jlimit (
+                1,
+                10,
+                preset.fxLoopReturn));
+
+    std::array<bool, effectBlockCount> routingSeen{};
+
+    for (std::size_t i = 0;
+         i < effectBlockCount;
+         ++i)
+    {
+        const auto blockIndex =
+            preset.routingOrder[i];
+
+        if (blockIndex < 0 ||
+            blockIndex >=
+                static_cast<int> (effectBlockCount))
+        {
+            return {};
+        }
+
+        if (routingSeen[
+                static_cast<std::size_t> (blockIndex)])
+        {
+            return {};
+        }
+
+        routingSeen[
+            static_cast<std::size_t> (blockIndex)] = true;
+
+        data[routingOrderOffset + i] =
+            static_cast<juce::uint8> (blockIndex);
+    }
+
+    std::array<bool, effectBlockCount> blockSeen{};
+
+    for (const auto& effect : preset.effects)
+    {
+        if (effect.blockIndex < 0 ||
+            effect.blockIndex >=
+                static_cast<int> (effectBlockCount))
+        {
+            return {};
+        }
+
+        const auto block =
+            static_cast<std::size_t> (
+                effect.blockIndex);
+
+        if (blockSeen[block])
+            return {};
+
+        blockSeen[block] = true;
+
+        if (effect.slotIndex != effect.blockIndex)
+            return {};
+
+        const auto base =
+            effectBlockStart +
+            block * effectBlockSize;
+
+        data[base + slotIndexOffset] =
+            static_cast<juce::uint8> (
+                effect.slotIndex);
+
+        data[base + enabledOffset] =
+            effect.enabled ? 1 : 0;
+
+        writeUInt32LE (
+            data,
+            dataSize,
+            base + effectIdOffset,
+            effect.effectId);
+
+        for (std::size_t param = 0;
+             param < effect.params.size ();
+             ++param)
+        {
+            writeFloat32LE (
+                data,
+                dataSize,
+                base +
+                    paramsOffset +
+                    param * sizeof (float),
+                effect.params[param]);
+        }
+    }
+
+    return result;
+}
 juce::String GP200PresetCodec::blockNameForSlotIndex (int slotIndex)
 {
     switch (slotIndex)
@@ -311,4 +688,89 @@ float GP200PresetCodec::readFloat32LE (const juce::uint8* data, std::size_t data
 
     return value;
 }
+
+void GP200PresetCodec::writeAsciiString (
+    juce::uint8* data,
+    std::size_t dataSize,
+    std::size_t offset,
+    std::size_t maxLength,
+    const juce::String& text)
+{
+    if (data == nullptr ||
+        offset + maxLength > dataSize)
+    {
+        return;
+    }
+
+    for (std::size_t i = 0; i < maxLength; ++i)
+        data[offset + i] = 0;
+
+    const auto count =
+        juce::jmin (
+            static_cast<int> (maxLength),
+            text.length ());
+
+    for (int i = 0; i < count; ++i)
+    {
+        const auto character = text[i];
+
+        data[offset + static_cast<std::size_t> (i)] =
+            character >= 32 && character <= 126
+                ? static_cast<juce::uint8> (character)
+                : static_cast<juce::uint8> (' ');
+    }
+}
+
+void GP200PresetCodec::writeUInt32LE (
+    juce::uint8* data,
+    std::size_t dataSize,
+    std::size_t offset,
+    juce::uint32 value)
+{
+    if (data == nullptr ||
+        offset + sizeof (juce::uint32) > dataSize)
+    {
+        return;
+    }
+
+    data[offset] =
+        static_cast<juce::uint8> (
+            value & 0xFFu);
+
+    data[offset + 1] =
+        static_cast<juce::uint8> (
+            (value >> 8) & 0xFFu);
+
+    data[offset + 2] =
+        static_cast<juce::uint8> (
+            (value >> 16) & 0xFFu);
+
+    data[offset + 3] =
+        static_cast<juce::uint8> (
+            (value >> 24) & 0xFFu);
+}
+
+void GP200PresetCodec::writeFloat32LE (
+    juce::uint8* data,
+    std::size_t dataSize,
+    std::size_t offset,
+    float value)
+{
+    if (!std::isfinite (value))
+        value = 0.0f;
+
+    juce::uint32 raw = 0;
+
+    std::memcpy (
+        &raw,
+        &value,
+        sizeof (float));
+
+    writeUInt32LE (
+        data,
+        dataSize,
+        offset,
+        raw);
+}
+
 } // namespace gp200
