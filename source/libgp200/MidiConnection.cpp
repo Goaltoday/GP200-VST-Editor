@@ -102,6 +102,146 @@ bool MidiConnection::isConnected () const
     return midiInput != nullptr && midiOutput != nullptr;
 }
 
+
+
+bool MidiConnection::startIRUpload (const juce::File& wavFile, int zeroBasedUserIRSlot)
+{
+    const juce::ScopedLock lock (stateLock);
+    if (midiOutput == nullptr)
+    {
+        irUploadStatusText = "IR upload failed: MIDI output not open";
+        lastMessageText = irUploadStatusText;
+        return false;
+    }
+    if (irUploadPhase != IRUploadPhase::Idle)
+    {
+        irUploadStatusText = "IR upload already in progress";
+        lastMessageText = irUploadStatusText;
+        return false;
+    }
+
+    GP200IRUpload prepared;
+    const auto result = GP200IR::buildUpload (wavFile, zeroBasedUserIRSlot, prepared);
+    if (result.failed ())
+    {
+        irUploadStatusText = "IR upload failed: " + result.getErrorMessage ();
+        lastMessageText = irUploadStatusText;
+        return false;
+    }
+
+    irUpload = std::move (prepared);
+    irUploadChunkIndex = 0;
+    midiOutput->sendMessageNow (irUpload.prepareMessage);
+    irUploadPhase = IRUploadPhase::WaitingAfterPrepare;
+    irUploadNextActionMs = juce::Time::getMillisecondCounterHiRes () + 200.0;
+    irUploadStatusText = "IR upload: preparing User IR " + juce::String (zeroBasedUserIRSlot + 1);
+    lastMessageText = irUploadStatusText;
+    return true;
+}
+
+void MidiConnection::processIRUpload ()
+{
+    const juce::ScopedLock lock (stateLock);
+    if (irUploadPhase == IRUploadPhase::Idle || midiOutput == nullptr)
+        return;
+
+    const auto now = juce::Time::getMillisecondCounterHiRes ();
+    if (now < irUploadNextActionMs)
+        return;
+
+    if (irUploadPhase == IRUploadPhase::WaitingAfterPrepare ||
+        irUploadPhase == IRUploadPhase::SendingChunks)
+    {
+        if (irUploadChunkIndex < static_cast<int> (irUpload.chunks.size ()))
+        {
+            midiOutput->sendMessageNow (irUpload.chunks[static_cast<std::size_t> (irUploadChunkIndex)]);
+            ++irUploadChunkIndex;
+            irUploadPhase = IRUploadPhase::SendingChunks;
+            irUploadNextActionMs = now + 30.0;
+            irUploadStatusText = "IR upload: block " + juce::String (irUploadChunkIndex) + "/" +
+                                 juce::String (static_cast<int> (irUpload.chunks.size ()));
+            lastMessageText = irUploadStatusText;
+            return;
+        }
+        irUploadPhase = IRUploadPhase::WaitingBeforeCommit;
+        irUploadNextActionMs = now + 300.0;
+        irUploadStatusText = "IR upload: waiting before commit";
+        return;
+    }
+
+    if (irUploadPhase == IRUploadPhase::WaitingBeforeCommit)
+    {
+        midiOutput->sendMessageNow (irUpload.commitMessage);
+        irUploadPhase = IRUploadPhase::WaitingAfterCommit;
+        irUploadNextActionMs = now + 1000.0;
+        irUploadStatusText = "IR upload: commit sent";
+        lastMessageText = irUploadStatusText;
+        return;
+    }
+
+  if (irUploadPhase == IRUploadPhase::WaitingAfterCommit)
+{
+    const auto uploadedName = irUpload.displayName;
+
+    irUploadPhase = IRUploadPhase::Idle;
+    irUploadStatusText =
+        "IR upload completed: " + uploadedName;
+
+    lastMessageText = irUploadStatusText;
+    irUpload = {};
+
+    // Actualiza la lista de nombres User IR/SnapTone.
+    pendingAssignmentNameQueries.clear();
+
+    for (auto& name : userIRNames)
+        name.clear();
+
+    for (auto& name : snapToneNames)
+        name.clear();
+
+    ++assignmentNamesRevision;
+
+    constexpr int assignmentPageSize = 16;
+
+    for (int block = 0; block < assignmentPageSize; ++block)
+        pendingAssignmentNameQueries.push_back({ 0, 0, block });
+
+    for (int block = 0;
+         block < static_cast<int>(userIRCount) - assignmentPageSize;
+         ++block)
+    {
+        pendingAssignmentNameQueries.push_back({ 0, 1, block });
+    }
+
+    for (int block = 0;
+         block < static_cast<int>(snapToneCount);
+         ++block)
+    {
+        pendingAssignmentNameQueries.push_back({ 1, 0, block });
+    }
+
+    currentAssignmentNameQuery = {};
+    assignmentNameRequestInProgress = false;
+
+    assignmentNamesStatusText =
+        "Assignment names: refreshing after IR upload...";
+
+    sendNextAssignmentNameQuery();
+}
+}
+
+bool MidiConnection::isIRUploadInProgress () const
+{
+    const juce::ScopedLock lock (stateLock);
+    return irUploadPhase != IRUploadPhase::Idle;
+}
+
+juce::String MidiConnection::getIRUploadStatusText () const
+{
+    const juce::ScopedLock lock (stateLock);
+    return irUploadStatusText;
+}
+
 bool MidiConnection::requestCurrentPresetFromGP200 ()
 {
     const juce::ScopedLock lock (stateLock);

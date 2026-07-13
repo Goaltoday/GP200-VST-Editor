@@ -1,6 +1,7 @@
 #pragma once
 
 #include "GP200Preset.h"
+#include "GP200IR.h"
 
 #include <JuceHeader.h>
 #include <array>
@@ -29,6 +30,11 @@ class MidiConnection final : private juce::MidiInputCallback
     juce::String getSnapToneDisplayName (int zeroBasedIndex) const;
 
     bool sendPresetChange (int slot);
+
+    bool startIRUpload (const juce::File& wavFile, int zeroBasedUserIRSlot);
+    void processIRUpload ();
+    bool isIRUploadInProgress () const;
+    juce::String getIRUploadStatusText () const;
 
     bool sendPatchVolume (int value);
     bool sendPatchPan (int pan);
@@ -150,6 +156,13 @@ class MidiConnection final : private juce::MidiInputCallback
 
     std::uint64_t presetRevision{0};
     std::uint64_t assignmentNamesRevision{0};
+
+    enum class IRUploadPhase { Idle, WaitingAfterPrepare, SendingChunks, WaitingBeforeCommit, WaitingAfterCommit };
+    GP200IRUpload irUpload;
+    IRUploadPhase irUploadPhase{IRUploadPhase::Idle};
+    int irUploadChunkIndex{0};
+    double irUploadNextActionMs{0.0};
+    juce::String irUploadStatusText{"IR upload: idle"};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MidiConnection)
 };

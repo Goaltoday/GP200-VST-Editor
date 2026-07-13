@@ -33,6 +33,8 @@ addAndMakeVisible (savePresetButton);
 addAndMakeVisible (recallPresetButton);
 addAndMakeVisible (storePresetButton);
 addAndMakeVisible (importPrstButton);
+addAndMakeVisible (importIRButton);
+addAndMakeVisible (userIRSlotBox);
     addAndMakeVisible (patchVolumeSlider);
     addAndMakeVisible (panSlider);
     addAndMakeVisible (tempoSlider);
@@ -72,6 +74,7 @@ setupButton (compareBButton);
 setupButton (recallPresetButton);
 setupButton (storePresetButton);
 setupButton (importPrstButton);
+setupButton (importIRButton);
 setupButton (tunerButton);
 setupButton (tapTempoButton);
 
@@ -230,6 +233,15 @@ compareBButton.onClick = [this]
     {
         openPrstFileChooser ();
     };
+
+    for (int i = 0; i < gp200::userIRCount; ++i)
+        userIRSlotBox.addItem ("User IR " + juce::String (i + 1), i + 1);
+    userIRSlotBox.setSelectedId (2, juce::dontSendNotification);
+    userIRSlotBox.setColour (juce::ComboBox::backgroundColourId, panelColour);
+    userIRSlotBox.setColour (juce::ComboBox::textColourId, panelOutlineColour);
+    userIRSlotBox.setColour (juce::ComboBox::outlineColourId, panelOutlineColour);
+
+    importIRButton.onClick = [this] { openIRFileChooser (); };
 	updateCompareSnapshotButtons ();
 
     midiConnection.connectToGP200 ();
@@ -530,6 +542,9 @@ importPrstButton.setBounds (
     buttonWidth,
     buttonHeight);
 
+    userIRSlotBox.setBounds (418, 178, 130, 28);
+    importIRButton.setBounds (558, 178, 140, 28);
+
     // ============================================================
     // Patch settings
     // ============================================================
@@ -571,6 +586,9 @@ tapTempoButton.setBounds (882, 150, 46, 24);
 void AudioPluginAudioProcessorEditor::timerCallback ()
 {
     const auto nowMs = juce::Time::getMillisecondCounterHiRes();
+
+    midiConnection.processIRUpload ();
+    importIRButton.setEnabled (!midiConnection.isIRUploadInProgress ());
 
     if (tapFlashUntilMs > 0.0 && nowMs >= tapFlashUntilMs)
     {
@@ -739,6 +757,56 @@ processorRef.setGP200PresetSnapshotState (
     effectsStatusText = "Saved full preset snapshot to DAW";
 	getSelectedCompareSnapshotLabel ();
     updateEffectBlocksUI ();
+    repaint ();
+}
+
+
+void AudioPluginAudioProcessorEditor::openIRFileChooser ()
+{
+    if (presetRestoreInProgress || midiConnection.isIRUploadInProgress ())
+    {
+        effectsStatusText = "Import IR unavailable: another transfer is in progress";
+        repaint ();
+        return;
+    }
+
+    irFileChooser = std::make_unique<juce::FileChooser> (
+        "Import GP-200 User IR", juce::File{}, "*.wav");
+
+    irFileChooser->launchAsync (
+        juce::FileBrowserComponent::openMode |
+            juce::FileBrowserComponent::canSelectFiles,
+        [this] (const juce::FileChooser& chooser)
+        {
+            const auto file = chooser.getResult ();
+            if (file.existsAsFile ())
+                importIRFile (file);
+        });
+}
+
+void AudioPluginAudioProcessorEditor::importIRFile (const juce::File& file)
+{
+    const auto selectedId = userIRSlotBox.getSelectedId ();
+    if (selectedId <= 0)
+    {
+        effectsStatusText = "Import IR failed: choose a User IR slot";
+        repaint ();
+        return;
+    }
+
+    if (!midiConnection.startIRUpload (file, selectedId - 1))
+    {
+        effectsStatusText = midiConnection.getIRUploadStatusText ();
+        repaint ();
+        return;
+    }
+
+    effectsStatusText =
+        juce::String ("Import IR started: ")
+        + file.getFileNameWithoutExtension ()
+        + " -> User IR "
+        + juce::String (selectedId);
+
     repaint ();
 }
 
@@ -1316,6 +1384,9 @@ void AudioPluginAudioProcessorEditor::sendPatchTempoFromSlider ()
 void AudioPluginAudioProcessorEditor::handleTapTempo ()
 {
     const auto nowMs = juce::Time::getMillisecondCounterHiRes();
+
+    midiConnection.processIRUpload ();
+    importIRButton.setEnabled (!midiConnection.isIRUploadInProgress ());
 
     // Immediate visual feedback, including the first tap.
     tapFlashUntilMs = nowMs + 150.0;
