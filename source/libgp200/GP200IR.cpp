@@ -63,20 +63,55 @@ juce::Result GP200IR::buildUpload (const juce::File& wavFile,
                                    int zeroBasedUserIRSlot,
                                    GP200IRUpload& result)
 {
-    if (!wavFile.existsAsFile ())
-        return juce::Result::fail ("IR file does not exist");
-    if (!juce::isPositiveAndBelow (zeroBasedUserIRSlot, 20))
-        return juce::Result::fail ("User IR slot must be between 1 and 20");
+    if (!wavFile.existsAsFile())
+{
+    return juce::Result::fail(
+        "The selected IR file does not exist.");
+}
 
-    juce::AudioFormatManager formats;
-    formats.registerBasicFormats ();
-    std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (wavFile));
-    if (reader == nullptr)
-        return juce::Result::fail ("Unsupported or invalid WAV file");
-    if (std::abs (reader->sampleRate - 44100.0) > 0.5)
-        return juce::Result::fail ("First test requires a 44.1 kHz WAV");
-    if (reader->numChannels != 1)
-        return juce::Result::fail ("First test requires a mono WAV");
+if (!wavFile.hasFileExtension("wav"))
+{
+    return juce::Result::fail(
+        "The selected IR must be a WAV file.");
+}
+
+if (!juce::isPositiveAndBelow(
+        zeroBasedUserIRSlot,
+        20))
+{
+    return juce::Result::fail(
+        "The destination must be between User IR 1 and User IR 20.");
+}
+
+juce::AudioFormatManager formats;
+formats.registerBasicFormats();
+
+std::unique_ptr<juce::AudioFormatReader> reader(
+    formats.createReaderFor(wavFile));
+
+if (reader == nullptr)
+{
+    return juce::Result::fail(
+        "The WAV file is damaged, unsupported or cannot be read.");
+}
+
+if (reader->lengthInSamples <= 0)
+{
+    return juce::Result::fail(
+        "The WAV file contains no audio samples.");
+}
+
+if (reader->numChannels != 1)
+{
+    return juce::Result::fail(
+        "The IR must be mono. Stereo WAV files are not supported yet.");
+}
+
+if (std::abs(reader->sampleRate - 44100.0) > 0.5)
+{
+    return juce::Result::fail(
+        "The IR must use a sample rate of 44.1 kHz.");
+}
 
     juce::AudioBuffer<float> buffer (1, sampleCount);
     buffer.clear ();

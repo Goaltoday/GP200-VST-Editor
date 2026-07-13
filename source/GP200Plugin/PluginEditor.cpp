@@ -776,38 +776,74 @@ void AudioPluginAudioProcessorEditor::openIRFileChooser ()
     irFileChooser->launchAsync (
         juce::FileBrowserComponent::openMode |
             juce::FileBrowserComponent::canSelectFiles,
-        [this] (const juce::FileChooser& chooser)
-        {
-            const auto file = chooser.getResult ();
-            if (file.existsAsFile ())
-                importIRFile (file);
-        });
-}
-
-void AudioPluginAudioProcessorEditor::importIRFile (const juce::File& file)
+        [this](const juce::FileChooser& chooser)
 {
-    const auto selectedId = userIRSlotBox.getSelectedId ();
-    if (selectedId <= 0)
+    const auto file = chooser.getResult();
+
+    if (!file.existsAsFile())
+        return;
+
+    if (!file.hasFileExtension("wav"))
     {
-        effectsStatusText = "Import IR failed: choose a User IR slot";
-        repaint ();
+        effectsStatusText =
+            "Import IR failed: the selected file is not a WAV";
+
+        juce::AlertWindow::showMessageBoxAsync(
+            juce::MessageBoxIconType::WarningIcon,
+            "Invalid IR",
+            "Select a WAV file.");
+
+        repaint();
         return;
     }
 
-    if (!midiConnection.startIRUpload (file, selectedId - 1))
+    importIRFile(file);
+});
+}
+
+void AudioPluginAudioProcessorEditor::importIRFile(
+    const juce::File& file)
+{
+    const auto selectedId =
+        userIRSlotBox.getSelectedId();
+
+    if (selectedId <= 0)
     {
-        effectsStatusText = midiConnection.getIRUploadStatusText ();
-        repaint ();
+        effectsStatusText =
+            "Import IR failed: choose a User IR slot";
+
+        juce::AlertWindow::showMessageBoxAsync(
+            juce::MessageBoxIconType::WarningIcon,
+            "Invalid IR destination",
+            "Choose a User IR slot before importing the file.");
+
+        repaint();
+        return;
+    }
+
+    if (!midiConnection.startIRUpload(
+            file,
+            selectedId - 1))
+    {
+        effectsStatusText =
+            midiConnection.getIRUploadStatusText();
+
+        juce::AlertWindow::showMessageBoxAsync(
+            juce::MessageBoxIconType::WarningIcon,
+            "Invalid IR",
+            effectsStatusText);
+
+        repaint();
         return;
     }
 
     effectsStatusText =
-        juce::String ("Import IR started: ")
-        + file.getFileNameWithoutExtension ()
+        juce::String("Import IR started: ")
+        + file.getFileNameWithoutExtension()
         + " -> User IR "
-        + juce::String (selectedId);
+        + juce::String(selectedId);
 
-    repaint ();
+    repaint();
 }
 
 void AudioPluginAudioProcessorEditor::
