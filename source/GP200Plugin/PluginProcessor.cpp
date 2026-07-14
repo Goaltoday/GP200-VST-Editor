@@ -82,15 +82,22 @@ void AudioPluginAudioProcessor::changeProgramName (int index, const juce::String
 }
 
 //==============================================================================
-void AudioPluginAudioProcessor::prepareToPlay (double sampleRate,
-                                               int samplesPerBlock)
+void AudioPluginAudioProcessor::prepareToPlay (
+    double sampleRate,
+    int samplesPerBlock)
 {
-    juce::ignoreUnused (samplesPerBlock);
-
     tunerEngine.prepare (sampleRate);
+
+    toneMatchCapture.prepare (
+        sampleRate,
+        samplesPerBlock,
+        getTotalNumInputChannels());
 }
 
-void AudioPluginAudioProcessor::releaseResources () {}
+void AudioPluginAudioProcessor::releaseResources ()
+{
+    toneMatchCapture.releaseResources();
+}
 
 void AudioPluginAudioProcessor::setTunerEnabled (
     bool shouldBeEnabled) noexcept
@@ -133,6 +140,9 @@ void AudioPluginAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     juce::ignoreUnused (midiMessages);
 
     juce::ScopedNoDenormals noDenormals;
+	
+	if (toneMatchCapture.isCapturing())
+    toneMatchCapture.pushAudioBlock (buffer);
 
     tunerEngine.process (buffer);
 
@@ -523,6 +533,46 @@ void AudioPluginAudioProcessor::setStateInformation (
         snapshotA.data.fromBase64Encoding (
             oldPresetDataBase64);
     }
+}
+
+bool AudioPluginAudioProcessor::startToneMatchCapture (
+    tonematch::CaptureRole role)
+{
+    return toneMatchCapture.start (role);
+}
+
+tonematch::ToneCaptureData
+AudioPluginAudioProcessor::stopToneMatchCapture()
+{
+    return toneMatchCapture.stop();
+}
+
+void AudioPluginAudioProcessor::clearToneMatchCapture()
+{
+    toneMatchCapture.clear();
+}
+
+bool AudioPluginAudioProcessor::isToneMatchCapturing() const noexcept
+{
+    return toneMatchCapture.isCapturing();
+}
+
+tonematch::CaptureState
+AudioPluginAudioProcessor::getToneMatchCaptureState() const noexcept
+{
+    return toneMatchCapture.getState();
+}
+
+double
+AudioPluginAudioProcessor::getToneMatchCapturedDurationSeconds() const noexcept
+{
+    return toneMatchCapture.getCapturedDurationSeconds();
+}
+
+float
+AudioPluginAudioProcessor::getToneMatchCapturePeakLinear() const noexcept
+{
+    return toneMatchCapture.getCurrentPeakLinear();
 }
 
 //==============================================================================

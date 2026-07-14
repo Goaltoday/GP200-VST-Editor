@@ -8,6 +8,8 @@
 
 #include "TunerEngine.h"
 
+#include "ToneMatch/ToneMatchCapture.h"
+
 class AudioPluginAudioProcessor final : public juce::AudioProcessor
 {
   public:
@@ -71,11 +73,21 @@ juce::String getSavedGP200PresetDataStatusText (int snapshotIndex) const;
 std::uint64_t getSavedPresetRevision (int snapshotIndex) const;
 
     static juce::String formatGP200Slot (int slot);
+	
+	bool startToneMatchCapture (tonematch::CaptureRole role);
+tonematch::ToneCaptureData stopToneMatchCapture();
+void clearToneMatchCapture();
+
+bool isToneMatchCapturing() const noexcept;
+tonematch::CaptureState getToneMatchCaptureState() const noexcept;
+double getToneMatchCapturedDurationSeconds() const noexcept;
+float getToneMatchCapturePeakLinear() const noexcept;
 
   private:
     static bool isUsefulPresetName (const juce::String& presetName);
 	
 	TunerEngine tunerEngine;
+	tonematch::ToneMatchCapture toneMatchCapture;
 	
 	    struct GP200PresetSnapshot
     {
@@ -84,6 +96,8 @@ std::uint64_t getSavedPresetRevision (int snapshotIndex) const;
         juce::MemoryBlock data;
         std::uint64_t revision{0};
     };
+	
+	
 
     static bool isValidSnapshotIndex (int snapshotIndex);
 
