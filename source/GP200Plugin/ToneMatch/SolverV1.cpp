@@ -217,67 +217,17 @@ ToneMatchResult SolverV1::solve (
             clamp01 (std::min (sourceConfidence, targetConfidence)));
     }
 
-    const auto gaussianSigmaOctaves =
-        options.smoothingFractionOfOctave / 2.354820045;
-
+    // Modo RAW al 100 %:
+    // La curva usada para sintetizar la IR es exactamente TARGET - SOURCE.
+    // No se aplica suavizado, ponderación por confianza, fade de agudos
+    // ni compensación global de nivel.
     for (std::size_t index = 0;
          index < result.frequencyHz.size();
          ++index)
     {
-        const auto centreFrequency = result.frequencyHz[index];
-        double weightedSum = 0.0;
-        double weightSum = 0.0;
-
-        for (std::size_t neighbour = 0;
-             neighbour < result.frequencyHz.size();
-             ++neighbour)
-        {
-            const auto octaveDistance = std::log2 (
-                result.frequencyHz[neighbour] / centreFrequency);
-
-            if (std::abs (octaveDistance)
-                > options.smoothingFractionOfOctave)
-            {
-                continue;
-            }
-
-            const auto gaussianWeight = std::exp (
-                -0.5
-                * (octaveDistance / gaussianSigmaOctaves)
-                * (octaveDistance / gaussianSigmaOctaves));
-
-            weightedSum +=
-                result.rawCorrectionDb[neighbour]
-                * gaussianWeight;
-
-            weightSum += gaussianWeight;
-        }
-
-        auto correctionDb =
-            weightSum > 0.0
-                ? weightedSum / weightSum
-                : result.rawCorrectionDb[index];
-
-        correctionDb *= options.matchAmount;
-
-        if (centreFrequency >= fadeOutStart
-            && maximumFrequency > fadeOutStart)
-        {
-            const auto fade = juce::jlimit (
-                0.0,
-                1.0,
-                (maximumFrequency - centreFrequency)
-                    / (maximumFrequency - fadeOutStart));
-
-            correctionDb *= fade;
-        }
-
-        correctionDb = juce::jlimit (
-            options.maximumCutDb,
-            options.maximumBoostDb,
-            correctionDb);
-
-        result.smoothedCorrectionDb.push_back (correctionDb);
+        // RAW literal al 100 %: no se aplican límites de corte o realce.
+        result.smoothedCorrectionDb.push_back (
+            result.rawCorrectionDb[index]);
     }
 
     const auto fftOrder = nextPowerOfTwoOrder (
@@ -307,16 +257,13 @@ ToneMatchResult SolverV1::solve (
             * options.outputSampleRate
             / static_cast<double> (fftSize);
 
-        double correctionDb = 0.0;
-
-        if (frequency >= options.minimumFrequencyHz
-            && frequency <= maximumFrequency)
-        {
-            correctionDb = interpolate (
-                result.frequencyHz,
-                result.smoothedCorrectionDb,
-                frequency);
-        }
+        // Conserva la curva RAW también en los extremos:
+        // por debajo del primer punto usa el primer valor y por encima
+        // del último punto mantiene el último valor, sin volver a 0 dB.
+        const auto correctionDb = interpolate (
+            result.frequencyHz,
+            result.smoothedCorrectionDb,
+            frequency);
 
         const auto logMagnitude = correctionDb * ln10Over20;
         logSpectrum[static_cast<std::size_t> (bin)] =
@@ -380,7 +327,8 @@ ToneMatchResult SolverV1::solve (
 
     result.impulseResponseSampleRate = options.outputSampleRate;
 
-    // Medimos la respuesta realmente conseguida tras truncar a 1024 muestras.
+    // Medición diagnóstica de la respuesta realmente conseguida después
+    // de truncar a 1024 muestras. Esta medición NO modifica la ganancia.
     std::vector<std::complex<float>> measuredInput (
         static_cast<std::size_t> (fftSize));
     std::vector<std::complex<float>> measuredSpectrum (
@@ -413,7 +361,8 @@ ToneMatchResult SolverV1::solve (
 
         const auto magnitude = std::max (
             static_cast<double> (
-                std::abs (measuredSpectrum[static_cast<std::size_t> (bin)])),
+                std::abs (
+                    measuredSpectrum[static_cast<std::size_t> (bin)])),
             minimumMagnitude);
 
         measuredFrequency.push_back (frequency);

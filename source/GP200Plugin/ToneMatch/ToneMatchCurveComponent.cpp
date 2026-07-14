@@ -1,5 +1,6 @@
 #include "ToneMatchCurveComponent.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace
@@ -15,12 +16,49 @@ void ToneMatchCurveComponent::setComparison (
     tonematch::ToneMatchComparisonResult newComparison)
 {
     comparison = std::move (newComparison);
+
+    // Mantiene como mínimo la escala original de -18 a +18 dB,
+    // pero se amplía automáticamente en pasos de 6 dB para mostrar
+    // todos los valores de la curva RAW.
+    displayMinimumDb = -18.0;
+    displayMaximumDb = 18.0;
+
+    if (!comparison.rawCorrectionDb.empty())
+    {
+        const auto [minimumIt, maximumIt] =
+            std::minmax_element (
+                comparison.rawCorrectionDb.begin(),
+                comparison.rawCorrectionDb.end());
+
+        constexpr double gridStepDb = 6.0;
+
+        const auto requiredMinimumDb =
+            std::floor (*minimumIt / gridStepDb) * gridStepDb;
+
+        const auto requiredMaximumDb =
+            std::ceil (*maximumIt / gridStepDb) * gridStepDb;
+
+        displayMinimumDb =
+            std::min (displayMinimumDb, requiredMinimumDb);
+
+        displayMaximumDb =
+            std::max (displayMaximumDb, requiredMaximumDb);
+
+        if (*minimumIt <= displayMinimumDb + 0.001)
+            displayMinimumDb -= gridStepDb;
+
+        if (*maximumIt >= displayMaximumDb - 0.001)
+            displayMaximumDb += gridStepDb;
+    }
+
     repaint();
 }
 
 void ToneMatchCurveComponent::clear()
 {
     comparison = {};
+    displayMinimumDb = -18.0;
+    displayMaximumDb = 18.0;
     repaint();
 }
 
