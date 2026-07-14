@@ -4,6 +4,7 @@
 #include "PluginProcessor.h"
 #include "../libgp200/MidiConnection.h"
 #include "TunerDisplayComponent.h"
+#include "ToneMatch/ToneMatchPanel.h"
 
 #include <array>
 #include <deque>
@@ -197,6 +198,9 @@ CompareSnapshot selectedCompareSnapshot{
     juce::String presetNameEditorSignature;
     juce::String patchVolumeSourceSignature;
     juce::String effectsStatusText{"Effects: waiting for preset data"};
+	
+	juce::TextButton toneMatchButton{"Tone Match"};
+std::unique_ptr<ToneMatchPanel> toneMatchPanel;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioPluginAudioProcessorEditor)
 };

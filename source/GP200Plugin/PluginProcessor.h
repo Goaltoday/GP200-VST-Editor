@@ -10,6 +10,7 @@
 
 #include "ToneMatch/ToneMatchCapture.h"
 #include "ToneMatch/ToneAnalysis.h"
+#include "ToneMatch/ToneMatchComparison.h"
 
 class AudioPluginAudioProcessor final : public juce::AudioProcessor
 {
@@ -81,6 +82,7 @@ void clearToneMatchCapture();
 
 bool isToneMatchCapturing() const noexcept;
 tonematch::CaptureState getToneMatchCaptureState() const noexcept;
+tonematch::CaptureRole getToneMatchCaptureRole() const noexcept;
 double getToneMatchCapturedDurationSeconds() const noexcept;
 float getToneMatchCapturePeakLinear() const noexcept;
 
@@ -94,6 +96,15 @@ bool analyseToneMatchCapture (tonematch::CaptureRole role);
 bool hasToneMatchProfile (tonematch::CaptureRole role) const;
 tonematch::ToneAnalysisProfile getToneMatchProfileCopy (
     tonematch::CaptureRole role) const;
+	
+	bool compareToneMatchProfiles();
+
+bool hasToneMatchComparison() const;
+
+tonematch::ToneMatchComparisonResult
+getToneMatchComparisonCopy() const;
+
+void clearToneMatchComparison();
 
   private:
     static bool isUsefulPresetName (const juce::String& presetName);
@@ -127,6 +138,7 @@ tonematch::ToneCaptureData targetToneCapture;
 
 tonematch::ToneAnalysisProfile sourceToneProfile;
 tonematch::ToneAnalysisProfile targetToneProfile;
+tonematch::ToneMatchComparisonResult toneMatchComparison;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioPluginAudioProcessor)
 };

@@ -62,6 +62,13 @@ target_sources(GP200Plugin
         source/GP200Plugin/ToneMatch/ToneMatchCapture.h
 	source/GP200Plugin/ToneMatch/ToneAnalysis.cpp
 	source/GP200Plugin/ToneMatch/ToneAnalysis.h
+	source/GP200Plugin/ToneMatch/ToneMatchPanel.cpp
+	source/GP200Plugin/ToneMatch/ToneMatchPanel.h
+source/GP200Plugin/ToneMatch/ToneMatchComparison.h
+source/GP200Plugin/ToneMatch/ToneMatchComparison.cpp
+
+source/GP200Plugin/ToneMatch/ToneMatchCurveComponent.h
+source/GP200Plugin/ToneMatch/ToneMatchCurveComponent.cpp
 
 )
 
@@ -135,4 +142,11 @@ source_group(
         source/GP200Plugin/ToneMatch/ToneMatchCapture.h
 	source/GP200Plugin/ToneMatch/ToneAnalysis.cpp
 	source/GP200Plugin/ToneMatch/ToneAnalysis.h
+	source/GP200Plugin/ToneMatch/ToneMatchPanel.cpp
+	source/GP200Plugin/ToneMatch/ToneMatchPanel.h
+source/GP200Plugin/ToneMatch/ToneMatchComparison.h
+source/GP200Plugin/ToneMatch/ToneMatchComparison.cpp
+
+source/GP200Plugin/ToneMatch/ToneMatchCurveComponent.h
+source/GP200Plugin/ToneMatch/ToneMatchCurveComponent.cpp
 )

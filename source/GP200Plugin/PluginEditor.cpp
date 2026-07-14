@@ -42,6 +42,7 @@ addAndMakeVisible (userIRSlotBox);
     addAndMakeVisible (presetNameEditor);
     addAndMakeVisible (tunerButton);
     addAndMakeVisible (allBlocksOffButton);
+	addAndMakeVisible (toneMatchButton);
 	
 	addChildComponent(tunerDisplay);
 tunerDisplay.setVisible(false);
@@ -89,6 +90,7 @@ tapTempoButton.setColour (
 );
 
 setupButton (allBlocksOffButton);
+setupButton (toneMatchButton);
 
 // Store to GP-200 is the main hardware action.
 storePresetButton.setColour (
@@ -209,6 +211,40 @@ storePresetButton.setColour (
     tunerButton.onClick = [this] { toggleTuner (); };
 
     allBlocksOffButton.onClick = [this] { toggleAllBlocksOff (); };
+	
+	toneMatchButton.onClick =
+    [this]
+    {
+        if (toneMatchPanel == nullptr)
+        {
+            toneMatchPanel =
+                std::make_unique<ToneMatchPanel> (
+                    processorRef);
+
+            toneMatchPanel->setCloseCallback (
+                [this]
+                {
+                    if (toneMatchPanel != nullptr)
+                        toneMatchPanel->setVisible (false);
+                });
+
+            addAndMakeVisible (*toneMatchPanel);
+
+            toneMatchPanel->setBounds (
+                getLocalBounds().reduced (50, 60));
+
+            toneMatchPanel->toFront (true);
+        }
+        else
+        {
+            toneMatchPanel->setVisible (true);
+
+            toneMatchPanel->setBounds (
+                getLocalBounds().reduced (50, 60));
+
+            toneMatchPanel->toFront (true);
+        }
+    };
 
     previousPresetButton.onClick = [this] { loadPreviousPreset (); };
 
@@ -559,14 +595,14 @@ tapTempoButton.setBounds (882, 150, 46, 24);
     // ============================================================
 
     tunerButton.setBounds (30, 191, 130, 28);
-    allBlocksOffButton.setBounds (170, 191, 120, 28);
-	
-	tunerDisplay.setBounds(
-    304,
+allBlocksOffButton.setBounds (170, 191, 120, 28);
+toneMatchButton.setBounds (708, 191, 130, 28);
+
+tunerDisplay.setBounds (
+    440,
     189,
-    getWidth() - 334,
-    32
-);
+    getWidth() - 470,
+    32);
 
     // ============================================================
     // Effects list
@@ -579,6 +615,12 @@ tapTempoButton.setBounds (882, 150, 46, 24);
         getHeight() - 266
     );
 
+
+if (toneMatchPanel != nullptr)
+{
+    toneMatchPanel->setBounds (
+        getLocalBounds().reduced (50, 60));
+}
     layoutEffectBlocks();
 }
 

@@ -568,6 +568,13 @@ AudioPluginAudioProcessor::getToneMatchCaptureState() const noexcept
     return toneMatchCapture.getState();
 }
 
+tonematch::CaptureRole
+AudioPluginAudioProcessor::getToneMatchCaptureRole() const noexcept
+{
+    return toneMatchCapture.getCurrentRole();
+}
+
+
 double
 AudioPluginAudioProcessor::getToneMatchCapturedDurationSeconds() const noexcept
 {
@@ -595,6 +602,8 @@ void AudioPluginAudioProcessor::storeToneMatchCapture (
         targetToneCapture = std::move (capture);
         targetToneProfile = {};
     }
+	toneMatchComparison = {};
+	
 }
 
 bool AudioPluginAudioProcessor::hasToneMatchCapture (
@@ -633,6 +642,7 @@ void AudioPluginAudioProcessor::clearToneMatchCapture (
         targetToneCapture = {};
         targetToneProfile = {};
     }
+	toneMatchComparison = {};
 }
 
 bool AudioPluginAudioProcessor::analyseToneMatchCapture (
@@ -658,14 +668,17 @@ bool AudioPluginAudioProcessor::analyseToneMatchCapture (
     if (!profile.isValid())
         return false;
 
-    {
-        const juce::ScopedLock lock (toneMatchDataLock);
+   {
+    const juce::ScopedLock lock (toneMatchDataLock);
 
-        if (role == tonematch::CaptureRole::source)
-            sourceToneProfile = std::move (profile);
-        else
-            targetToneProfile = std::move (profile);
-    }
+    if (role == tonematch::CaptureRole::source)
+        sourceToneProfile = std::move (profile);
+    else
+        targetToneProfile = std::move (profile);
+
+    // Cualquier perfil nuevo invalida la comparación anterior.
+    toneMatchComparison = {};
+}
 
     return true;
 }
@@ -689,6 +702,69 @@ AudioPluginAudioProcessor::getToneMatchProfileCopy (
     return role == tonematch::CaptureRole::source
         ? sourceToneProfile
         : targetToneProfile;
+}
+
+bool AudioPluginAudioProcessor::compareToneMatchProfiles()
+{
+    tonematch::ToneAnalysisProfile sourceCopy;
+    tonematch::ToneAnalysisProfile targetCopy;
+
+    {
+        const juce::ScopedLock lock (toneMatchDataLock);
+
+        sourceCopy = sourceToneProfile;
+        targetCopy = targetToneProfile;
+    }
+
+    if (!sourceCopy.isValid()
+        || !targetCopy.isValid())
+    {
+        return false;
+    }
+
+    tonematch::ToneMatchComparison comparisonEngine;
+
+    auto comparison =
+        comparisonEngine.compare (
+            sourceCopy,
+            targetCopy);
+
+    if (!comparison.isValid())
+        return false;
+
+    {
+        const juce::ScopedLock lock (toneMatchDataLock);
+
+        toneMatchComparison =
+            std::move (comparison);
+    }
+
+    return true;
+}
+
+bool AudioPluginAudioProcessor::
+    hasToneMatchComparison() const
+{
+    const juce::ScopedLock lock (toneMatchDataLock);
+
+    return toneMatchComparison.isValid();
+}
+
+tonematch::ToneMatchComparisonResult
+AudioPluginAudioProcessor::
+    getToneMatchComparisonCopy() const
+{
+    const juce::ScopedLock lock (toneMatchDataLock);
+
+    return toneMatchComparison;
+}
+
+void AudioPluginAudioProcessor::
+    clearToneMatchComparison()
+{
+    const juce::ScopedLock lock (toneMatchDataLock);
+
+    toneMatchComparison = {};
 }
 
 //==============================================================================
