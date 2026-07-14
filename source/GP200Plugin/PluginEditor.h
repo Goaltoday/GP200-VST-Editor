@@ -127,7 +127,8 @@ juce::String getSelectedCompareSnapshotLabel () const;
     static constexpr int restoreTimerHz = 100;
 
     AudioPluginAudioProcessor& processorRef;
-    gp200::MidiConnection midiConnection;
+gp200::MidiConnection& midiConnection;
+double lastInitialPresetRequestMs{0.0};
 
     std::vector<PresetRestoreStep> presetRestoreSteps;
     int presetRestoreStepIndex{0};

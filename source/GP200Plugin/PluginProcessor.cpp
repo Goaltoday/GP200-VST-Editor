@@ -15,7 +15,36 @@ AudioPluginAudioProcessor::AudioPluginAudioProcessor ()
 {
 }
 
-AudioPluginAudioProcessor::~AudioPluginAudioProcessor () {}
+AudioPluginAudioProcessor::~AudioPluginAudioProcessor ()
+{
+    midiConnection.disconnect();
+}
+
+gp200::MidiConnection&
+AudioPluginAudioProcessor::getMidiConnection() noexcept
+{
+    return midiConnection;
+}
+
+void AudioPluginAudioProcessor::ensureGP200Connection()
+{
+    const auto wasAlreadyConnected =
+        midiConnection.isConnected();
+
+    if (!wasAlreadyConnected)
+    {
+        if (!midiConnection.connectToGP200())
+            return;
+
+        midiConnection.requestAssignmentNamesFromGP200();
+    }
+
+    // Solo solicita el preset cuando todavía no existe uno en memoria.
+    // Al reabrir la ventana, los cambios locales se conservan porque el
+    // dump ya existe y no se reemplaza.
+    if (midiConnection.getCurrentPresetDumpSize() == 0)
+        midiConnection.requestCurrentPresetFromGP200();
+}
 
 //==============================================================================
 const juce::String AudioPluginAudioProcessor::getName () const

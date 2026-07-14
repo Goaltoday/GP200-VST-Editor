@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "TunerEngine.h"
+#include "../libgp200/MidiConnection.h"
 
 #include "ToneMatch/ToneMatchCapture.h"
 #include "ToneMatch/ToneAnalysis.h"
@@ -17,8 +18,12 @@ class AudioPluginAudioProcessor final : public juce::AudioProcessor
 {
   public:
     static constexpr int compareSnapshotCount = 2;
-	AudioPluginAudioProcessor ();
+
+    AudioPluginAudioProcessor ();
     ~AudioPluginAudioProcessor () override;
+
+    gp200::MidiConnection& getMidiConnection() noexcept;
+    void ensureGP200Connection();
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources () override;
@@ -118,6 +123,7 @@ bool saveToneMatchIRToFile (
   private:
     static bool isUsefulPresetName (const juce::String& presetName);
 	
+	gp200::MidiConnection midiConnection;
 	TunerEngine tunerEngine;
 	tonematch::ToneMatchCapture toneMatchCapture;
 	

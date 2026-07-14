@@ -19,8 +19,11 @@ const juce::Colour statusOffColour{0xffd84545};
 } // namespace
 
 //==============================================================================
-AudioPluginAudioProcessorEditor::AudioPluginAudioProcessorEditor (AudioPluginAudioProcessor& p)
-    : AudioProcessorEditor (&p), processorRef (p)
+AudioPluginAudioProcessorEditor::AudioPluginAudioProcessorEditor (
+    AudioPluginAudioProcessor& p)
+    : AudioProcessorEditor (&p),
+      processorRef (p),
+      midiConnection (p.getMidiConnection())
 {
     setSize (960, 760);
 
@@ -280,12 +283,12 @@ compareBButton.onClick = [this]
     importIRButton.onClick = [this] { openIRFileChooser (); };
 	updateCompareSnapshotButtons ();
 
-    midiConnection.connectToGP200 ();
+  processorRef.ensureGP200Connection();
 
-    midiConnection.requestCurrentPresetFromGP200 ();
-    midiConnection.requestAssignmentNamesFromGP200 ();
+lastInitialPresetRequestMs =
+    juce::Time::getMillisecondCounterHiRes();
 
-    startTimerHz (idleTimerHz);
+startTimerHz (idleTimerHz);
 }
 
 AudioPluginAudioProcessorEditor::~AudioPluginAudioProcessorEditor () = default;
@@ -628,6 +631,17 @@ if (toneMatchPanel != nullptr)
 void AudioPluginAudioProcessorEditor::timerCallback ()
 {
     const auto nowMs = juce::Time::getMillisecondCounterHiRes();
+	
+	  // La conexión MIDI puede estar abierta antes de que el GP-200
+    // haya respondido a la primera petición. Reintentamos solamente
+    // mientras todavía no exista ningún preset vivo recibido.
+    if (midiConnection.isConnected()
+        && midiConnection.getCurrentPresetDumpSize() == 0
+        && nowMs - lastInitialPresetRequestMs >= 200.0)
+    {
+        lastInitialPresetRequestMs = nowMs;
+        midiConnection.requestCurrentPresetFromGP200();
+    }
 
     midiConnection.processIRUpload ();
     importIRButton.setEnabled (!midiConnection.isIRUploadInProgress ());
