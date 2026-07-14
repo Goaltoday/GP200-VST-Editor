@@ -544,7 +544,12 @@ bool AudioPluginAudioProcessor::startToneMatchCapture (
 tonematch::ToneCaptureData
 AudioPluginAudioProcessor::stopToneMatchCapture()
 {
-    return toneMatchCapture.stop();
+    auto capture = toneMatchCapture.stop();
+
+    if (capture.isValid())
+        storeToneMatchCapture (capture);
+
+    return capture;
 }
 
 void AudioPluginAudioProcessor::clearToneMatchCapture()
@@ -573,6 +578,117 @@ float
 AudioPluginAudioProcessor::getToneMatchCapturePeakLinear() const noexcept
 {
     return toneMatchCapture.getCurrentPeakLinear();
+}
+
+void AudioPluginAudioProcessor::storeToneMatchCapture (
+    tonematch::ToneCaptureData capture)
+{
+    const juce::ScopedLock lock (toneMatchDataLock);
+
+    if (capture.role == tonematch::CaptureRole::source)
+    {
+        sourceToneCapture = std::move (capture);
+        sourceToneProfile = {};
+    }
+    else
+    {
+        targetToneCapture = std::move (capture);
+        targetToneProfile = {};
+    }
+}
+
+bool AudioPluginAudioProcessor::hasToneMatchCapture (
+    tonematch::CaptureRole role) const
+{
+    const juce::ScopedLock lock (toneMatchDataLock);
+
+    return role == tonematch::CaptureRole::source
+        ? sourceToneCapture.isValid()
+        : targetToneCapture.isValid();
+}
+
+tonematch::ToneCaptureData
+AudioPluginAudioProcessor::getToneMatchCaptureCopy (
+    tonematch::CaptureRole role) const
+{
+    const juce::ScopedLock lock (toneMatchDataLock);
+
+    return role == tonematch::CaptureRole::source
+        ? sourceToneCapture
+        : targetToneCapture;
+}
+
+void AudioPluginAudioProcessor::clearToneMatchCapture (
+    tonematch::CaptureRole role)
+{
+    const juce::ScopedLock lock (toneMatchDataLock);
+
+    if (role == tonematch::CaptureRole::source)
+    {
+        sourceToneCapture = {};
+        sourceToneProfile = {};
+    }
+    else
+    {
+        targetToneCapture = {};
+        targetToneProfile = {};
+    }
+}
+
+bool AudioPluginAudioProcessor::analyseToneMatchCapture (
+    tonematch::CaptureRole role)
+{
+    tonematch::ToneCaptureData captureCopy;
+
+    {
+        const juce::ScopedLock lock (toneMatchDataLock);
+
+        captureCopy =
+            role == tonematch::CaptureRole::source
+                ? sourceToneCapture
+                : targetToneCapture;
+    }
+
+    if (!captureCopy.isValid())
+        return false;
+
+    tonematch::ToneAnalysis analyser;
+    auto profile = analyser.analyse (captureCopy);
+
+    if (!profile.isValid())
+        return false;
+
+    {
+        const juce::ScopedLock lock (toneMatchDataLock);
+
+        if (role == tonematch::CaptureRole::source)
+            sourceToneProfile = std::move (profile);
+        else
+            targetToneProfile = std::move (profile);
+    }
+
+    return true;
+}
+
+bool AudioPluginAudioProcessor::hasToneMatchProfile (
+    tonematch::CaptureRole role) const
+{
+    const juce::ScopedLock lock (toneMatchDataLock);
+
+    return role == tonematch::CaptureRole::source
+        ? sourceToneProfile.isValid()
+        : targetToneProfile.isValid();
+}
+
+tonematch::ToneAnalysisProfile
+AudioPluginAudioProcessor::getToneMatchProfileCopy (
+    tonematch::CaptureRole role) const
+{
+    const juce::ScopedLock lock (toneMatchDataLock);
+
+    return role == tonematch::CaptureRole::source
+        ? sourceToneProfile
+        : targetToneProfile;
 }
 
 //==============================================================================

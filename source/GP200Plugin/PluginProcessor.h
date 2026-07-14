@@ -9,6 +9,7 @@
 #include "TunerEngine.h"
 
 #include "ToneMatch/ToneMatchCapture.h"
+#include "ToneMatch/ToneAnalysis.h"
 
 class AudioPluginAudioProcessor final : public juce::AudioProcessor
 {
@@ -83,6 +84,17 @@ tonematch::CaptureState getToneMatchCaptureState() const noexcept;
 double getToneMatchCapturedDurationSeconds() const noexcept;
 float getToneMatchCapturePeakLinear() const noexcept;
 
+bool hasToneMatchCapture (tonematch::CaptureRole role) const;
+tonematch::ToneCaptureData getToneMatchCaptureCopy (
+    tonematch::CaptureRole role) const;
+void storeToneMatchCapture (tonematch::ToneCaptureData capture);
+void clearToneMatchCapture (tonematch::CaptureRole role);
+
+bool analyseToneMatchCapture (tonematch::CaptureRole role);
+bool hasToneMatchProfile (tonematch::CaptureRole role) const;
+tonematch::ToneAnalysisProfile getToneMatchProfileCopy (
+    tonematch::CaptureRole role) const;
+
   private:
     static bool isUsefulPresetName (const juce::String& presetName);
 	
@@ -107,6 +119,14 @@ float getToneMatchCapturePeakLinear() const noexcept;
     juce::String savedGP200PresetName{"unknown"};
 
     std::array<GP200PresetSnapshot, compareSnapshotCount> savedGP200PresetSnapshots;
+	
+	mutable juce::CriticalSection toneMatchDataLock;
+
+tonematch::ToneCaptureData sourceToneCapture;
+tonematch::ToneCaptureData targetToneCapture;
+
+tonematch::ToneAnalysisProfile sourceToneProfile;
+tonematch::ToneAnalysisProfile targetToneProfile;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioPluginAudioProcessor)
 };
