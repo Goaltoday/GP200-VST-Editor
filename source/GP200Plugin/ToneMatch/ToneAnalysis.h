@@ -26,6 +26,21 @@ class ToneAnalysis
 
         // Evita logaritmos de cero.
         double powerFloor{1.0e-20};
+
+        /*
+            Número de grupos intercalados usados por median-of-means.
+
+            Debe ser impar para que la mediana sea inequívoca.
+            Once grupos ofrece buena robustez sin aumentar demasiado
+            el coste de memoria.
+        */
+        int robustGroupCount{11};
+
+        /*
+            Dispersión robusta en dB que reduce aproximadamente
+            a la mitad la confianza de estabilidad.
+        */
+        double confidenceReferenceDeviationDb{3.0};
     };
 
     ToneAnalysisProfile analyse (

@@ -12,6 +12,7 @@ namespace tonematch
 namespace
 {
 constexpr double negativeInfinityDb = -160.0;
+constexpr double madToSigma = 1.4826;
 
 double linearPowerToDb (
     double power,
@@ -64,6 +65,45 @@ double clamp01 (double value) noexcept
 {
     return juce::jlimit (0.0, 1.0, value);
 }
+
+double calculateMedian (
+    std::vector<double>& values)
+{
+    if (values.empty())
+        return 0.0;
+
+    const auto middle =
+        values.begin()
+        + static_cast<std::ptrdiff_t> (
+            values.size() / 2);
+
+    std::nth_element (
+        values.begin(),
+        middle,
+        values.end());
+
+    return *middle;
+}
+
+double calculateMedianAbsoluteDeviation (
+    const std::vector<double>& values,
+    double median)
+{
+    if (values.empty())
+        return 0.0;
+
+    std::vector<double> absoluteDeviations;
+    absoluteDeviations.reserve (values.size());
+
+    for (const auto value : values)
+    {
+        absoluteDeviations.push_back (
+            std::abs (value - median));
+    }
+
+    return calculateMedian (
+        absoluteDeviations);
+}
 }
 
 bool ToneAnalysis::validateOptions (
@@ -106,6 +146,22 @@ bool ToneAnalysis::validateOptions (
     {
         errorMessage =
             "Power floor must be greater than zero";
+        return false;
+    }
+
+    if (options.robustGroupCount < 3 ||
+        options.robustGroupCount > 31 ||
+        (options.robustGroupCount % 2) == 0)
+    {
+        errorMessage =
+            "Robust group count must be an odd number between 3 and 31";
+        return false;
+    }
+
+    if (options.confidenceReferenceDeviationDb <= 0.0)
+    {
+        errorMessage =
+            "Confidence reference deviation must be greater than zero";
         return false;
     }
 
@@ -199,16 +255,30 @@ ToneAnalysisProfile ToneAnalysis::analyse (
         static_cast<std::size_t> (fftSize * 2),
         0.0f);
 
-    std::vector<double> meanPower (
-        static_cast<std::size_t> (spectrumBinCount),
-        0.0);
+    const auto groupCount =
+        static_cast<std::size_t> (
+            options.robustGroupCount);
 
-    std::vector<double> powerM2 (
-        static_cast<std::size_t> (spectrumBinCount),
-        0.0);
+    /*
+        Cada grupo acumula potencia lineal.
 
-    std::vector<std::uint64_t> binFrameCount (
-        static_cast<std::size_t> (spectrumBinCount),
+        Las ventanas se asignan de forma intercalada:
+        frame 0 -> grupo 0
+        frame 1 -> grupo 1
+        ...
+        frame N -> grupo N % groupCount
+
+        Esto reparte las distintas partes de la interpretación
+        entre todos los grupos.
+    */
+    std::vector<std::vector<double>> groupSpectrumSums (
+        groupCount,
+        std::vector<double> (
+            static_cast<std::size_t> (spectrumBinCount),
+            0.0));
+
+    std::vector<std::uint64_t> groupFrameCounts (
+        groupCount,
         0);
 
     const auto* source =
@@ -285,6 +355,15 @@ ToneAnalysisProfile ToneAnalysis::analyse (
             fftBuffer.data(),
             true);
 
+        const auto groupIndex =
+            static_cast<std::size_t> (
+                acceptedFrames %
+                static_cast<std::uint64_t> (
+                    groupCount));
+
+        auto& groupSpectrum =
+            groupSpectrumSums[groupIndex];
+
         for (int bin = 0;
              bin < spectrumBinCount;
              ++bin)
@@ -308,27 +387,12 @@ ToneAnalysisProfile ToneAnalysis::analyse (
             const auto power =
                 magnitude * magnitude;
 
-            auto& count =
-                binFrameCount[
-                    static_cast<std::size_t> (bin)];
-
-            auto& mean =
-                meanPower[
-                    static_cast<std::size_t> (bin)];
-
-            auto& m2 =
-                powerM2[
-                    static_cast<std::size_t> (bin)];
-
-            ++count;
-
-            const auto delta = power - mean;
-            mean += delta / static_cast<double> (count);
-
-            const auto deltaAfterMean = power - mean;
-            m2 += delta * deltaAfterMean;
+            groupSpectrum[
+                static_cast<std::size_t> (bin)]
+                += power;
         }
 
+        ++groupFrameCounts[groupIndex];
         ++acceptedFrames;
 
         // El tiempo útil se calcula con hopSize para no
@@ -351,21 +415,43 @@ ToneAnalysisProfile ToneAnalysis::analyse (
         return profile;
     }
 
-    profile.frequencyHz.reserve (
-        static_cast<std::size_t> (spectrumBinCount));
+    const auto activeGroupCount =
+        static_cast<std::size_t> (
+            std::count_if (
+                groupFrameCounts.begin(),
+                groupFrameCounts.end(),
+                [] (std::uint64_t count)
+                {
+                    return count > 0;
+                }));
 
-    profile.spectrumDb.reserve (
-        static_cast<std::size_t> (spectrumBinCount));
+    if (activeGroupCount == 0)
+    {
+        profile.warning =
+            "No robust spectrum groups were created";
 
-    profile.confidence.reserve (
-        static_cast<std::size_t> (spectrumBinCount));
+        return profile;
+    }
 
-    profile.variance.reserve (
-        static_cast<std::size_t> (spectrumBinCount));
+    std::vector<double> robustSpectrumDb (
+        static_cast<std::size_t> (spectrumBinCount),
+        negativeInfinityDb);
 
-    double strongestPower = options.powerFloor;
+    std::vector<double> robustDeviationDb (
+        static_cast<std::size_t> (spectrumBinCount),
+        0.0);
 
-    for (int bin = 0; bin < spectrumBinCount; ++bin)
+    /*
+        Robust Welch por bin:
+
+        1. Cada grupo produce su media de potencia lineal.
+        2. La media de cada grupo se convierte a dB.
+        3. Se toma la mediana de las medias en dB.
+        4. La dispersión se estima con MAD, no con varianza clásica.
+    */
+    for (int bin = 0;
+         bin < spectrumBinCount;
+         ++bin)
     {
         const auto frequency =
             static_cast<double> (bin) *
@@ -378,16 +464,93 @@ ToneAnalysisProfile ToneAnalysis::analyse (
             continue;
         }
 
-        strongestPower = std::max (
-            strongestPower,
-            meanPower[
-                static_cast<std::size_t> (bin)]);
+        std::vector<double> groupMeans;
+        groupMeans.reserve (activeGroupCount);
+
+        const auto binIndex =
+            static_cast<std::size_t> (bin);
+
+        for (std::size_t group = 0;
+             group < groupCount;
+             ++group)
+        {
+            const auto frameCount =
+                groupFrameCounts[group];
+
+            if (frameCount == 0)
+                continue;
+
+            const auto meanPower =
+                groupSpectrumSums[group][binIndex]
+                / static_cast<double> (frameCount);
+
+            groupMeans.push_back (
+                linearPowerToDb (
+                    meanPower,
+                    options.powerFloor));
+        }
+
+        auto valuesForMedian = groupMeans;
+
+        const auto medianDb =
+            calculateMedian (
+                valuesForMedian);
+
+        const auto madDb =
+            calculateMedianAbsoluteDeviation (
+                groupMeans,
+                medianDb);
+
+        robustSpectrumDb[binIndex] =
+            medianDb;
+
+        robustDeviationDb[binIndex] =
+            madToSigma * madDb;
     }
+
+    double strongestSpectrumDb =
+        negativeInfinityDb;
+
+    for (int bin = 0;
+         bin < spectrumBinCount;
+         ++bin)
+    {
+        const auto frequency =
+            static_cast<double> (bin) *
+            sampleRate /
+            static_cast<double> (fftSize);
+
+        if (frequency < minimumFrequency ||
+            frequency > maximumFrequency)
+        {
+            continue;
+        }
+
+        strongestSpectrumDb =
+            std::max (
+                strongestSpectrumDb,
+                robustSpectrumDb[
+                    static_cast<std::size_t> (bin)]);
+    }
+
+    profile.frequencyHz.reserve (
+        static_cast<std::size_t> (spectrumBinCount));
+
+    profile.spectrumDb.reserve (
+        static_cast<std::size_t> (spectrumBinCount));
+
+    profile.confidence.reserve (
+        static_cast<std::size_t> (spectrumBinCount));
+
+    profile.variance.reserve (
+        static_cast<std::size_t> (spectrumBinCount));
 
     std::size_t confidentBinCount = 0;
     std::size_t includedBinCount = 0;
 
-    for (int bin = 0; bin < spectrumBinCount; ++bin)
+    for (int bin = 0;
+         bin < spectrumBinCount;
+         ++bin)
     {
         const auto frequency =
             static_cast<double> (bin) *
@@ -403,72 +566,66 @@ ToneAnalysisProfile ToneAnalysis::analyse (
         const auto index =
             static_cast<std::size_t> (bin);
 
-        const auto count = binFrameCount[index];
-        const auto averagePower =
-            std::max (
-                meanPower[index],
-                options.powerFloor);
-
-        const auto variance =
-            count > 1
-                ? powerM2[index] /
-                    static_cast<double> (count - 1)
-                : 0.0;
-
         const auto spectrumDb =
-            linearPowerToDb (
-                averagePower,
-                options.powerFloor);
+            robustSpectrumDb[index];
 
-        const auto relativePower =
-            averagePower /
-            std::max (
-                strongestPower,
-                options.powerFloor);
+        const auto deviationDb =
+            robustDeviationDb[index];
 
         /*
-            Confianza inicial:
+            Confianza robusta:
 
-            - aumenta con el número de ventanas;
-            - aumenta con la energía relativa;
-            - disminuye si la potencia es muy inestable.
-
-            Es deliberadamente conservadora. Más adelante
-            podremos sustituir esta fórmula sin cambiar el
-            formato ToneAnalysisProfile.
+            - aumenta con el número total de ventanas;
+            - aumenta con la energía relativa del bin;
+            - disminuye cuando los grupos no son consistentes;
+            - aumenta cuando hay suficientes grupos activos.
         */
         const auto frameConfidence =
             clamp01 (
-                static_cast<double> (count) / 32.0);
+                static_cast<double> (
+                    acceptedFrames) /
+                32.0);
+
+        const auto groupConfidence =
+            clamp01 (
+                static_cast<double> (
+                    activeGroupCount) /
+                static_cast<double> (
+                    options.robustGroupCount));
 
         const auto energyConfidence =
             clamp01 (
-                (linearPowerToDb (
-                     relativePower,
-                     options.powerFloor) +
-                 60.0) /
+                (spectrumDb
+                 - strongestSpectrumDb
+                 + 60.0) /
                 60.0);
-
-        const auto normalizedVariance =
-            variance /
-            std::max (
-                averagePower * averagePower,
-                options.powerFloor);
 
         const auto stabilityConfidence =
             1.0 /
-            (1.0 + normalizedVariance);
+            (1.0
+             + deviationDb /
+                 options.confidenceReferenceDeviationDb);
 
         const auto confidence =
             clamp01 (
                 frameConfidence *
+                groupConfidence *
                 energyConfidence *
                 stabilityConfidence);
 
-        profile.frequencyHz.push_back (frequency);
-        profile.spectrumDb.push_back (spectrumDb);
-        profile.confidence.push_back (confidence);
-        profile.variance.push_back (variance);
+        profile.frequencyHz.push_back (
+            frequency);
+
+        profile.spectrumDb.push_back (
+            spectrumDb);
+
+        profile.confidence.push_back (
+            confidence);
+
+        // El campo se conserva por compatibilidad.
+        // Ahora representa dispersión robusta en dB².
+        profile.variance.push_back (
+            deviationDb * deviationDb);
 
         ++includedBinCount;
 
@@ -479,8 +636,10 @@ ToneAnalysisProfile ToneAnalysis::analyse (
     if (includedBinCount > 0)
     {
         profile.spectralCoverage =
-            static_cast<double> (confidentBinCount) /
-            static_cast<double> (includedBinCount);
+            static_cast<double> (
+                confidentBinCount) /
+            static_cast<double> (
+                includedBinCount);
     }
 
     if (rejectedClippedFrames > 0)
@@ -492,6 +651,11 @@ ToneAnalysisProfile ToneAnalysis::analyse (
     {
         profile.warning =
             "The useful capture is very short";
+    }
+    else if (activeGroupCount < 3)
+    {
+        profile.warning =
+            "Too few groups for a robust spectrum estimate";
     }
     else if (profile.spectralCoverage < 0.35)
     {
