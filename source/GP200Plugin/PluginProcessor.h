@@ -11,6 +11,7 @@
 #include "ToneMatch/ToneMatchCapture.h"
 #include "ToneMatch/ToneAnalysis.h"
 #include "ToneMatch/ToneMatchComparison.h"
+#include "ToneMatch/SolverV1.h"
 
 class AudioPluginAudioProcessor final : public juce::AudioProcessor
 {
@@ -106,6 +107,14 @@ getToneMatchComparisonCopy() const;
 
 void clearToneMatchComparison();
 
+bool generateToneMatchIR();
+bool hasToneMatchResult() const;
+tonematch::ToneMatchResult getToneMatchResultCopy() const;
+void clearToneMatchResult();
+bool saveToneMatchIRToFile (
+    const juce::File& file,
+    juce::String& errorMessage) const;
+
   private:
     static bool isUsefulPresetName (const juce::String& presetName);
 	
@@ -139,6 +148,7 @@ tonematch::ToneCaptureData targetToneCapture;
 tonematch::ToneAnalysisProfile sourceToneProfile;
 tonematch::ToneAnalysisProfile targetToneProfile;
 tonematch::ToneMatchComparisonResult toneMatchComparison;
+tonematch::ToneMatchResult toneMatchResult;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AudioPluginAudioProcessor)
 };

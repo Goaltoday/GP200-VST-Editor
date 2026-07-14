@@ -13,15 +13,22 @@ class ToneMatchPanel final : public juce::Component,
     void paint (juce::Graphics& g) override;
     void resized() override;
 
+    void setCloseCallback (std::function<void()> callback)
+    {
+        closeRequested = std::move (callback);
+    }
+
   private:
-  ToneMatchCurveComponent matchCurveComponent;
     void timerCallback() override;
 
     void handleSourceCapture();
     void handleTargetCapture();
-
     void startCapture (tonematch::CaptureRole role);
     void stopCapture();
+
+    void analyseCaptures();
+    void generateIR();
+    void saveIR();
 
     void updateControls();
     void updateCaptureLabels();
@@ -31,30 +38,27 @@ class ToneMatchPanel final : public juce::Component,
 
     AudioPluginAudioProcessor& processorRef;
 
+    ToneMatchCurveComponent matchCurveComponent;
+
     juce::TextButton sourceCaptureButton{"Capture Source"};
     juce::TextButton sourceClearButton{"Clear"};
 
-    juce::TextButton targetCaptureButton{"Capture GP-200"};
+    juce::TextButton targetCaptureButton{"Capture Target"};
     juce::TextButton targetClearButton{"Clear"};
 
     juce::TextButton analyseButton{"Analyse"};
+    juce::TextButton generateIRButton{"Generate IR"};
+    juce::TextButton saveIRButton{"Save IR WAV"};
     juce::TextButton closeButton{"Close"};
 
     juce::Label sourceStatusLabel;
     juce::Label sourceDetailsLabel;
-
     juce::Label targetStatusLabel;
     juce::Label targetDetailsLabel;
-
     juce::Label globalStatusLabel;
 
+    std::unique_ptr<juce::FileChooser> fileChooser;
     std::function<void()> closeRequested;
-
-  public:
-    void setCloseCallback (std::function<void()> callback)
-    {
-        closeRequested = std::move (callback);
-    }
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ToneMatchPanel)
 };

@@ -603,6 +603,7 @@ void AudioPluginAudioProcessor::storeToneMatchCapture (
         targetToneProfile = {};
     }
 	toneMatchComparison = {};
+    toneMatchResult = {};
 	
 }
 
@@ -643,6 +644,7 @@ void AudioPluginAudioProcessor::clearToneMatchCapture (
         targetToneProfile = {};
     }
 	toneMatchComparison = {};
+    toneMatchResult = {};
 }
 
 bool AudioPluginAudioProcessor::analyseToneMatchCapture (
@@ -737,6 +739,8 @@ bool AudioPluginAudioProcessor::compareToneMatchProfiles()
 
         toneMatchComparison =
             std::move (comparison);
+
+        toneMatchResult = {};
     }
 
     return true;
@@ -765,6 +769,110 @@ void AudioPluginAudioProcessor::
     const juce::ScopedLock lock (toneMatchDataLock);
 
     toneMatchComparison = {};
+    toneMatchResult = {};
+}
+
+bool AudioPluginAudioProcessor::generateToneMatchIR()
+{
+    tonematch::ToneAnalysisProfile sourceCopy;
+    tonematch::ToneAnalysisProfile targetCopy;
+
+    {
+        const juce::ScopedLock lock (toneMatchDataLock);
+        sourceCopy = sourceToneProfile;
+        targetCopy = targetToneProfile;
+    }
+
+    if (!sourceCopy.isValid() || !targetCopy.isValid())
+        return false;
+
+    tonematch::SolverV1 solver;
+    tonematch::ToneMatchOptions options;
+
+    auto result = solver.solve (
+        sourceCopy,
+        targetCopy,
+        options);
+
+    if (!result.hasValidImpulseResponse())
+        return false;
+
+    {
+        const juce::ScopedLock lock (toneMatchDataLock);
+        toneMatchResult = std::move (result);
+    }
+
+    return true;
+}
+
+bool AudioPluginAudioProcessor::hasToneMatchResult() const
+{
+    const juce::ScopedLock lock (toneMatchDataLock);
+    return toneMatchResult.hasValidImpulseResponse();
+}
+
+tonematch::ToneMatchResult
+AudioPluginAudioProcessor::getToneMatchResultCopy() const
+{
+    const juce::ScopedLock lock (toneMatchDataLock);
+    return toneMatchResult;
+}
+
+void AudioPluginAudioProcessor::clearToneMatchResult()
+{
+    const juce::ScopedLock lock (toneMatchDataLock);
+    toneMatchResult = {};
+}
+
+bool AudioPluginAudioProcessor::saveToneMatchIRToFile (
+    const juce::File& file,
+    juce::String& errorMessage) const
+{
+    const auto result = getToneMatchResultCopy();
+
+    if (!result.hasValidImpulseResponse())
+    {
+        errorMessage = "No generated IR is available";
+        return false;
+    }
+
+    file.deleteFile();
+
+    auto outputStream = file.createOutputStream();
+
+    if (outputStream == nullptr || !outputStream->openedOk())
+    {
+        errorMessage = "Could not create the output WAV file";
+        return false;
+    }
+
+    juce::WavAudioFormat wavFormat;
+
+    std::unique_ptr<juce::AudioFormatWriter> writer (
+        wavFormat.createWriterFor (
+            outputStream.release(),
+            result.impulseResponseSampleRate,
+            1,
+            32,
+            {},
+            0));
+
+    if (writer == nullptr)
+    {
+        errorMessage = "Could not create the WAV writer";
+        return false;
+    }
+
+    if (!writer->writeFromAudioSampleBuffer (
+            result.impulseResponse,
+            0,
+            result.impulseResponse.getNumSamples()))
+    {
+        errorMessage = "Could not write the IR audio data";
+        return false;
+    }
+
+    return true;
 }
 
 //==============================================================================

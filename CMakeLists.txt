@@ -69,6 +69,8 @@ source/GP200Plugin/ToneMatch/ToneMatchComparison.cpp
 
 source/GP200Plugin/ToneMatch/ToneMatchCurveComponent.h
 source/GP200Plugin/ToneMatch/ToneMatchCurveComponent.cpp
+source/GP200Plugin/ToneMatch/SolverV1.h
+source/GP200Plugin/ToneMatch/SolverV1.cpp
 
 )
 
@@ -149,4 +151,6 @@ source/GP200Plugin/ToneMatch/ToneMatchComparison.cpp
 
 source/GP200Plugin/ToneMatch/ToneMatchCurveComponent.h
 source/GP200Plugin/ToneMatch/ToneMatchCurveComponent.cpp
+source/GP200Plugin/ToneMatch/SolverV1.h
+source/GP200Plugin/ToneMatch/SolverV1.cpp
 )
