@@ -324,6 +324,24 @@ ToneMatchResult SolverV1::solve (
         impulse[sample] = impulseComplex[
             static_cast<std::size_t> (sample)].real();
     }
+	
+	
+	// Ganancia global de salida para aproximar el nivel práctico
+// de una IR comercial. No cambia la forma tonal de la curva RAW.
+constexpr double outputGainDb = 12.0;
+
+const auto outputGain =
+    static_cast<float> (
+        std::pow (10.0, outputGainDb / 20.0));
+
+for (int sample = 0;
+     sample < options.outputLengthSamples;
+     ++sample)
+{
+    impulse[sample] *= outputGain;
+}
+	
+	
 
     result.impulseResponseSampleRate = options.outputSampleRate;
 
