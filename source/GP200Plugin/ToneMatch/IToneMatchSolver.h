@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ToneMatchTypes.h"
+#include "ToneMatchComparison.h"
 
 namespace tonematch
 {
@@ -13,8 +13,7 @@ class IToneMatchSolver
     virtual juce::String getDescription() const = 0;
 
     virtual ToneMatchResult solve (
-        const ToneAnalysisProfile& source,
-        const ToneAnalysisProfile& target,
+        const ToneMatchComparisonResult& comparison,
         const ToneMatchOptions& options) = 0;
 };
 }

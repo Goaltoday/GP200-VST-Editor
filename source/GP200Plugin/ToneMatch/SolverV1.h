@@ -11,8 +11,7 @@ class SolverV1 final : public IToneMatchSolver
     juce::String getDescription() const override;
 
     ToneMatchResult solve (
-        const ToneAnalysisProfile& source,
-        const ToneAnalysisProfile& target,
+        const ToneMatchComparisonResult& comparison,
         const ToneMatchOptions& options) override;
 
   private:

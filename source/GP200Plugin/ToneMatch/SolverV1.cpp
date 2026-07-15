@@ -5,17 +5,15 @@
 #include <algorithm>
 #include <cmath>
 #include <complex>
-#include <limits>
-#include <numeric>
 #include <vector>
 
 namespace tonematch
 {
 namespace
 {
-constexpr int curvePointCount = 512;
 constexpr double minimumMagnitude = 1.0e-12;
 constexpr double ln10Over20 = 0.11512925464970229;
+constexpr double outputGainDb = 12.0;
 
 int nextPowerOfTwoOrder (int requiredSize)
 {
@@ -31,10 +29,6 @@ int nextPowerOfTwoOrder (int requiredSize)
     return order;
 }
 
-double clamp01 (double value) noexcept
-{
-    return juce::jlimit (0.0, 1.0, value);
-}
 }
 
 juce::String SolverV1::getName() const
@@ -144,8 +138,7 @@ double SolverV1::interpolate (
 }
 
 ToneMatchResult SolverV1::solve (
-    const ToneAnalysisProfile& source,
-    const ToneAnalysisProfile& target,
+    const ToneMatchComparisonResult& comparison,
     const ToneMatchOptions& options)
 {
     ToneMatchResult result;
@@ -158,77 +151,18 @@ ToneMatchResult SolverV1::solve (
         return result;
     }
 
-    if (!source.isValid())
+    if (!comparison.isValid())
     {
-        result.message = "SOURCE analysis profile is invalid";
+        result.message = "Tone-match comparison is invalid";
         return result;
     }
 
-    if (!target.isValid())
-    {
-        result.message = "TARGET analysis profile is invalid";
-        return result;
-    }
-
-    const auto nyquist = options.outputSampleRate * 0.5;
-    const auto maximumFrequency = std::min (options.maximumFrequencyHz, nyquist);
-    const auto fadeOutStart = std::min (options.correctionFadeOutStartHz, maximumFrequency);
-
-    const auto logMinimum = std::log (options.minimumFrequencyHz);
-    const auto logMaximum = std::log (maximumFrequency);
-
-    result.frequencyHz.reserve (curvePointCount);
-    result.rawCorrectionDb.reserve (curvePointCount);
-    result.smoothedCorrectionDb.reserve (curvePointCount);
-    result.confidence.reserve (curvePointCount);
-
-    for (int point = 0; point < curvePointCount; ++point)
-    {
-        const auto position =
-            static_cast<double> (point)
-            / static_cast<double> (curvePointCount - 1);
-
-        const auto frequency = std::exp (
-            logMinimum + position * (logMaximum - logMinimum));
-
-        const auto sourceDb = interpolate (
-            source.frequencyHz,
-            source.spectrumDb,
-            frequency);
-
-        const auto targetDb = interpolate (
-            target.frequencyHz,
-            target.spectrumDb,
-            frequency);
-
-        const auto sourceConfidence = interpolate (
-            source.frequencyHz,
-            source.confidence,
-            frequency);
-
-        const auto targetConfidence = interpolate (
-            target.frequencyHz,
-            target.confidence,
-            frequency);
-
-        result.frequencyHz.push_back (frequency);
-        result.rawCorrectionDb.push_back (targetDb - sourceDb);
-        result.confidence.push_back (
-            clamp01 (std::min (sourceConfidence, targetConfidence)));
-    }
-
-    // Modo RAW al 100 %:
-    // La curva usada para sintetizar la IR es exactamente TARGET - SOURCE.
-    // No se aplica suavizado, ponderación por confianza, fade de agudos
-    // ni compensación global de nivel.
-    for (std::size_t index = 0;
-         index < result.frequencyHz.size();
-         ++index)
-    {
-        // RAW literal al 100 %: no se aplican límites de corte o realce.
-        result.smoothedCorrectionDb.push_back (
-            result.rawCorrectionDb[index]);
-    }
+    // La comparación ya contiene la única curva RAW canónica.
+    // El solver no vuelve a calcular TARGET - SOURCE.
+    result.frequencyHz = comparison.frequencyHz;
+    result.rawCorrectionDb = comparison.rawCorrectionDb;
+    result.smoothedCorrectionDb = comparison.rawCorrectionDb;
+    result.confidence = comparison.confidence;
 
     const auto fftOrder = nextPowerOfTwoOrder (
         options.outputLengthSamples * 2);
@@ -328,8 +262,6 @@ ToneMatchResult SolverV1::solve (
 	
 	// Ganancia global de salida para aproximar el nivel práctico
 // de una IR comercial. No cambia la forma tonal de la curva RAW.
-constexpr double outputGainDb = 12.0;
-
 const auto outputGain =
     static_cast<float> (
         std::pow (10.0, outputGainDb / 20.0));
@@ -411,8 +343,6 @@ const auto raw = result.rawCorrectionDb[index];
 // La IR final incluye +12 dB de ganancia práctica de salida.
 // Para calcular el error tonal, eliminamos ese desplazamiento
 // global y comparamos únicamente la forma del filtro.
-constexpr double outputGainDb = 12.0;
-
 const auto achievedForErrorDb =
     achievedDb - outputGainDb;
 

@@ -803,24 +803,21 @@ void AudioPluginAudioProcessor::
 
 bool AudioPluginAudioProcessor::generateToneMatchIR()
 {
-    tonematch::ToneAnalysisProfile sourceCopy;
-    tonematch::ToneAnalysisProfile targetCopy;
+    tonematch::ToneMatchComparisonResult comparisonCopy;
 
     {
         const juce::ScopedLock lock (toneMatchDataLock);
-        sourceCopy = sourceToneProfile;
-        targetCopy = targetToneProfile;
+        comparisonCopy = toneMatchComparison;
     }
 
-    if (!sourceCopy.isValid() || !targetCopy.isValid())
+    if (!comparisonCopy.isValid())
         return false;
 
     tonematch::SolverV1 solver;
     tonematch::ToneMatchOptions options;
 
     auto result = solver.solve (
-        sourceCopy,
-        targetCopy,
+        comparisonCopy,
         options);
 
     if (!result.hasValidImpulseResponse())
