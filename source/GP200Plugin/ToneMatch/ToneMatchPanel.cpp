@@ -301,13 +301,13 @@ void ToneMatchPanel::paint (juce::Graphics& g)
         20,
         82,
         getWidth() - 40,
-        118);
+        78);
 
     const auto targetBox = juce::Rectangle<int> (
         20,
-        214,
+        170,
         getWidth() - 40,
-        118);
+        78);
 
     g.setColour (panelColour);
     g.fillRoundedRectangle (sourceBox.toFloat(), 6.0f);
@@ -342,56 +342,67 @@ void ToneMatchPanel::resized()
     const int right = getWidth() - 34;
     const int buttonWidth = 150;
     const int clearWidth = 70;
+    const int textWidth =
+        right - left - buttonWidth - clearWidth - 20;
 
-    matchCurveComponent.setBounds (
-        20,
-        382,
-        getWidth() - 40,
-        getHeight() - 462);
-
+    // Las zonas de captura se mantienen compactas para dedicar
+    // la mayor parte de la ventana a la gráfica de comparación.
     sourceStatusLabel.setBounds (
         left,
-        116,
-        right - left - buttonWidth - clearWidth - 20,
-        24);
+        108,
+        textWidth,
+        20);
     sourceDetailsLabel.setBounds (
         left,
-        142,
-        right - left - buttonWidth - clearWidth - 20,
-        24);
+        130,
+        textWidth,
+        18);
     sourceCaptureButton.setBounds (
         right - buttonWidth - clearWidth - 10,
-        126,
+        112,
         buttonWidth,
-        34);
+        30);
     sourceClearButton.setBounds (
         right - clearWidth,
-        126,
+        112,
         clearWidth,
-        34);
+        30);
 
     targetStatusLabel.setBounds (
         left,
-        248,
-        right - left - buttonWidth - clearWidth - 20,
-        24);
+        196,
+        textWidth,
+        20);
     targetDetailsLabel.setBounds (
         left,
-        274,
-        right - left - buttonWidth - clearWidth - 20,
-        24);
+        218,
+        textWidth,
+        18);
     targetCaptureButton.setBounds (
         right - buttonWidth - clearWidth - 10,
-        258,
+        200,
         buttonWidth,
-        34);
+        30);
     targetClearButton.setBounds (
         right - clearWidth,
-        258,
+        200,
         clearWidth,
-        34);
+        30);
 
-    globalStatusLabel.setBounds (20, 346, getWidth() - 40, 26);
+    globalStatusLabel.setBounds (
+        20,
+        256,
+        getWidth() - 40,
+        24);
+
+    const int graphTop = 288;
+    const int graphBottom = getHeight() - 72;
+
+    matchCurveComponent.setBounds (
+        20,
+        graphTop,
+        getWidth() - 40,
+        juce::jmax (120, graphBottom - graphTop));
 
     const auto totalWidth = 4 * 140 + 3 * 10;
     const auto startX = (getWidth() - totalWidth) / 2;
