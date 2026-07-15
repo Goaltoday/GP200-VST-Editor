@@ -9,8 +9,8 @@ class ToneAnalysis
   public:
     struct Options
     {
-        // 2^13 = 8192 muestras.
-        int fftOrder{13};
+        
+        int fftOrder{14};
 
         // 75 % de solapamiento.
         double overlapRatio{0.75};

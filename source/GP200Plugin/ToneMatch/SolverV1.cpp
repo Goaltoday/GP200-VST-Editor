@@ -399,15 +399,25 @@ for (int sample = 0;
          ++index)
     {
         const auto achievedDb = interpolate (
-            measuredFrequency,
-            measuredDb,
-            result.frequencyHz[index]);
+    measuredFrequency,
+    measuredDb,
+    result.frequencyHz[index]);
 
-        result.achievedCorrectionDb.push_back (achievedDb);
+result.achievedCorrectionDb.push_back (achievedDb);
 
-        const auto confidence = result.confidence[index];
-        const auto raw = result.rawCorrectionDb[index];
-        const auto residual = raw - achievedDb;
+const auto confidence = result.confidence[index];
+const auto raw = result.rawCorrectionDb[index];
+
+// La IR final incluye +12 dB de ganancia práctica de salida.
+// Para calcular el error tonal, eliminamos ese desplazamiento
+// global y comparamos únicamente la forma del filtro.
+constexpr double outputGainDb = 12.0;
+
+const auto achievedForErrorDb =
+    achievedDb - outputGainDb;
+
+const auto residual =
+    raw - achievedForErrorDb;
 
         weightedErrorBefore += raw * raw * confidence;
         weightedErrorAfter += residual * residual * confidence;
