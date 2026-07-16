@@ -60,6 +60,7 @@ class EffectBlockComponent final : public juce::Component
     };
 
     void rebuildParameterControls ();
+    void scheduleDelaySyncControlRebuild ();
     void rebuildEffectChoices ();
     void updateParameterControlsVisibility ();
     void updateEffectDescriptionLabel ();
@@ -89,6 +90,7 @@ class EffectBlockComponent final : public juce::Component
 
     bool expanded{false};
     std::vector<ParameterControl> parameterControls;
+    bool delaySyncControlRebuildPending{false};
 
     bool dragCandidate{false};
     bool draggingForReorder{false};

@@ -485,14 +485,10 @@ void EffectBlockComponent::setParameterValueForDisplay (int paramIndex, float va
 
         if (paramIndex == syncParamIndex)
         {
-            rebuildParameterControls ();
-            updateParameterControlsVisibility ();
-            resized ();
-            repaint ();
-
-            if (onHeightChanged)
-                onHeightChanged ();
-
+            // The MIDI echo for Sync can arrive while the Sync slider is still
+            // inside juce::Slider::mouseUp(). Rebuilding here would destroy that
+            // slider (and its popup) before JUCE finishes the mouse event.
+            scheduleDelaySyncControlRebuild ();
             return;
         }
     }
@@ -574,6 +570,32 @@ float getParamStep (const gp200::GP200EffectParamInfo& param, float minimum, flo
     return (maximum - minimum) <= 10.0f ? 0.1f : 1.0f;
 }
 } // namespace
+
+
+void EffectBlockComponent::scheduleDelaySyncControlRebuild ()
+{
+    if (delaySyncControlRebuildPending)
+        return;
+
+    delaySyncControlRebuildPending = true;
+
+    juce::Component::SafePointer<EffectBlockComponent> safeThis (this);
+
+    juce::MessageManager::callAsync ([safeThis]
+    {
+        if (safeThis == nullptr)
+            return;
+
+        safeThis->delaySyncControlRebuildPending = false;
+        safeThis->rebuildParameterControls ();
+        safeThis->updateParameterControlsVisibility ();
+        safeThis->resized ();
+        safeThis->repaint ();
+
+        if (safeThis->onHeightChanged)
+            safeThis->onHeightChanged ();
+    });
+}
 
 void EffectBlockComponent::rebuildParameterControls ()
 {
