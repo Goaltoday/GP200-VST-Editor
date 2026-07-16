@@ -73,6 +73,21 @@ juce::String cleanAssignmentDisplayText (const juce::String& text)
 }
 
 static constexpr int delaySyncTimeLabelCount = 11;
+static constexpr juce::uint32 hammyEffectId = 0x01000049u;
+static constexpr int hammyRangeLabelCount = 6;
+
+juce::String getHammyRangeLabel (int index)
+{
+    static const char* labels[hammyRangeLabelCount] = {
+        "-2 Oct", "-1 Oct", "+1 Oct", "+2 Oct", "+/-1 Oct", "+/-2 Oct"};
+
+    return labels[juce::jlimit (0, hammyRangeLabelCount - 1, index)];
+}
+
+juce::String getHammyHarmonyLabel (int index)
+{
+    return index <= 0 ? "OFF" : "ON";
+}
 
 juce::String getDelaySyncTimeLabel (int index)
 {
@@ -500,6 +515,13 @@ void EffectBlockComponent::setParameterValueForDisplay (int paramIndex, float va
             if (std::abs (control.slider->getValue () - static_cast<double> (value)) > 0.0001)
                 control.slider->setValue (value, juce::dontSendNotification);
 
+            // A MIDI echo can return the same numeric value already held by the
+            // slider. In that case setValue() is intentionally skipped, but the
+            // text box may still contain JUCE's temporary numeric edit text
+            // (notably "0"). Refresh Hammy's labelled values explicitly.
+            if (effect.effectId == hammyEffectId && (paramIndex == 0 || paramIndex == 1))
+                control.slider->updateText ();
+
             break;
         }
     }
@@ -655,20 +677,42 @@ void EffectBlockComponent::rebuildParameterControls ()
         }
         else
         {
-            const auto minimum = getParamMinimum (param);
-            const auto maximum = getParamMaximum (param);
-            const auto step = getParamStep (param, minimum, maximum);
+            const auto isHammy = effect.effectId == hammyEffectId;
 
-            control.slider->setRange (minimum, maximum, step);
-            control.slider->setDoubleClickReturnValue (true, param.defaultValue);
+            if (isHammy && param.idx == 0)
+            {
+                control.slider->setRange (0.0, 5.0, 1.0);
+                control.slider->setDoubleClickReturnValue (true, 2.0);
+                control.slider->setNumDecimalPlacesToDisplay (0);
+                control.slider->textFromValueFunction = [] (double value)
+                { return getHammyRangeLabel (juce::roundToInt (value)); };
+            }
+            else if (isHammy && param.idx == 1)
+            {
+                control.slider->setRange (0.0, 1.0, 1.0);
+                control.slider->setDoubleClickReturnValue (true, 0.0);
+                control.slider->setNumDecimalPlacesToDisplay (0);
+                control.slider->textFromValueFunction = [] (double value)
+                { return getHammyHarmonyLabel (juce::roundToInt (value)); };
+            }
+            else
+            {
+                const auto minimum = getParamMinimum (param);
+                const auto maximum = getParamMaximum (param);
+                const auto step = getParamStep (param, minimum, maximum);
+
+                control.slider->setRange (minimum, maximum, step);
+                control.slider->setDoubleClickReturnValue (true, param.defaultValue);
+
+                if (isDelayBlock && isDelayTimeParameter (param))
+                {
+                    control.slider->textFromValueFunction = [] (double value)
+                    { return juce::String (static_cast<int> (std::round (value))) + " ms"; };
+                }
+            }
+
             control.slider->setValue (effect.params[static_cast<std::size_t> (param.idx)],
                                       juce::dontSendNotification);
-
-            if (isDelayBlock && isDelayTimeParameter (param))
-            {
-                control.slider->textFromValueFunction = [] (double value)
-                { return juce::String (static_cast<int> (std::round (value))) + " ms"; };
-            }
         }
 
         auto* slider = control.slider.get ();
