@@ -68,6 +68,8 @@ juce::String getSelectedCompareSnapshotLabel () const;
     void syncPatchVolumeSliderFromPresetData (const juce::MemoryBlock& presetData,
                                               const juce::String& presetDataSignature);
 
+    void loadPreviousBank ();
+    void loadNextBank ();
     void loadPreviousPreset ();
     void loadNextPreset ();
     void loadPresetRelative (int delta);
@@ -138,8 +140,10 @@ double lastInitialPresetRequestMs{0.0};
     int presetRestoreSlot{-1};
     juce::String presetRestoreName;
 
+    juce::TextButton previousBankButton{"BANK -"};
     juce::TextButton previousPresetButton{"<"};
-	juce::TextButton nextPresetButton{">"};
+    juce::TextButton nextPresetButton{">"};
+    juce::TextButton nextBankButton{"BANK +"};
 	juce::TextButton compareAButton{"A"};
 juce::TextButton compareBButton{"B"};
 juce::TextButton savePresetButton{"Save to DAW"};

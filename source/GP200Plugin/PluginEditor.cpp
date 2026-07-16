@@ -27,8 +27,10 @@ AudioPluginAudioProcessorEditor::AudioPluginAudioProcessorEditor (
 {
     setSize (960, 760);
 
+    addAndMakeVisible (previousBankButton);
     addAndMakeVisible (previousPresetButton);
     addAndMakeVisible (nextPresetButton);
+    addAndMakeVisible (nextBankButton);
 
     addAndMakeVisible (compareAButton);
 addAndMakeVisible (compareBButton);
@@ -68,8 +70,10 @@ tunerDisplay.setVisible(false);
         button.setColour (juce::TextButton::textColourOnId, panelOutlineColour);
     };
 
+    setupButton (previousBankButton);
     setupButton (previousPresetButton);
     setupButton (nextPresetButton);
+    setupButton (nextBankButton);
 	
 	setupButton (compareAButton);
 setupButton (compareBButton);
@@ -249,9 +253,11 @@ storePresetButton.setColour (
         }
     };
 
+    previousBankButton.onClick = [this] { loadPreviousBank (); };
     previousPresetButton.onClick = [this] { loadPreviousPreset (); };
 
     nextPresetButton.onClick = [this] { loadNextPreset (); };
+    nextBankButton.onClick = [this] { loadNextBank (); };
 	
 	compareAButton.onClick = [this]
 {
@@ -350,7 +356,7 @@ void AudioPluginAudioProcessorEditor::paint (juce::Graphics& g)
     {
         18,
         52,
-        372,
+        400,
         124
     };
 
@@ -388,9 +394,9 @@ void AudioPluginAudioProcessorEditor::paint (juce::Graphics& g)
 
     g.drawText (
         slotText,
-        currentPresetBox.getX() + 54,
+        currentPresetBox.getX() + 104,
         currentPresetBox.getY() + 40,
-        66,
+        50,
         34,
         juce::Justification::centredLeft
     );
@@ -532,20 +538,22 @@ void AudioPluginAudioProcessorEditor::resized ()
     // Current preset
     // ============================================================
 
-    previousPresetButton.setBounds (30, 92, 36, 36);
-    nextPresetButton.setBounds (342, 92, 36, 36);
-	
-	compareAButton.setBounds (96, 146, 30, 22);
-compareBButton.setBounds (132, 146, 30, 22);
+    previousBankButton.setBounds (30, 92, 50, 36);
+    previousPresetButton.setBounds (86, 92, 30, 36);
+    nextPresetButton.setBounds (314, 92, 30, 36);
+    nextBankButton.setBounds (350, 92, 50, 36);
 
-    presetNameEditor.setBounds (138, 93, 194, 34);
+    compareAButton.setBounds (96, 146, 30, 22);
+    compareBButton.setBounds (132, 146, 30, 22);
+
+    presetNameEditor.setBounds (178, 93, 130, 34);
 
     // ============================================================
     // DAW / GP-200 actions
     // ============================================================
 
 const juce::Rectangle<int> actionsArea {
-    418, 54, 280, 114
+    428, 54, 270, 114
 };
 
 constexpr int horizontalGap = 10;
@@ -1843,6 +1851,19 @@ void AudioPluginAudioProcessorEditor::syncPatchVolumeSliderFromPresetData (
 }
 
 //==============================================================================
+void AudioPluginAudioProcessorEditor::loadPreviousBank ()
+{
+    // Cada banco del GP-200 contiene cuatro presets: A, B, C y D.
+    // Restar cuatro conserva la letra actual al cambiar de banco.
+    loadPresetRelative (-4);
+}
+
+void AudioPluginAudioProcessorEditor::loadNextBank ()
+{
+    // Sumar cuatro conserva la letra actual al cambiar de banco.
+    loadPresetRelative (4);
+}
+
 void AudioPluginAudioProcessorEditor::loadPreviousPreset ()
 {
     loadPresetRelative (-1);
