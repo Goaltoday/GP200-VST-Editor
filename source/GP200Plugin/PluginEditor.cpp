@@ -602,9 +602,9 @@ allBlocksOffButton.setBounds (170, 191, 120, 28);
 toneMatchButton.setBounds (708, 191, 130, 28);
 
 tunerDisplay.setBounds (
-    440,
+    418,
     189,
-    getWidth() - 470,
+    getWidth() - 448,
     32);
 
     // ============================================================
@@ -1627,6 +1627,17 @@ void AudioPluginAudioProcessorEditor::toggleTuner()
     processorRef.setTunerEnabled(tunerIsOn);
 
     tunerDisplay.setVisible(tunerIsOn);
+
+    // El afinador ocupa toda la zona de utilidades de la derecha.
+    // Ocultamos completamente los controles de IR mientras está activo.
+    const bool showIRControls = !tunerIsOn;
+    userIRSlotBox.setVisible(showIRControls);
+    importIRButton.setVisible(showIRControls);
+    toneMatchButton.setVisible(showIRControls);
+
+    if (tunerIsOn)
+        tunerDisplay.toFront(false);
+
     tunerDisplay.clearReading();
 
     if (hardwareTunerSent)
