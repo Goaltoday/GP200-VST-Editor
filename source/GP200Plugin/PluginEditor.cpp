@@ -187,7 +187,10 @@ storePresetButton.setColour (
     presetNameEditor.setReturnKeyStartsNewLine (false);
     presetNameEditor.setInputRestrictions (gp200::presetNameMaxLength);
     presetNameEditor.setSelectAllWhenFocused (true);
-    presetNameEditor.setFont (juce::Font (17.0f));
+    auto presetFont = juce::Font (16.0f, juce::Font::bold);
+presetFont.setHorizontalScale (0.88f);
+
+presetNameEditor.setFont (presetFont);
     presetNameEditor.setJustification (juce::Justification::centredLeft);
     presetNameEditor.setTextToShowWhenEmpty ("Preset name", mutedTextColour);
 
@@ -370,18 +373,6 @@ void AudioPluginAudioProcessorEditor::paint (juce::Graphics& g)
         1.25f
     );
 
-    g.setFont (juce::Font (12.0f, juce::Font::bold));
-    g.setColour (panelOutlineColour);
-
-    g.drawText (
-        "CURRENT PRESET",
-        currentPresetBox.getX() + 16,
-        currentPresetBox.getY() + 8,
-        currentPresetBox.getWidth() - 32,
-        22,
-        juce::Justification::centredLeft
-    );
-
     const auto currentSlot = midiConnection.getCurrentSlot();
 
     const auto slotText =
@@ -389,23 +380,23 @@ void AudioPluginAudioProcessorEditor::paint (juce::Graphics& g)
             ? formatSlotCompact (currentSlot)
             : "--";
 
-    g.setFont (juce::Font (18.0f));
+    // El slot se mantiene totalmente blanco y con un tamaño menor
+    // que el nombre para que ambos elementos queden equilibrados.
+    g.setFont (juce::Font (24.0f, juce::Font::bold));
     g.setColour (textColour);
 
     g.drawText (
         slotText,
         currentPresetBox.getX() + 104,
-        currentPresetBox.getY() + 40,
-        50,
-        34,
-        juce::Justification::centredLeft
+        currentPresetBox.getY() + 18,
+        56,
+        42,
+        juce::Justification::centred
     );
 
     // Divider between current and saved preset information.
-    g.setColour (juce::Colour (0xff4b4f51));
-
     g.drawHorizontalLine (
-        currentPresetBox.getY() + 84,
+        currentPresetBox.getY() + 76,
         static_cast<float> (currentPresetBox.getX() + 16),
         static_cast<float> (currentPresetBox.getRight() - 16)
     );
@@ -416,13 +407,13 @@ void AudioPluginAudioProcessorEditor::paint (juce::Graphics& g)
     g.drawText (
     "Snapshot:",
     currentPresetBox.getX() + 16,
-    currentPresetBox.getY() + 92,
+    currentPresetBox.getY() + 88,
     68,
-    22,
+    24,
     juce::Justification::centredLeft
 );
 
-    g.setFont (juce::Font (13.5f, juce::Font::bold));
+    g.setFont (juce::Font (14.5f, juce::Font::bold));
     g.setColour (textColour);
 
     auto savedPresetText = getSavedPresetCompactText();
@@ -433,9 +424,9 @@ void AudioPluginAudioProcessorEditor::paint (juce::Graphics& g)
     g.drawText (
     savedPresetText,
     currentPresetBox.getX() + 154,
-    currentPresetBox.getY() + 92,
+    currentPresetBox.getY() + 88,
     currentPresetBox.getWidth() - 170,
-    22,
+    24,
     juce::Justification::centredLeft
 );
 
@@ -538,15 +529,15 @@ void AudioPluginAudioProcessorEditor::resized ()
     // Current preset
     // ============================================================
 
-    previousBankButton.setBounds (30, 92, 50, 36);
-    previousPresetButton.setBounds (86, 92, 30, 36);
-    nextPresetButton.setBounds (314, 92, 30, 36);
-    nextBankButton.setBounds (350, 92, 50, 36);
+    previousBankButton.setBounds (30, 70, 50, 42);
+    previousPresetButton.setBounds (86, 70, 30, 42);
+    nextPresetButton.setBounds (314, 70, 30, 42);
+    nextBankButton.setBounds (350, 70, 50, 42);
 
-    compareAButton.setBounds (96, 146, 30, 22);
-    compareBButton.setBounds (132, 146, 30, 22);
+    compareAButton.setBounds (96, 142, 30, 24);
+    compareBButton.setBounds (132, 142, 30, 24);
 
-    presetNameEditor.setBounds (178, 93, 130, 34);
+    presetNameEditor.setBounds (176, 70, 132, 42);
 
     // ============================================================
     // DAW / GP-200 actions
@@ -1700,7 +1691,7 @@ void AudioPluginAudioProcessorEditor::toggleAllBlocksOff ()
 
         if (!captureCurrentBlockEnabledStates (currentStates))
         {
-            effectsStatusText = "FX OFF failed: no current preset data";
+            effectsStatusText = "FX  OFF failed: no current preset data";
             repaint ();
             return;
         }
