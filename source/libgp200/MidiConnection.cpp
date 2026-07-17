@@ -116,7 +116,8 @@ bool MidiConnection::startIRUpload (const juce::File& wavFile, int zeroBasedUser
         lastMessageText = irUploadStatusText;
         return false;
     }
-    if (irUploadPhase != IRUploadPhase::Idle)
+    if (irUploadPhase != IRUploadPhase::Idle ||
+        soundCloneUploadPhase != SoundCloneUploadPhase::Idle)
     {
         irUploadStatusText = "IR upload already in progress";
         lastMessageText = irUploadStatusText;
@@ -243,6 +244,144 @@ juce::String MidiConnection::getIRUploadStatusText () const
 {
     const juce::ScopedLock lock (stateLock);
     return irUploadStatusText;
+}
+
+
+
+bool MidiConnection::startSoundCloneUpload (const juce::File& cloFile, int globalSlot)
+{
+    const juce::ScopedLock lock (stateLock);
+
+    if (midiOutput == nullptr)
+    {
+        soundCloneUploadStatusText = "Sound Clone upload failed: MIDI output not open";
+        lastMessageText = soundCloneUploadStatusText;
+        return false;
+    }
+
+    if (soundCloneUploadPhase != SoundCloneUploadPhase::Idle ||
+        irUploadPhase != IRUploadPhase::Idle)
+    {
+        soundCloneUploadStatusText = "Sound Clone upload unavailable: another transfer is in progress";
+        lastMessageText = soundCloneUploadStatusText;
+        return false;
+    }
+
+    GP200SoundCloneUpload prepared;
+    const auto result = GP200SoundClone::buildUpload (cloFile, globalSlot, prepared);
+    if (result.failed ())
+    {
+        soundCloneUploadStatusText = "Sound Clone upload failed: " + result.getErrorMessage ();
+        lastMessageText = soundCloneUploadStatusText;
+        return false;
+    }
+
+    soundCloneUpload = std::move (prepared);
+    soundCloneUploadChunkIndex = 0;
+    midiOutput->sendMessageNow (soundCloneUpload.prepareMessage);
+    soundCloneUploadPhase = SoundCloneUploadPhase::WaitingAfterPrepare;
+    soundCloneUploadNextActionMs = juce::Time::getMillisecondCounterHiRes () + 200.0;
+    soundCloneUploadStatusText = "Sound Clone upload: preparing slot " + juce::String (globalSlot + 1);
+    lastMessageText = soundCloneUploadStatusText;
+    return true;
+}
+
+void MidiConnection::processSoundCloneUpload ()
+{
+    const juce::ScopedLock lock (stateLock);
+
+    if (soundCloneUploadPhase == SoundCloneUploadPhase::Idle || midiOutput == nullptr)
+        return;
+
+    const auto now = juce::Time::getMillisecondCounterHiRes ();
+    if (now < soundCloneUploadNextActionMs)
+        return;
+
+    if (soundCloneUploadPhase == SoundCloneUploadPhase::WaitingAfterPrepare ||
+        soundCloneUploadPhase == SoundCloneUploadPhase::SendingChunks)
+    {
+        if (soundCloneUploadChunkIndex < static_cast<int> (soundCloneUpload.chunks.size ()))
+        {
+            midiOutput->sendMessageNow (
+                soundCloneUpload.chunks[static_cast<std::size_t> (soundCloneUploadChunkIndex)]);
+
+            ++soundCloneUploadChunkIndex;
+            soundCloneUploadPhase = SoundCloneUploadPhase::SendingChunks;
+            soundCloneUploadNextActionMs = now + 30.0;
+            soundCloneUploadStatusText =
+                "Sound Clone upload: block " + juce::String (soundCloneUploadChunkIndex) + "/" +
+                juce::String (static_cast<int> (soundCloneUpload.chunks.size ()));
+            lastMessageText = soundCloneUploadStatusText;
+            return;
+        }
+
+        soundCloneUploadPhase = SoundCloneUploadPhase::WaitingBeforeCommit;
+        soundCloneUploadNextActionMs = now + 300.0;
+        soundCloneUploadStatusText = "Sound Clone upload: waiting before commit";
+        return;
+    }
+
+    if (soundCloneUploadPhase == SoundCloneUploadPhase::WaitingBeforeCommit)
+    {
+        midiOutput->sendMessageNow (soundCloneUpload.commitMessage);
+        soundCloneUploadPhase = SoundCloneUploadPhase::WaitingAfterCommit;
+        soundCloneUploadNextActionMs = now + 1000.0;
+        soundCloneUploadStatusText = "Sound Clone upload: commit sent";
+        lastMessageText = soundCloneUploadStatusText;
+        return;
+    }
+
+    if (soundCloneUploadPhase == SoundCloneUploadPhase::WaitingAfterCommit)
+    {
+        const auto uploadedName = soundCloneUpload.displayName;
+
+        soundCloneUploadPhase = SoundCloneUploadPhase::Idle;
+        soundCloneUploadStatusText = "Sound Clone upload completed: " + uploadedName;
+        lastMessageText = soundCloneUploadStatusText;
+        soundCloneUpload = {};
+
+        pendingAssignmentNameQueries.clear ();
+
+        for (auto& name : userIRNames)
+            name.clear ();
+
+        for (auto& name : snapToneNames)
+            name.clear ();
+
+        ++assignmentNamesRevision;
+
+        constexpr int assignmentPageSize = 16;
+
+        for (int block = 0; block < assignmentPageSize; ++block)
+            pendingAssignmentNameQueries.push_back ({ 0, 0, block });
+
+        for (int block = 0;
+             block < static_cast<int> (userIRCount) - assignmentPageSize;
+             ++block)
+        {
+            pendingAssignmentNameQueries.push_back ({ 0, 1, block });
+        }
+
+        for (int block = 0; block < static_cast<int> (snapToneCount); ++block)
+            pendingAssignmentNameQueries.push_back ({ 1, 0, block });
+
+        currentAssignmentNameQuery = {};
+        assignmentNameRequestInProgress = false;
+        assignmentNamesStatusText = "Assignment names: refreshing after Sound Clone upload...";
+        sendNextAssignmentNameQuery ();
+    }
+}
+
+bool MidiConnection::isSoundCloneUploadInProgress () const
+{
+    const juce::ScopedLock lock (stateLock);
+    return soundCloneUploadPhase != SoundCloneUploadPhase::Idle;
+}
+
+juce::String MidiConnection::getSoundCloneUploadStatusText () const
+{
+    const juce::ScopedLock lock (stateLock);
+    return soundCloneUploadStatusText;
 }
 
 bool MidiConnection::requestCurrentPresetFromGP200 ()

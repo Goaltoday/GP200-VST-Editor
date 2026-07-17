@@ -2,6 +2,7 @@
 
 #include "GP200Preset.h"
 #include "GP200IR.h"
+#include "GP200SoundClone.h"
 
 #include <JuceHeader.h>
 #include <array>
@@ -36,6 +37,11 @@ class MidiConnection final : private juce::MidiInputCallback
     void processIRUpload ();
     bool isIRUploadInProgress () const;
     juce::String getIRUploadStatusText () const;
+
+    bool startSoundCloneUpload (const juce::File& cloFile, int globalSlot);
+    void processSoundCloneUpload ();
+    bool isSoundCloneUploadInProgress () const;
+    juce::String getSoundCloneUploadStatusText () const;
 
     bool sendPatchVolume (int value);
     bool sendPatchPan (int pan);
@@ -170,6 +176,13 @@ class MidiConnection final : private juce::MidiInputCallback
     int irUploadChunkIndex{0};
     double irUploadNextActionMs{0.0};
     juce::String irUploadStatusText{"IR upload: idle"};
+
+    enum class SoundCloneUploadPhase { Idle, WaitingAfterPrepare, SendingChunks, WaitingBeforeCommit, WaitingAfterCommit };
+    GP200SoundCloneUpload soundCloneUpload;
+    SoundCloneUploadPhase soundCloneUploadPhase{SoundCloneUploadPhase::Idle};
+    int soundCloneUploadChunkIndex{0};
+    double soundCloneUploadNextActionMs{0.0};
+    juce::String soundCloneUploadStatusText{"Sound Clone upload: idle"};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MidiConnection)
 };

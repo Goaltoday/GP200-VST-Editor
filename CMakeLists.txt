@@ -56,6 +56,9 @@ target_sources(GP200Plugin
         source/libgp200/GP200EffectParamDatabase.cpp
         source/libgp200/GP200EffectParamDatabase.h
         source/libgp200/GP200IR.cpp
+        source/libgp200/GP200IR.h
+        source/libgp200/GP200SoundClone.cpp
+        source/libgp200/GP200SoundClone.h
 	source/GP200Plugin/ToneMatch/ToneMatchTypes.h
         source/GP200Plugin/ToneMatch/IToneMatchSolver.h
         source/GP200Plugin/ToneMatch/ToneMatchCapture.cpp
@@ -138,6 +141,9 @@ source_group(
         source/libgp200/GP200EffectParamDatabase.cpp
         source/libgp200/GP200EffectParamDatabase.h
         source/libgp200/GP200IR.cpp
+        source/libgp200/GP200IR.h
+        source/libgp200/GP200SoundClone.cpp
+        source/libgp200/GP200SoundClone.h
 	source/GP200Plugin/ToneMatch/ToneMatchTypes.h
         source/GP200Plugin/ToneMatch/IToneMatchSolver.h
         source/GP200Plugin/ToneMatch/ToneMatchCapture.cpp

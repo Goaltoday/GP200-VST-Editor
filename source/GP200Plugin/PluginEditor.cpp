@@ -6,6 +6,7 @@
 #include <cmath>
 #include <algorithm>
 #include <cstdint>
+#include <functional>
 
 namespace
 {
@@ -16,6 +17,85 @@ const juce::Colour textColour{0xffffffff};
 const juce::Colour mutedTextColour{0xffd8d8d8};
 const juce::Colour statusOnColour{0xff57f05f};
 const juce::Colour statusOffColour{0xffd84545};
+
+class SoundCloneImportComponent final : public juce::Component
+{
+public:
+    using ImportCallback = std::function<void (const juce::File&, int)>;
+
+    explicit SoundCloneImportComponent (ImportCallback callback)
+        : onImport (std::move (callback))
+    {
+        addAndMakeVisible (destinationBox);
+        addAndMakeVisible (importButton);
+        addAndMakeVisible (infoLabel);
+
+        for (int i = 0; i < 5; ++i)
+            destinationBox.addItem ("AMP Slot " + juce::String (i + 1), i + 1);
+
+        for (int i = 0; i < 5; ++i)
+            destinationBox.addItem ("DIST Slot " + juce::String (i + 1), i + 6);
+
+        destinationBox.setSelectedId (1, juce::dontSendNotification);
+        destinationBox.setColour (juce::ComboBox::backgroundColourId, panelColour);
+        destinationBox.setColour (juce::ComboBox::textColourId, panelOutlineColour);
+        destinationBox.setColour (juce::ComboBox::outlineColourId, panelOutlineColour);
+
+        importButton.setColour (juce::TextButton::buttonColourId, panelColour);
+        importButton.setColour (juce::TextButton::buttonOnColourId, panelColour.brighter (0.2f));
+        importButton.setColour (juce::TextButton::textColourOffId, panelOutlineColour);
+        importButton.setColour (juce::TextButton::textColourOnId, panelOutlineColour);
+        importButton.onClick = [this]
+        {
+            fileChooser = std::make_unique<juce::FileChooser> (
+                "Import GP-200 Sound Clone", juce::File{}, "*.clo");
+
+            fileChooser->launchAsync (
+                juce::FileBrowserComponent::openMode |
+                    juce::FileBrowserComponent::canSelectFiles,
+                [safeThis = juce::Component::SafePointer<SoundCloneImportComponent> (this)]
+                (const juce::FileChooser& chooser)
+                {
+                    if (safeThis == nullptr)
+                        return;
+
+                    const auto file = chooser.getResult ();
+                    if (!file.existsAsFile ())
+                        return;
+
+                    const auto selectedId = safeThis->destinationBox.getSelectedId ();
+                    if (selectedId <= 0)
+                        return;
+
+                    safeThis->onImport (file, selectedId - 1);
+                });
+        };
+
+        infoLabel.setText ("Choose one of the 5 AMP or 5 DIST Sound Clone slots.",
+                           juce::dontSendNotification);
+        infoLabel.setColour (juce::Label::textColourId, mutedTextColour);
+        infoLabel.setJustificationType (juce::Justification::centred);
+
+        setSize (420, 150);
+    }
+
+    void resized () override
+    {
+        auto area = getLocalBounds ().reduced (24);
+        infoLabel.setBounds (area.removeFromTop (32));
+        area.removeFromTop (10);
+        destinationBox.setBounds (area.removeFromLeft (190).withHeight (32));
+        area.removeFromLeft (16);
+        importButton.setBounds (area.removeFromLeft (160).withHeight (32));
+    }
+
+private:
+    ImportCallback onImport;
+    juce::ComboBox destinationBox;
+    juce::TextButton importButton{"Import CLO"};
+    juce::Label infoLabel;
+    std::unique_ptr<juce::FileChooser> fileChooser;
+};
 } // namespace
 
 //==============================================================================
@@ -39,6 +119,7 @@ addAndMakeVisible (recallPresetButton);
 addAndMakeVisible (storePresetButton);
 addAndMakeVisible (importPrstButton);
 addAndMakeVisible (importIRButton);
+addAndMakeVisible (soundCloneButton);
 addAndMakeVisible (userIRSlotBox);
     addAndMakeVisible (patchVolumeSlider);
     addAndMakeVisible (panSlider);
@@ -83,6 +164,7 @@ setupButton (recallPresetButton);
 setupButton (storePresetButton);
 setupButton (importPrstButton);
 setupButton (importIRButton);
+setupButton (soundCloneButton);
 setupButton (tunerButton);
 setupButton (tapTempoButton);
 
@@ -290,6 +372,7 @@ compareBButton.onClick = [this]
     userIRSlotBox.setColour (juce::ComboBox::outlineColourId, panelOutlineColour);
 
     importIRButton.onClick = [this] { openIRFileChooser (); };
+    soundCloneButton.onClick = [this] { openSoundCloneWindow (); };
 	updateCompareSnapshotButtons ();
 
   processorRef.ensureGP200Connection();
@@ -599,6 +682,7 @@ tapTempoButton.setBounds (882, 150, 46, 24);
     tunerButton.setBounds (30, 191, 130, 28);
 allBlocksOffButton.setBounds (170, 191, 120, 28);
 toneMatchButton.setBounds (708, 191, 130, 28);
+soundCloneButton.setBounds (848, 191, 100, 28);
 
 tunerDisplay.setBounds (
     418,
@@ -643,8 +727,18 @@ void AudioPluginAudioProcessorEditor::timerCallback ()
     }
 
     midiConnection.processIRUpload ();
+    midiConnection.processSoundCloneUpload ();
     midiConnection.processPendingLivePresetRefresh ();
-    importIRButton.setEnabled (!midiConnection.isIRUploadInProgress ());
+
+    const bool transferInProgress =
+        midiConnection.isIRUploadInProgress () ||
+        midiConnection.isSoundCloneUploadInProgress ();
+
+    importIRButton.setEnabled (!transferInProgress);
+    soundCloneButton.setEnabled (!transferInProgress);
+
+    if (midiConnection.isSoundCloneUploadInProgress ())
+        effectsStatusText = midiConnection.getSoundCloneUploadStatusText ();
 
     if (tapFlashUntilMs > 0.0 && nowMs >= tapFlashUntilMs)
     {
@@ -900,6 +994,65 @@ void AudioPluginAudioProcessorEditor::importIRFile(
         + juce::String(selectedId);
 
     repaint();
+}
+
+
+void AudioPluginAudioProcessorEditor::openSoundCloneWindow ()
+{
+    if (presetRestoreInProgress ||
+        midiConnection.isIRUploadInProgress () ||
+        midiConnection.isSoundCloneUploadInProgress ())
+    {
+        effectsStatusText = "Sound Clone unavailable: another transfer is in progress";
+        repaint ();
+        return;
+    }
+
+    juce::DialogWindow::LaunchOptions options;
+    options.dialogTitle = "Sound Clone";
+    options.dialogBackgroundColour = backgroundColour;
+    options.escapeKeyTriggersCloseButton = true;
+    options.useNativeTitleBar = true;
+    options.resizable = false;
+    options.content.setOwned (new SoundCloneImportComponent (
+        [safeThis = juce::Component::SafePointer<AudioPluginAudioProcessorEditor> (this)]
+        (const juce::File& file, int globalSlot)
+        {
+            if (safeThis != nullptr)
+                safeThis->importSoundCloneFile (file, globalSlot);
+        }));
+
+    options.launchAsync ();
+}
+
+void AudioPluginAudioProcessorEditor::importSoundCloneFile (
+    const juce::File& file,
+    int globalSlot)
+{
+    if (!midiConnection.startSoundCloneUpload (file, globalSlot))
+    {
+        effectsStatusText = midiConnection.getSoundCloneUploadStatusText ();
+
+        juce::AlertWindow::showMessageBoxAsync (
+            juce::MessageBoxIconType::WarningIcon,
+            "Sound Clone import failed",
+            effectsStatusText);
+
+        repaint ();
+        return;
+    }
+
+    const juce::String destination =
+        globalSlot < 5
+            ? juce::String ("AMP Slot ") + juce::String (globalSlot + 1)
+            : juce::String ("DIST Slot ") + juce::String (globalSlot - 4);
+
+    effectsStatusText =
+        juce::String ("Sound Clone import started: ") +
+        file.getFileNameWithoutExtension () +
+        " -> " + destination;
+
+    repaint ();
 }
 
 void AudioPluginAudioProcessorEditor::syncUserIRSlotBoxFromCabEffectId(
@@ -1504,7 +1657,14 @@ void AudioPluginAudioProcessorEditor::handleTapTempo ()
     const auto nowMs = juce::Time::getMillisecondCounterHiRes();
 
     midiConnection.processIRUpload ();
-    importIRButton.setEnabled (!midiConnection.isIRUploadInProgress ());
+    midiConnection.processSoundCloneUpload ();
+
+    const bool transferInProgress =
+        midiConnection.isIRUploadInProgress () ||
+        midiConnection.isSoundCloneUploadInProgress ();
+
+    importIRButton.setEnabled (!transferInProgress);
+    soundCloneButton.setEnabled (!transferInProgress);
 
     // Immediate visual feedback, including the first tap.
     tapFlashUntilMs = nowMs + 150.0;
