@@ -20,7 +20,6 @@ ToneMatchPanel::ToneMatchPanel (
     addAndMakeVisible (targetClearButton);
     addAndMakeVisible (analyseButton);
     addAndMakeVisible (generateIRButton);
-    addAndMakeVisible (saveIRButton);
     addAndMakeVisible (closeButton);
     addAndMakeVisible (sourceStatusLabel);
     addAndMakeVisible (sourceDetailsLabel);
@@ -47,7 +46,6 @@ ToneMatchPanel::ToneMatchPanel (
     setupButton (targetClearButton);
     setupButton (analyseButton);
     setupButton (generateIRButton);
-    setupButton (saveIRButton);
     setupButton (closeButton);
 
     sourceStatusLabel.setColour (juce::Label::textColourId, textColour);
@@ -96,8 +94,7 @@ ToneMatchPanel::ToneMatchPanel (
     };
 
     analyseButton.onClick = [this] { analyseCaptures(); };
-    generateIRButton.onClick = [this] { generateIR(); };
-    saveIRButton.onClick = [this] { saveIR(); };
+    generateIRButton.onClick = [this] { generateAndSaveIR(); };
 
     closeButton.onClick = [this]
     {
@@ -181,7 +178,7 @@ void ToneMatchPanel::analyseCaptures()
     repaint();
 }
 
-void ToneMatchPanel::generateIR()
+bool ToneMatchPanel::generateIR()
 {
     generateIRButton.setEnabled (false);
     globalStatusLabel.setText (
@@ -194,7 +191,7 @@ void ToneMatchPanel::generateIR()
             "IR generation failed",
             juce::dontSendNotification);
         updateControls();
-        return;
+        return false;
     }
 
     const auto result = processorRef.getToneMatchResultCopy();
@@ -219,6 +216,15 @@ void ToneMatchPanel::generateIR()
 
     globalStatusLabel.setText (status, juce::dontSendNotification);
     updateControls();
+    return true;
+}
+
+void ToneMatchPanel::generateAndSaveIR()
+{
+    if (!generateIR())
+        return;
+
+    saveIR();
 }
 
 void ToneMatchPanel::saveIR()
@@ -245,7 +251,12 @@ void ToneMatchPanel::saveIR()
             auto file = chooser.getResult();
 
             if (file == juce::File{})
+            {
+                globalStatusLabel.setText (
+                    "IR generated - save cancelled",
+                    juce::dontSendNotification);
                 return;
+            }
 
             if (!file.hasFileExtension ("wav"))
                 file = file.withFileExtension ("wav");
@@ -404,14 +415,18 @@ void ToneMatchPanel::resized()
         getWidth() - 40,
         juce::jmax (120, graphBottom - graphTop));
 
-    const auto totalWidth = 4 * 140 + 3 * 10;
+    constexpr int analyseWidth = 140;
+    constexpr int generateWidth = 190;
+    constexpr int closeWidth = 140;
+    constexpr int gap = 10;
+
+    const auto totalWidth = analyseWidth + generateWidth + closeWidth + 2 * gap;
     const auto startX = (getWidth() - totalWidth) / 2;
     const auto buttonY = getHeight() - 58;
 
-    analyseButton.setBounds (startX, buttonY, 140, 36);
-    generateIRButton.setBounds (startX + 150, buttonY, 140, 36);
-    saveIRButton.setBounds (startX + 300, buttonY, 140, 36);
-    closeButton.setBounds (startX + 450, buttonY, 140, 36);
+    analyseButton.setBounds (startX, buttonY, analyseWidth, 36);
+    generateIRButton.setBounds (startX + analyseWidth + gap, buttonY, generateWidth, 36);
+    closeButton.setBounds (startX + analyseWidth + gap + generateWidth + gap, buttonY, closeWidth, 36);
 }
 
 void ToneMatchPanel::timerCallback()
@@ -517,8 +532,6 @@ void ToneMatchPanel::updateControls()
     analyseButton.setEnabled (!capturing && hasSource && hasTarget);
     generateIRButton.setEnabled (
         !capturing && processorRef.hasToneMatchComparison());
-    saveIRButton.setEnabled (
-        !capturing && processorRef.hasToneMatchResult());
 
     updateCaptureLabels();
 }

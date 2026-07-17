@@ -27,7 +27,8 @@ class ToneMatchPanel final : public juce::Component,
     void stopCapture();
 
     void analyseCaptures();
-    void generateIR();
+    bool generateIR();
+    void generateAndSaveIR();
     void saveIR();
 
     void updateControls();
@@ -47,8 +48,7 @@ class ToneMatchPanel final : public juce::Component,
     juce::TextButton targetClearButton{"Clear"};
 
     juce::TextButton analyseButton{"Analyse"};
-    juce::TextButton generateIRButton{"Generate IR"};
-    juce::TextButton saveIRButton{"Save IR WAV"};
+    juce::TextButton generateIRButton{"Generate & Save IR"};
     juce::TextButton closeButton{"Close"};
 
     juce::Label sourceStatusLabel;
