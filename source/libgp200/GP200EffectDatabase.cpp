@@ -7,6 +7,34 @@ namespace gp200
 {
 namespace
 {
+
+struct GP200EffectAdditionalModule
+{
+    juce::uint32 effectId;
+    const char* module;
+};
+
+constexpr GP200EffectAdditionalModule additionalModules[] = {
+    {0X01000049u, "WAH"}, // Hammy
+
+    {0X03000001u, "DST"}, // OD 9
+    {0X03000002u, "DST"}, // Yellow OD
+    {0X03000014u, "DST"}, // Penesas
+    {0X03000006u, "DST"}, // Super OD
+    {0X03000009u, "DST"}, // Blues OD
+    {0X0000000Au, "DST"}, // AC Boost
+    {0X0000000Bu, "DST"}, // B-Boost
+    {0X0000000Cu, "DST"}, // P-Boost
+    {0X0000000Eu, "DST"}, // 14 Boost
+    {0X00000019u, "DST"}, // FAT BB
+    {0X0000001Au, "DST"}, // Boost
+
+    {0X0400002Du, "NR"},  // Auto Swell
+    {0X0400002Du, "MOD"}, // Auto Swell
+    {0X0400002Fu, "MOD"}, // Hold
+    {0X04000030u, "MOD"}, // Freeze
+};
+
 constexpr GP200EffectInfo effectMap[] = {
     {0X00000000u, "COMP", "PRE"},
     {0X00000001u, "COMP4", "PRE"},
@@ -649,7 +677,23 @@ std::vector<GP200EffectInfo> GP200EffectDatabase::getEffectsForModule (const juc
 
     for (const auto& effect : effectMap)
     {
-        if (wantedModule == juce::String (effect.module).toUpperCase ())
+        bool isAvailable =
+            wantedModule == juce::String (effect.module).toUpperCase ();
+
+        if (! isAvailable)
+        {
+            for (const auto& additional : additionalModules)
+            {
+                if (additional.effectId == effect.effectId
+                    && wantedModule == juce::String (additional.module).toUpperCase ())
+                {
+                    isAvailable = true;
+                    break;
+                }
+            }
+        }
+
+        if (isAvailable)
             result.push_back (effect);
     }
 
