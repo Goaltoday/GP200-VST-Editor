@@ -325,7 +325,7 @@ void AudioPluginAudioProcessorEditor::paint (juce::Graphics& g)
 
     g.setFont (juce::Font (14.0f, juce::Font::bold));
     g.setColour (panelOutlineColour);
-    g.drawText ("0.3",
+    g.drawText ("0.1",
                 184, 11, 42, 26,
                 juce::Justification::centredLeft);
 
@@ -643,6 +643,7 @@ void AudioPluginAudioProcessorEditor::timerCallback ()
     }
 
     midiConnection.processIRUpload ();
+    midiConnection.processPendingLivePresetRefresh ();
     importIRButton.setEnabled (!midiConnection.isIRUploadInProgress ());
 
     if (tapFlashUntilMs > 0.0 && nowMs >= tapFlashUntilMs)

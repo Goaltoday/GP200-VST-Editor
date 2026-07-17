@@ -24,6 +24,7 @@ class MidiConnection final : private juce::MidiInputCallback
 
     bool requestCurrentPresetFromGP200 ();
     bool requestAssignmentNamesFromGP200 ();
+    void processPendingLivePresetRefresh ();
 
     juce::String getAssignmentNamesStatusText () const;
     juce::String getUserIRDisplayName (int zeroBasedIndex) const;
@@ -95,6 +96,7 @@ class MidiConnection final : private juce::MidiInputCallback
 
     bool sendReadRequestForSlot (int slot);
     bool sendLiveReadRequestForSlot (int slot);
+    void scheduleLivePresetRefresh ();
 
     void resetPresetDumpCaptureForSlot (int slot);
     void collectPresetReadChunk (const juce::uint8* data, int size);
@@ -142,6 +144,8 @@ class MidiConnection final : private juce::MidiInputCallback
 
     bool presetNameRequestPending{false};
     bool livePresetReadPending{false};
+    bool liveRefreshPending{false};
+    double liveRefreshDueMs{0.0};
     int lastRequestedNameSlot{-1};
 
     int presetDumpSlot{-1};

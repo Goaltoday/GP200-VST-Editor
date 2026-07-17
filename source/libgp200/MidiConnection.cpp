@@ -75,6 +75,8 @@ void MidiConnection::disconnect ()
 
     presetNameRequestPending = false;
     livePresetReadPending = false;
+    liveRefreshPending = false;
+    liveRefreshDueMs = 0.0;
     lastRequestedNameSlot = -1;
 
     presetDumpSlot = -1;
@@ -263,6 +265,28 @@ bool MidiConnection::requestCurrentPresetFromGP200 ()
     currentPresetDumpStatusText = "Current full preset data: waiting for current slot";
 
     return true;
+}
+
+void MidiConnection::processPendingLivePresetRefresh ()
+{
+    const juce::ScopedLock lock (stateLock);
+
+    if (!liveRefreshPending || midiOutput == nullptr || currentSlot < 0)
+        return;
+
+    const auto nowMs = juce::Time::getMillisecondCounterHiRes ();
+
+    if (nowMs < liveRefreshDueMs)
+        return;
+
+    // Do not start another seven-chunk read while one is still in progress.
+    // If changes arrive during that read, liveRefreshPending remains set and
+    // the final state will be requested as soon as the current read finishes.
+    if (presetDumpSlot >= 0)
+        return;
+
+    liveRefreshPending = false;
+    sendLiveReadRequestForSlot (currentSlot);
 }
 
 bool MidiConnection::requestAssignmentNamesFromGP200 ()
@@ -1138,6 +1162,8 @@ void MidiConnection::adoptCurrentPresetSnapshot (int slot,
 
     presetNameRequestPending = false;
     livePresetReadPending = false;
+    liveRefreshPending = false;
+    liveRefreshDueMs = 0.0;
     lastRequestedNameSlot = currentSlot;
     presetDumpSlot = -1;
     presetReadChunks.clear ();
@@ -1216,6 +1242,15 @@ bool MidiConnection::sendLiveReadRequestForSlot (int slot)
     lastMessageText = "Requested live edit buffer for slot " + juce::String (slot);
 
     return true;
+}
+
+void MidiConnection::scheduleLivePresetRefresh ()
+{
+    constexpr double liveRefreshDebounceMs = 120.0;
+
+    liveRefreshPending = true;
+    liveRefreshDueMs =
+        juce::Time::getMillisecondCounterHiRes () + liveRefreshDebounceMs;
 }
 
 void MidiConnection::resetPresetDumpCaptureForSlot (int slot)
@@ -1779,7 +1814,13 @@ void MidiConnection::parseGP200SysEx (const juce::uint8* data, int size)
         return;
     }
 
-    // GP-200 spontaneous preset change notification.
+    // GP-200 spontaneous notifications.
+    //
+    // data[14] == 0x08 identifies a real preset-slot change.
+    // The official editor capture also shows 0x12/0x08 messages with other
+    // values (for example 0x05) around block bypass and effect-model changes.
+    // Those messages are edit notifications, not preset changes, so they must
+    // trigger the same debounced live-buffer refresh as 0x12/0x10.
     if (command == 0x12 && subCommand == 0x08 && size >= 28)
     {
         if (data[14] == 0x08)
@@ -1794,14 +1835,37 @@ void MidiConnection::parseGP200SysEx (const juce::uint8* data, int size)
                     currentPresetName = "requesting...";
                     presetNameRequestPending = true;
                     livePresetReadPending = false;
+                    liveRefreshPending = false;
                     lastRequestedNameSlot = -1;
                     resetPresetDumpCaptureForSlot (slot);
+                }
+                else
+                {
+                    // A same-slot 0x12/0x08 notification can correspond to a
+                    // structural edit in the currently active preset.
+                    scheduleLivePresetRefresh ();
                 }
 
                 lastMessageText = "GP-200 preset changed: " + getCurrentSlotText ();
             }
         }
+        else
+        {
+            // Block on/off and effect-model changes observed in gpcambios.pcapng.
+            scheduleLivePresetRefresh ();
+        }
 
+        return;
+    }
+
+    // GP-200 real-time edit notification. The official editor receives
+    // these 0x12/0x10 messages when a block or parameter is changed directly
+    // on the pedal. Instead of maintaining a second incremental decoder, we
+    // debounce the notifications and request the complete live edit buffer,
+    // which is then handled by the existing seven-chunk preset decoder.
+    if (command == 0x12 && subCommand == 0x10)
+    {
+        scheduleLivePresetRefresh ();
         return;
     }
 
