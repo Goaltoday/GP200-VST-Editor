@@ -1315,9 +1315,9 @@ void AudioPluginAudioProcessorEditor::importSoundCloneFile (
     }
 
     const juce::String destination =
-        globalSlot < 5
-            ? juce::String ("AMP Slot ") + juce::String (globalSlot + 1)
-            : juce::String ("DIST Slot ") + juce::String (globalSlot - 4);
+    juce::String ("SnapTone ")
+    + juce::String (globalSlot + 1)
+    + (globalSlot < 5 ? " (AMP)" : " (DIST)");
 
     effectsStatusText =
         juce::String ("Sound Clone import started: ") +
