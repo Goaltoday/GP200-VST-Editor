@@ -681,8 +681,8 @@ tapTempoButton.setBounds (882, 150, 46, 24);
 
     tunerButton.setBounds (30, 191, 130, 28);
 allBlocksOffButton.setBounds (170, 191, 120, 28);
-toneMatchButton.setBounds (708, 191, 130, 28);
-soundCloneButton.setBounds (848, 191, 100, 28);
+toneMatchButton.setBounds (708, 191, 110, 28);
+soundCloneButton.setBounds (828, 191, 110, 28);
 
 tunerDisplay.setBounds (
     418,
