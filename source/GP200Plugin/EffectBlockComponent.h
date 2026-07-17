@@ -57,6 +57,7 @@ class EffectBlockComponent final : public juce::Component
         juce::String name;
         std::unique_ptr<juce::Label> label;
         std::unique_ptr<juce::Slider> slider;
+        std::unique_ptr<juce::Label> valueLabel;
     };
 
     void rebuildParameterControls ();

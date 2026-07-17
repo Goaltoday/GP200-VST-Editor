@@ -272,7 +272,17 @@ void EffectBlockComponent::resized ()
             control.label->setBounds (24, y, 150, 24);
 
         if (control.slider != nullptr)
-            control.slider->setBounds (184, y, getWidth () - 208, 24);
+        {
+            if (control.valueLabel != nullptr)
+            {
+                control.slider->setBounds (184, y, getWidth () - 294, 24);
+                control.valueLabel->setBounds (getWidth () - 104, y, 80, 24);
+            }
+            else
+            {
+                control.slider->setBounds (184, y, getWidth () - 208, 24);
+            }
+        }
 
         y += paramControlHeight;
     }
@@ -515,12 +525,14 @@ void EffectBlockComponent::setParameterValueForDisplay (int paramIndex, float va
             if (std::abs (control.slider->getValue () - static_cast<double> (value)) > 0.0001)
                 control.slider->setValue (value, juce::dontSendNotification);
 
-            // A MIDI echo can return the same numeric value already held by the
-            // slider. In that case setValue() is intentionally skipped, but the
-            // text box may still contain JUCE's temporary numeric edit text
-            // (notably "0"). Refresh Hammy's labelled values explicitly.
-            if (effect.effectId == hammyEffectId && (paramIndex == 0 || paramIndex == 1))
-                control.slider->updateText ();
+            if (control.valueLabel != nullptr)
+            {
+                const auto index = juce::roundToInt (value);
+                control.valueLabel->setText (
+                    paramIndex == 0 ? getHammyRangeLabel (index)
+                                    : getHammyHarmonyLabel (index),
+                    juce::dontSendNotification);
+            }
 
             break;
         }
@@ -655,6 +667,22 @@ void EffectBlockComponent::rebuildParameterControls ()
         control.slider->setColour (juce::Slider::trackColourId, getBlockColour ().withAlpha (0.45f));
         control.slider->setColour (juce::Slider::backgroundColourId, juce::Colour (0xff151515));
 
+        const auto isHammyLabelledParameter =
+            effect.effectId == hammyEffectId && (param.idx == 0 || param.idx == 1);
+
+        if (isHammyLabelledParameter)
+        {
+            control.slider->setTextBoxStyle (juce::Slider::NoTextBox, true, 0, 0);
+
+            control.valueLabel = std::make_unique<juce::Label> ();
+            control.valueLabel->setJustificationType (juce::Justification::centred);
+            control.valueLabel->setColour (juce::Label::textColourId, textColour);
+            control.valueLabel->setColour (juce::Label::backgroundColourId, juce::Colour (0xff1b1b1b));
+            control.valueLabel->setColour (juce::Label::outlineColourId, juce::Colour (0xff454545));
+            control.valueLabel->setFont (juce::Font (12.0f));
+            control.valueLabel->setInterceptsMouseClicks (false, false);
+        }
+
         const auto isDelayBlock = getBlockName ().equalsIgnoreCase ("DLY");
         const auto isSyncedDelayTime =
             isDelayBlock && isDelayTimeParameter (param) && isDelayTimeSyncEnabled (effect, *paramSet);
@@ -677,9 +705,7 @@ void EffectBlockComponent::rebuildParameterControls ()
         }
         else
         {
-            const auto isHammy = effect.effectId == hammyEffectId;
-
-            if (isHammy && param.idx == 0)
+            if (effect.effectId == hammyEffectId && param.idx == 0)
             {
                 control.slider->setRange (0.0, 5.0, 1.0);
                 control.slider->setDoubleClickReturnValue (true, 2.0);
@@ -687,7 +713,7 @@ void EffectBlockComponent::rebuildParameterControls ()
                 control.slider->textFromValueFunction = [] (double value)
                 { return getHammyRangeLabel (juce::roundToInt (value)); };
             }
-            else if (isHammy && param.idx == 1)
+            else if (effect.effectId == hammyEffectId && param.idx == 1)
             {
                 control.slider->setRange (0.0, 1.0, 1.0);
                 control.slider->setDoubleClickReturnValue (true, 0.0);
@@ -713,17 +739,37 @@ void EffectBlockComponent::rebuildParameterControls ()
 
             control.slider->setValue (effect.params[static_cast<std::size_t> (param.idx)],
                                       juce::dontSendNotification);
+
+            if (control.valueLabel != nullptr)
+            {
+                const auto index = juce::roundToInt (
+                    effect.params[static_cast<std::size_t> (param.idx)]);
+                control.valueLabel->setText (
+                    param.idx == 0 ? getHammyRangeLabel (index)
+                                   : getHammyHarmonyLabel (index),
+                    juce::dontSendNotification);
+            }
         }
 
         auto* slider = control.slider.get ();
+        auto* valueLabel = control.valueLabel.get ();
         const auto paramIndex = param.idx;
 
-        slider->onValueChange = [this, slider, paramIndex]
+        slider->onValueChange = [this, slider, valueLabel, paramIndex]
         {
             const auto value = static_cast<float> (slider->getValue ());
 
             if (paramIndex >= 0 && paramIndex < static_cast<int> (effect.params.size ()))
                 effect.params[static_cast<std::size_t> (paramIndex)] = value;
+
+            if (valueLabel != nullptr)
+            {
+                const auto index = juce::roundToInt (value);
+                valueLabel->setText (
+                    paramIndex == 0 ? getHammyRangeLabel (index)
+                                    : getHammyHarmonyLabel (index),
+                    juce::dontSendNotification);
+            }
 
             if (!slider->isMouseButtonDown ())
             {
@@ -742,6 +788,9 @@ void EffectBlockComponent::rebuildParameterControls ()
         addAndMakeVisible (*control.label);
         addAndMakeVisible (*control.slider);
 
+        if (control.valueLabel != nullptr)
+            addAndMakeVisible (*control.valueLabel);
+
         parameterControls.push_back (std::move (control));
     }
 }
@@ -755,6 +804,9 @@ void EffectBlockComponent::updateParameterControlsVisibility ()
 
         if (control.slider != nullptr)
             control.slider->setVisible (expanded);
+
+        if (control.valueLabel != nullptr)
+            control.valueLabel->setVisible (expanded);
     }
 }
 
