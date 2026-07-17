@@ -74,6 +74,7 @@ void MidiConnection::disconnect ()
     currentPresetName = "unknown";
 
     presetNameRequestPending = false;
+    livePresetReadPending = false;
     lastRequestedNameSlot = -1;
 
     presetDumpSlot = -1;
@@ -1136,6 +1137,7 @@ void MidiConnection::adoptCurrentPresetSnapshot (int slot,
     currentPresetName = safeName.isNotEmpty () ? safeName : "unknown";
 
     presetNameRequestPending = false;
+    livePresetReadPending = false;
     lastRequestedNameSlot = currentSlot;
     presetDumpSlot = -1;
     presetReadChunks.clear ();
@@ -1163,6 +1165,9 @@ bool MidiConnection::requestPresetNameForCurrentSlotIfNeeded ()
     if (lastRequestedNameSlot == currentSlot)
         return false;
 
+    if (livePresetReadPending)
+        return sendLiveReadRequestForSlot (currentSlot);
+
     return sendReadRequestForSlot (currentSlot);
 }
 
@@ -1185,6 +1190,30 @@ bool MidiConnection::sendReadRequestForSlot (int slot)
     resetPresetDumpCaptureForSlot (slot);
 
     lastMessageText = "Requested full preset data for slot " + juce::String (slot);
+
+    return true;
+}
+
+bool MidiConnection::sendLiveReadRequestForSlot (int slot)
+{
+    if (midiOutput == nullptr)
+    {
+        lastMessageText = "Cannot request live preset data: MIDI output not open";
+        return false;
+    }
+
+    const auto bytes = buildLiveReadRequest (slot);
+
+    auto message =
+        juce::MidiMessage::createSysExMessage (bytes.data () + 1, static_cast<int> (bytes.size () - 2));
+
+    midiOutput->sendMessageNow (message);
+
+    livePresetReadPending = false;
+    lastRequestedNameSlot = slot;
+    resetPresetDumpCaptureForSlot (slot);
+
+    lastMessageText = "Requested live edit buffer for slot " + juce::String (slot);
 
     return true;
 }
@@ -1243,7 +1272,7 @@ int MidiConnection::getChunkOffset (const juce::uint8* data, int size)
     if (data == nullptr || size <= 12)
         return -1;
 
-    return data[11] | (data[12] << 8);
+    return data[11] | (data[12] << 7);
 }
 
 std::vector<juce::uint8> MidiConnection::buildStateDumpRequest ()
@@ -1527,6 +1556,23 @@ std::vector<juce::uint8> MidiConnection::buildReadRequest (int slot)
             0x00, 0x00, 0x04, 0x00, 0x00, sh,   sl,   0x00, 0x00, sh,   sl,   0x00, 0x00, 0xF7};
 }
 
+std::vector<juce::uint8> MidiConnection::buildLiveReadRequest (int slot)
+{
+    const auto sh = static_cast<juce::uint8> ((slot >> 4) & 0x0F);
+    const auto sl = static_cast<juce::uint8> (slot & 0x0F);
+
+    // Exact request observed from the official editor after its complete
+    // preset-library scan. For captured slot 179, sh/sl were 0x0B/0x03:
+    // ... 04 00 00 00 00 00 00 0B 03 00 00 00 01 00 00 00
+    // ... 04 00 00 0F 0F 0F 0F 0B 03 00 00
+    return {0xF0, 0x21, 0x25, 0x7E, 0x47, 0x50, 0x2D, 0x32,
+            0x11, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, sh,   sl,   0x00, 0x00, 0x00, 0x01, 0x00,
+            0x00, 0x00, 0x04, 0x00, 0x00, 0x0F, 0x0F, 0x0F,
+            0x0F, sh,   sl,   0x00, 0x00, 0xF7};
+}
+
 std::vector<juce::uint8> MidiConnection::buildStorePresetCommit (int slot, const juce::String& presetName)
 {
     juce::uint8 decoded[24]{};
@@ -1747,6 +1793,7 @@ void MidiConnection::parseGP200SysEx (const juce::uint8* data, int size)
                     currentSlot = slot;
                     currentPresetName = "requesting...";
                     presetNameRequestPending = true;
+                    livePresetReadPending = false;
                     lastRequestedNameSlot = -1;
                     resetPresetDumpCaptureForSlot (slot);
                 }
@@ -1763,7 +1810,7 @@ void MidiConnection::parseGP200SysEx (const juce::uint8* data, int size)
     // - full decoded preset dump capture
     if (command == 0x12 && subCommand == 0x18 && size > 14)
     {
-        const int offset = data[11] | (data[12] << 8);
+        const int offset = data[11] | (data[12] << 7);
 
         if (offset == 0)
         {
@@ -1791,7 +1838,7 @@ void MidiConnection::parseGP200SysEx (const juce::uint8* data, int size)
     // read request for that slot via requestPresetNameForCurrentSlotIfNeeded().
     if (command == 0x12 && subCommand == 0x4E && size > 14)
     {
-        const int offset = data[11] | (data[12] << 8);
+        const int offset = data[11] | (data[12] << 7);
 
         if (offset != 0)
             return;
@@ -1816,6 +1863,7 @@ void MidiConnection::parseGP200SysEx (const juce::uint8* data, int size)
                 // Even if the state dump gives us the name, request the full
                 // 7-chunk preset read so we can capture all preset bytes.
                 presetNameRequestPending = true;
+                livePresetReadPending = true;
                 lastRequestedNameSlot = -1;
                 resetPresetDumpCaptureForSlot (slot);
 

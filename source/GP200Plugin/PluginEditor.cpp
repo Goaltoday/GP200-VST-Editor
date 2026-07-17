@@ -325,7 +325,7 @@ void AudioPluginAudioProcessorEditor::paint (juce::Graphics& g)
 
     g.setFont (juce::Font (14.0f, juce::Font::bold));
     g.setColour (panelOutlineColour);
-    g.drawText ("0.1",
+    g.drawText ("0.3",
                 184, 11, 42, 26,
                 juce::Justification::centredLeft);
 

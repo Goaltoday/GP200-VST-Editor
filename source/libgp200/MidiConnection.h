@@ -94,6 +94,7 @@ class MidiConnection final : private juce::MidiInputCallback
     void handleAssignmentNameResponse (const juce::uint8* data, int size);
 
     bool sendReadRequestForSlot (int slot);
+    bool sendLiveReadRequestForSlot (int slot);
 
     void resetPresetDumpCaptureForSlot (int slot);
     void collectPresetReadChunk (const juce::uint8* data, int size);
@@ -101,6 +102,7 @@ class MidiConnection final : private juce::MidiInputCallback
     static int getChunkOffset (const juce::uint8* data, int size);
 
     static std::vector<juce::uint8> buildReadRequest (int slot);
+    static std::vector<juce::uint8> buildLiveReadRequest (int slot);
     static std::vector<juce::uint8> buildPresetChange (int slot);
     static std::vector<juce::uint8> buildEffectChange (int blockIndex, juce::uint32 effectId);
     static std::vector<juce::uint8>
@@ -139,6 +141,7 @@ class MidiConnection final : private juce::MidiInputCallback
     juce::String currentPresetName{"unknown"};
 
     bool presetNameRequestPending{false};
+    bool livePresetReadPending{false};
     int lastRequestedNameSlot{-1};
 
     int presetDumpSlot{-1};
