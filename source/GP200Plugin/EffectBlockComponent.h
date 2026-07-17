@@ -58,6 +58,7 @@ class EffectBlockComponent final : public juce::Component
         std::unique_ptr<juce::Label> label;
         std::unique_ptr<juce::Slider> slider;
         std::unique_ptr<juce::Label> valueLabel;
+        bool usesDiscreteOptions{false};
     };
 
     void rebuildParameterControls ();

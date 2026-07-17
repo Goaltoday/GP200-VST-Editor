@@ -40,6 +40,15 @@ class GP200EffectParamDatabase
 
     static juce::String getParamName (juce::uint32 effectId, int paramIndex);
 
+    // Optional display metadata for discrete parameters. The numeric values
+    // used by presets and MIDI remain unchanged.
+    static bool hasDiscreteOptions (juce::uint32 effectId, int paramIndex);
+    static float getDiscreteOptionMinimum (juce::uint32 effectId, int paramIndex);
+    static float getDiscreteOptionMaximum (juce::uint32 effectId, int paramIndex);
+    static juce::String getDiscreteOptionLabel (juce::uint32 effectId,
+                                                int paramIndex,
+                                                float value);
+
     static juce::String formatKnownParams (juce::uint32 effectId,
                                            const std::array<float, effectParamCount>& values,
                                            int maxParamsToShow = 5);
