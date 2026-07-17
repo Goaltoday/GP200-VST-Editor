@@ -334,21 +334,22 @@ void MidiConnection::processSoundCloneUpload ()
     if (soundCloneUploadPhase == SoundCloneUploadPhase::WaitingAfterCommit)
     {
         const auto uploadedName = soundCloneUpload.displayName;
+        const auto uploadedSlot = soundCloneUpload.globalSlot;
 
         soundCloneUploadPhase = SoundCloneUploadPhase::Idle;
         soundCloneUploadStatusText = "Sound Clone upload completed: " + uploadedName;
         lastMessageText = soundCloneUploadStatusText;
         soundCloneUpload = {};
 
+        // Keep the existing cache visible. Update the imported slot immediately,
+        // then refresh all names from the GP-200 without clearing the others.
+        if (juce::isPositiveAndBelow (uploadedSlot, static_cast<int> (snapToneNames.size ())))
+        {
+            snapToneNames[static_cast<std::size_t> (uploadedSlot)] = uploadedName;
+            ++assignmentNamesRevision;
+        }
+
         pendingAssignmentNameQueries.clear ();
-
-        for (auto& name : userIRNames)
-            name.clear ();
-
-        for (auto& name : snapToneNames)
-            name.clear ();
-
-        ++assignmentNamesRevision;
 
         constexpr int assignmentPageSize = 16;
 
@@ -440,13 +441,8 @@ bool MidiConnection::requestAssignmentNamesFromGP200 ()
 
     pendingAssignmentNameQueries.clear ();
 
-    for (auto& name : userIRNames)
-        name.clear ();
-
-    for (auto& name : snapToneNames)
-        name.clear ();
-
-    ++assignmentNamesRevision;
+    // Keep the current cache visible while fresh names are requested.
+    // Each received response replaces only its corresponding entry.
 
     // Section 0: User IR 1-20. Page 0 contains 16 entries and page 1
     // contains the remaining entries.
