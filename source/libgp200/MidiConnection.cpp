@@ -316,7 +316,7 @@ void MidiConnection::processSoundCloneUpload ()
         }
 
         soundCloneUploadPhase = SoundCloneUploadPhase::WaitingBeforeCommit;
-        soundCloneUploadNextActionMs = now + 300.0;
+        soundCloneUploadNextActionMs = now + 100.0;
         soundCloneUploadStatusText = "Sound Clone upload: waiting before commit";
         return;
     }
@@ -325,7 +325,7 @@ void MidiConnection::processSoundCloneUpload ()
     {
         midiOutput->sendMessageNow (soundCloneUpload.commitMessage);
         soundCloneUploadPhase = SoundCloneUploadPhase::WaitingAfterCommit;
-        soundCloneUploadNextActionMs = now + 1000.0;
+        soundCloneUploadNextActionMs = now + 100.0;
         soundCloneUploadStatusText = "Sound Clone upload: commit sent";
         lastMessageText = soundCloneUploadStatusText;
         return;

@@ -47,7 +47,7 @@ class EffectBlockComponent final : public juce::Component
     std::function<void (int blockIndex, int contentY)> onDragReorderRequested;
 
   private:
-    static constexpr int headerHeight = 68;
+    static constexpr int headerHeight = 56;
     static constexpr int paramControlHeight = 34;
     static constexpr int verticalPadding = 12;
 
