@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <functional>
+#include <vector>
 
 namespace
 {
@@ -89,9 +90,7 @@ public:
                     if (!folder.isDirectory ())
                         return;
 
-                    safeThis->pathEditor.setText (folder.getFullPathName (),
-                                                  juce::dontSendNotification);
-                    safeThis->scanFolder (folder);
+                    safeThis->scanFolder (folder, true);
                 });
         };
 
@@ -138,7 +137,7 @@ for (int i = 6; i <= 10; ++i)
         if (savedPath.isNotEmpty())
         {
             pathEditor.setText (savedPath, juce::dontSendNotification);
-            scanFolder (juce::File (savedPath));
+            scanFolder (juce::File (savedPath), true);
         }
 
         startTimerHz (10);
@@ -186,9 +185,16 @@ private:
                           panelOutlineColour.brighter (0.15f));
     }
 
+    struct BrowserEntry
+    {
+        juce::File file;
+        bool isDirectory{false};
+        bool isParentEntry{false};
+    };
+
     int getNumRows () override
     {
-        return cloFiles.size ();
+        return static_cast<int> (browserEntries.size ());
     }
 
     void paintListBoxItem (int rowNumber,
@@ -197,15 +203,27 @@ private:
                            int height,
                            bool rowIsSelected) override
     {
-        if (!juce::isPositiveAndBelow (rowNumber, cloFiles.size ()))
+        if (!juce::isPositiveAndBelow (
+                rowNumber, static_cast<int> (browserEntries.size ())))
             return;
+
+        const auto& entry = browserEntries[static_cast<std::size_t> (rowNumber)];
 
         if (rowIsSelected)
             g.fillAll (panelOutlineColour.withAlpha (0.18f));
 
         g.setColour (rowIsSelected ? panelOutlineColour : textColour);
         g.setFont (juce::FontOptions (14.0f));
-        g.drawText (cloFiles.getReference (rowNumber).getFileName (),
+
+        juce::String displayName;
+        if (entry.isParentEntry)
+            displayName = "[..]  Parent folder";
+        else if (entry.isDirectory)
+            displayName = "[DIR]  " + entry.file.getFileName ();
+        else
+            displayName = entry.file.getFileName ();
+
+        g.drawText (displayName,
                     10, 0, width - 20, height,
                     juce::Justification::centredLeft,
                     true);
@@ -213,27 +231,53 @@ private:
 
     void selectedRowsChanged (int lastRowSelected) override
     {
-        importButton.setEnabled (
-            juce::isPositiveAndBelow (lastRowSelected, cloFiles.size ()));
+        importButton.setEnabled (isFileEntry (lastRowSelected) && !isUploadActive ());
     }
 
     void listBoxItemDoubleClicked (int row, const juce::MouseEvent&) override
     {
-        if (juce::isPositiveAndBelow (row, cloFiles.size ()))
+        if (!juce::isPositiveAndBelow (
+                row, static_cast<int> (browserEntries.size ())))
+            return;
+
+        const auto entry = browserEntries[static_cast<std::size_t> (row)];
+
+        if (entry.isDirectory)
         {
-            fileList.selectRow (row);
-            importSelectedFile ();
+            scanFolder (entry.file, false);
+            return;
         }
+
+        fileList.selectRow (row);
+        importSelectedFile ();
+    }
+
+    bool isUploadActive () const
+    {
+        return isUploadBusy != nullptr && isUploadBusy ();
+    }
+
+    bool isFileEntry (int row) const
+    {
+        return juce::isPositiveAndBelow (
+                   row, static_cast<int> (browserEntries.size ()))
+               && !browserEntries[static_cast<std::size_t> (row)].isDirectory;
+    }
+
+    bool isAtLibraryRoot () const
+    {
+        return currentFolder.getFullPathName ().equalsIgnoreCase (
+            libraryRootFolder.getFullPathName ());
     }
 
     void scanCurrentPath ()
     {
-        scanFolder (juce::File (pathEditor.getText ().trim ())); 
+        scanFolder (juce::File (pathEditor.getText ().trim ()), true);
     }
 
-    void scanFolder (const juce::File& folder)
+    void scanFolder (const juce::File& folder, bool makeLibraryRoot)
     {
-        cloFiles.clear ();
+        browserEntries.clear ();
         fileList.deselectAllRows ();
         importButton.setEnabled (false);
 
@@ -247,20 +291,47 @@ private:
             return;
         }
 
-        statusLabel.setColour (juce::Label::textColourId, mutedTextColour);
-        pathEditor.setText (folder.getFullPathName(), juce::dontSendNotification);
+        if (makeLibraryRoot || !libraryRootFolder.isDirectory ())
+            libraryRootFolder = folder;
 
-        if (settings != nullptr)
+        currentFolder = folder;
+        pathEditor.setText (currentFolder.getFullPathName (),
+                            juce::dontSendNotification);
+        statusLabel.setColour (juce::Label::textColourId, mutedTextColour);
+
+        if (makeLibraryRoot && settings != nullptr)
         {
-            settings->setValue ("soundCloneFolder", folder.getFullPathName());
-            settings->saveIfNeeded();
+            settings->setValue ("soundCloneFolder",
+                                libraryRootFolder.getFullPathName ());
+            settings->saveIfNeeded ();
         }
 
-        folder.findChildFiles (cloFiles,
-                               juce::File::findFiles,
-                               false,
-                               "*.clo");
+        if (!isAtLibraryRoot ())
+        {
+            const auto parent = currentFolder.getParentDirectory ();
+            if (parent.isDirectory ())
+                browserEntries.push_back ({parent, true, true});
+        }
 
+        juce::Array<juce::File> childFolders;
+        currentFolder.findChildFiles (childFolders,
+                                      juce::File::findDirectories,
+                                      false);
+        std::sort (childFolders.begin (), childFolders.end (),
+                   [] (const juce::File& first, const juce::File& second)
+                   {
+                       return first.getFileName ().compareNatural (
+                                  second.getFileName (), true) < 0;
+                   });
+
+        for (const auto& childFolder : childFolders)
+            browserEntries.push_back ({childFolder, true, false});
+
+        juce::Array<juce::File> cloFiles;
+        currentFolder.findChildFiles (cloFiles,
+                                      juce::File::findFiles,
+                                      false,
+                                      "*.clo");
         std::sort (cloFiles.begin (), cloFiles.end (),
                    [] (const juce::File& first, const juce::File& second)
                    {
@@ -268,34 +339,43 @@ private:
                                   second.getFileName (), true) < 0;
                    });
 
+        for (const auto& cloFile : cloFiles)
+            browserEntries.push_back ({cloFile, false, false});
+
         fileList.updateContent ();
         fileList.repaint ();
 
+        const auto folderCount = childFolders.size ();
+        const auto fileCount = cloFiles.size ();
         statusLabel.setText (
-            cloFiles.isEmpty ()
-                ? juce::String ("No .clo files found in this folder.")
-                : juce::String (cloFiles.size ()) +
-                      (cloFiles.size () == 1 ? " CLO file found." : " CLO files found."),
+            juce::String (folderCount)
+                + (folderCount == 1 ? " folder, " : " folders, ")
+                + juce::String (fileCount)
+                + (fileCount == 1 ? " CLO file." : " CLO files."),
             juce::dontSendNotification);
 
-        if (!cloFiles.isEmpty ())
+        const int firstFileRow = (!isAtLibraryRoot () ? 1 : 0) + folderCount;
+        if (fileCount > 0)
+            fileList.selectRow (firstFileRow);
+        else if (!browserEntries.empty ())
             fileList.selectRow (0);
     }
 
     void importSelectedFile ()
     {
         const auto selectedRow = fileList.getSelectedRow ();
-        if (!juce::isPositiveAndBelow (selectedRow, cloFiles.size ()))
+        if (!isFileEntry (selectedRow))
             return;
 
         const auto selectedId = destinationBox.getSelectedId ();
         if (selectedId <= 0)
             return;
 
-        activeImportFile = cloFiles.getReference (selectedRow);
+        activeImportFile =
+            browserEntries[static_cast<std::size_t> (selectedRow)].file;
         uploadWasBusy = true;
         statusLabel.setColour (juce::Label::textColourId, panelOutlineColour);
-        statusLabel.setText ("Starting import: " + activeImportFile.getFileName(),
+        statusLabel.setText ("Starting import: " + activeImportFile.getFileName (),
                              juce::dontSendNotification);
         importButton.setEnabled (false);
 
@@ -304,7 +384,7 @@ private:
 
     void timerCallback () override
     {
-        const bool busy = isUploadBusy != nullptr && isUploadBusy();
+        const bool busy = isUploadActive ();
 
         if (busy)
         {
@@ -313,10 +393,10 @@ private:
             statusLabel.setColour (juce::Label::textColourId, panelOutlineColour);
 
             const auto status = getUploadStatus != nullptr
-                                    ? getUploadStatus()
-                                    : juce::String();
+                                    ? getUploadStatus ()
+                                    : juce::String ();
 
-            statusLabel.setText (status.isNotEmpty()
+            statusLabel.setText (status.isNotEmpty ()
                                      ? status
                                      : juce::String ("Importing Sound Clone..."),
                                  juce::dontSendNotification);
@@ -329,16 +409,16 @@ private:
             statusLabel.setColour (juce::Label::textColourId, statusOnColour);
 
             const auto status = getUploadStatus != nullptr
-                                    ? getUploadStatus()
-                                    : juce::String();
+                                    ? getUploadStatus ()
+                                    : juce::String ();
 
-            statusLabel.setText (status.isNotEmpty()
+            statusLabel.setText (status.isNotEmpty ()
                                      ? status
                                      : juce::String ("Sound Clone import completed."),
                                  juce::dontSendNotification);
         }
 
-        importButton.setEnabled (fileList.getSelectedRow() >= 0);
+        importButton.setEnabled (isFileEntry (fileList.getSelectedRow ())); 
     }
 
     ImportCallback onImport;
@@ -351,7 +431,9 @@ private:
     juce::ComboBox destinationBox;
     juce::TextButton importButton;
     juce::Label statusLabel;
-    juce::Array<juce::File> cloFiles;
+    std::vector<BrowserEntry> browserEntries;
+    juce::File libraryRootFolder;
+    juce::File currentFolder;
     juce::File activeImportFile;
     bool uploadWasBusy{false};
     std::unique_ptr<juce::FileChooser> folderChooser;
