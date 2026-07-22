@@ -197,18 +197,6 @@ This repository contains components subject to different compatible open-source 
 
 The exact JUCE version and the licensing option used for a release should be documented in the repository. Developers using a commercial JUCE licence may have different obligations for the original JUCE-dependent portions, while the GPL obligations of adapted `gp200editor` code still apply.
 
-Before publishing binary releases, include the complete licence texts and third-party notices, for example:
-
-```text
-LICENSES/
-├── AGPL-3.0-or-later.txt
-├── GPL-3.0-or-later.txt
-└── MIT-VST3.txt
-
-THIRD_PARTY_NOTICES.md
-```
-
-This section is a technical summary of the identified licensing requirements and is not legal advice.
 
 ## Disclaimer
 
