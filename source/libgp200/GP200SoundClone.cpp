@@ -60,8 +60,11 @@ juce::Result GP200SoundClone::buildUpload (const juce::File& cloFile,
     if (!cloFile.existsAsFile ())
         return juce::Result::fail ("The selected CLO file does not exist.");
 
-    if (!cloFile.hasFileExtension ("clo"))
-        return juce::Result::fail ("Select a Valeton .clo file.");
+    const bool isValetonClo = cloFile.hasFileExtension ("clo");
+    const bool isHotoneTone = cloFile.hasFileExtension ("tone");
+
+    if (!isValetonClo && !isHotoneTone)
+        return juce::Result::fail ("Select a Valeton .clo or Hotone .tone file.");
 
     if (!juce::isPositiveAndBelow (globalSlot, 10))
         return juce::Result::fail ("The Sound Clone destination must be AMP 1-5 or DIST 1-5.");
@@ -78,12 +81,42 @@ juce::Result GP200SoundClone::buildUpload (const juce::File& cloFile,
     if (bytesRead != modelBytes)
         return juce::Result::fail ("The CLO model data could not be read completely.");
 
-    // The GP-200 editor-generated CLO container starts with VTSI.
-    if (!(model[0] == 'V' && model[1] == 'T' && model[2] == 'S' && model[3] == 'I'))
+    const bool hasValetonSignature =
+        model[0] == 'V' && model[1] == 'T' && model[2] == 'S' && model[3] == 'I';
+
+    const bool hasHotoneSignature =
+        model[0] == 'H' && model[1] == 'T' && model[2] == 'S' && model[3] == 'I';
+
+    if (isValetonClo)
     {
-        return juce::Result::fail (
-            "This is not a GP-200/Valeton CLO file (expected VTSI header). "
-            "Hotone HTSI files are not directly compatible.");
+        if (!hasValetonSignature)
+            return juce::Result::fail (
+                "This is not a GP-200/Valeton CLO file (expected VTSI header).");
+    }
+    else
+    {
+        if (!hasHotoneSignature)
+            return juce::Result::fail (
+                "This is not a supported Hotone TONE file (expected HTSI header).");
+
+        // Experimental Hotone -> Valeton conversion derived from tested files:
+        // HTSI -> VTSI, declared container size 0x2288 -> 0x1288,
+        // and declared payload size 0x2200 -> 0x1200.
+        // The remaining model bytes are preserved exactly as supplied.
+        model[0] = 'V';
+        model[1] = 'T';
+        model[2] = 'S';
+        model[3] = 'I';
+
+        model[4] = 0x88;
+        model[5] = 0x12;
+        model[6] = 0x00;
+        model[7] = 0x00;
+
+        model[20] = 0x00;
+        model[21] = 0x12;
+        model[22] = 0x00;
+        model[23] = 0x00;
     }
 
     std::array<juce::uint8, blobBytes> blob{};
