@@ -17,7 +17,7 @@ constexpr double referenceA4Hz = 440.0;
 }
 
 TunerEngine::TunerEngine()
-    : juce::Thread("GP200 Studio Tuner")
+    : juce::Thread("GP200 VST Tuner")
 {
 }
 

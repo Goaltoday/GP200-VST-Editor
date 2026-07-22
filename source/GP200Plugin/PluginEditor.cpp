@@ -43,7 +43,7 @@ public:
         addAndMakeVisible (statusLabel);
 
         juce::PropertiesFile::Options options;
-        options.applicationName = "GP200 Studio";
+        options.applicationName = "GP200 VST";
         options.filenameSuffix = "settings";
         options.folderName = "GP200Studio";
         options.osxLibrarySubFolder = "Application Support";
@@ -673,7 +673,7 @@ void AudioPluginAudioProcessorEditor::paint (juce::Graphics& g)
 
     g.setFont (juce::Font (21.0f));
     g.setColour (mutedTextColour);
-    g.drawText ("Studio",
+    g.drawText ("VST",
                 112, 9, 74, 29,
                 juce::Justification::centredLeft);
 
