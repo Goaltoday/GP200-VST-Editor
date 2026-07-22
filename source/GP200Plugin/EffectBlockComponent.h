@@ -1,3 +1,12 @@
+/*
+    GP200 VST
+
+    Portions adapted from phash/gp200editor and its contributors.
+    Those portions are licensed under GPL-3.0-or-later.
+
+  
+    SPDX-License-Identifier: GPL-3.0-or-later
+*/
 #pragma once
 
 #include "../libgp200/GP200EffectDatabase.h"
