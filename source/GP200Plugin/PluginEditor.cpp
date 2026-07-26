@@ -775,7 +775,7 @@ AudioPluginAudioProcessorEditor::AudioPluginAudioProcessorEditor (
       processorRef (p),
       midiConnection (p.getMidiConnection())
 {
-    setSize (960, 760);
+    setSize (960, 390);
 
     addAndMakeVisible (previousBankButton);
     addAndMakeVisible (previousPresetButton);
@@ -808,7 +808,8 @@ tunerDisplay.setVisible(false);
 
     effectChainRibbon.onBlockSelected = [this] (int blockIndex)
     {
-        selectEffectBlock (blockIndex);
+        // Clicking the selected block again closes the parameter editor.
+        selectEffectBlock (selectedEffectBlockIndex == blockIndex ? -1 : blockIndex);
     };
     effectChainRibbon.onBlockReordered = [this] (int blockIndex, int targetPosition)
     {
@@ -1397,7 +1398,14 @@ tunerDisplay.setBounds (
     // ============================================================
 
     effectChainRibbon.setBounds (20, 246, getWidth () - 40, 116);
-    effectsViewport.setBounds (20, 372, getWidth () - 40, getHeight () - 392);
+
+    const bool hasSelectedBlock = selectedEffectBlockIndex >= 0;
+    effectsViewport.setVisible (hasSelectedBlock);
+
+    if (hasSelectedBlock)
+        effectsViewport.setBounds (20, 372, getWidth () - 40, juce::jmax (0, getHeight () - 392));
+    else
+        effectsViewport.setBounds (20, 372, getWidth () - 40, 0);
 
 
 if (toneMatchPanel != nullptr)
@@ -3023,11 +3031,13 @@ void AudioPluginAudioProcessorEditor::rebuildEffectBlocks (const gp200::GP200Pre
         block->setMoveButtonsEnabled (currentPosition > 0,
                                       currentPosition < static_cast<int> (preset.routingOrder.size ()) - 1);
 
-        if (selectedEffectBlockIndex < 0)
-            selectedEffectBlockIndex = blockIndex;
         block->setExpanded (blockIndex == selectedEffectBlockIndex);
 
-        block->onHeightChanged = [this] { layoutEffectBlocks (); };
+        block->onHeightChanged = [this]
+        {
+            layoutEffectBlocks ();
+            scheduleEditorHeightUpdate ();
+        };
 
         block->onToggleRequested = [this] (int blockIndex, bool shouldBeOn)
         {
@@ -3182,16 +3192,83 @@ void AudioPluginAudioProcessorEditor::layoutEffectBlocks ()
 
 void AudioPluginAudioProcessorEditor::selectEffectBlock (int blockIndex)
 {
-    bool found = false;
-    for (const auto& block : effectBlocks)
-        if (block != nullptr && block->getBlockIndex () == blockIndex) { found = true; break; }
-    if (!found && !effectBlocks.empty () && effectBlocks.front () != nullptr)
-        blockIndex = effectBlocks.front ()->getBlockIndex ();
+    if (blockIndex >= 0)
+    {
+        bool found = false;
+
+        for (const auto& block : effectBlocks)
+        {
+            if (block != nullptr && block->getBlockIndex () == blockIndex)
+            {
+                found = true;
+                break;
+            }
+        }
+
+        if (!found)
+            blockIndex = -1;
+    }
+
     selectedEffectBlockIndex = blockIndex;
     effectChainRibbon.setSelectedBlockIndex (blockIndex);
     effectsViewport.setViewPosition (0, 0);
+    effectsViewport.setVisible (blockIndex >= 0);
     layoutEffectBlocks ();
+    scheduleEditorHeightUpdate ();
     repaint ();
+}
+
+void AudioPluginAudioProcessorEditor::scheduleEditorHeightUpdate ()
+{
+    if (editorHeightUpdatePending)
+        return;
+
+    editorHeightUpdatePending = true;
+
+    juce::Component::SafePointer<AudioPluginAudioProcessorEditor> safeThis (this);
+
+    juce::MessageManager::callAsync (
+        [safeThis]
+        {
+            if (safeThis == nullptr)
+                return;
+
+            safeThis->editorHeightUpdatePending = false;
+            safeThis->updateEditorHeight ();
+        });
+}
+
+void AudioPluginAudioProcessorEditor::updateEditorHeight ()
+{
+    constexpr int compactHeight = 390;
+    constexpr int editorTop = 372;
+    constexpr int editorBottomMargin = 20;
+    constexpr int maximumHeight = 900;
+
+    int targetHeight = compactHeight;
+
+    if (selectedEffectBlockIndex >= 0)
+    {
+        const auto contentWidth = juce::jmax (100, getWidth () - 56);
+
+        for (const auto& block : effectBlocks)
+        {
+            if (block != nullptr && block->getBlockIndex () == selectedEffectBlockIndex)
+            {
+                targetHeight = editorTop
+                             + block->getPreferredHeight (contentWidth)
+                             + editorBottomMargin;
+                break;
+            }
+        }
+    }
+
+    targetHeight = juce::jlimit (compactHeight, maximumHeight, targetHeight);
+
+    if (getHeight () != targetHeight)
+        setSize (getWidth (), targetHeight);
+    else
+        resized ();
 }
 
 void AudioPluginAudioProcessorEditor::updateEffectChainRibbon (const gp200::GP200Preset& preset)

@@ -91,6 +91,8 @@ juce::String getSelectedCompareSnapshotLabel () const;
     void rebuildEffectBlocks (const gp200::GP200Preset& preset, const juce::String& newSignature);
     void layoutEffectBlocks ();
     void selectEffectBlock (int blockIndex);
+    void scheduleEditorHeightUpdate ();
+    void updateEditorHeight ();
     void updateEffectChainRibbon (const gp200::GP200Preset& preset);
 
     int getDropPositionForContentY (int contentY) const;
@@ -262,6 +264,7 @@ CompareSnapshot selectedCompareSnapshot{
     bool offlinePresetDirty{false};
     bool lastConnectionIndicatorState{false};
     int selectedEffectBlockIndex{-1};
+    bool editorHeightUpdatePending{false};
 	
 	juce::TextButton toneMatchButton{"Tone Match"};
 std::unique_ptr<ToneMatchPanel> toneMatchPanel;
