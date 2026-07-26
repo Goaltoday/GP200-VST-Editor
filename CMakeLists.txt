@@ -31,6 +31,22 @@ juce_add_plugin(GP200Plugin
 
 juce_generate_juce_header(GP200Plugin)
 
+juce_add_binary_data(GP200RibbonAssets
+    SOURCES
+        assets/ribbon/vol.svg
+        assets/ribbon/pre.svg
+        assets/ribbon/wah.svg
+        assets/ribbon/dst.svg
+        assets/ribbon/amp.svg
+        assets/ribbon/nr.svg
+        assets/ribbon/cab.svg
+        assets/ribbon/eq.svg
+        assets/ribbon/mod.svg
+        assets/ribbon/dly.svg
+        assets/ribbon/rvb.svg
+)
+
+
 target_sources(GP200Plugin
     PRIVATE
         source/GP200Plugin/PluginProcessor.cpp
@@ -93,6 +109,7 @@ target_compile_definitions(GP200Plugin
 
 target_link_libraries(GP200Plugin
     PRIVATE
+        GP200RibbonAssets
         juce::juce_audio_devices
         juce::juce_audio_processors
         juce::juce_audio_utils
