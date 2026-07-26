@@ -12,10 +12,12 @@
 #include "EffectBlockComponent.h"
 #include "PluginProcessor.h"
 #include "../libgp200/MidiConnection.h"
+#include "../libgp200/GP200Preset.h"
 #include "TunerDisplayComponent.h"
 #include "ToneMatch/ToneMatchPanel.h"
 
 #include <array>
+#include <cstdint>
 #include <deque>
 #include <memory>
 #include <vector>
@@ -215,6 +217,11 @@ CompareSnapshot selectedCompareSnapshot{
     juce::String presetNameEditorSignature;
     juce::String patchVolumeSourceSignature;
     juce::String effectsStatusText{"Effects: waiting for preset data"};
+
+    gp200::GP200Preset offlinePreset;
+    std::uint64_t offlinePresetRevision{0};
+    bool offlinePresetDirty{false};
+    bool lastConnectionIndicatorState{false};
 	
 	juce::TextButton toneMatchButton{"Tone Match"};
 std::unique_ptr<ToneMatchPanel> toneMatchPanel;
