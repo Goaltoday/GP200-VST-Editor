@@ -1,0 +1,41 @@
+name: Build Windows VST3
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - develop
+      - "feature/**"
+
+jobs:
+  build-windows:
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure CMake
+        run: cmake -S . -B build -A x64
+
+      - name: Build Release
+        run: cmake --build build --config Release --parallel
+
+      - name: Find generated VST3
+        shell: powershell
+        run: |
+          Get-ChildItem -Path build -Recurse -Filter *.vst3 |
+          ForEach-Object { Write-Host $_.FullName }
+
+      - name: Upload VST3
+        uses: actions/upload-artifact@v4
+        with:
+          name: GP200-VST3-Windows
+          path: |
+            build/**/*_artefacts/Release/VST3/*.vst3/**
+            build/**/*_artefacts/Release/VST3/*.vst3
+          if-no-files-found: error
+          retention-days: 14
