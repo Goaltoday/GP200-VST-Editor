@@ -3189,17 +3189,22 @@ juce::String AudioPluginAudioProcessorEditor::
         processorRef.getSavedGP200PresetSnapshotSlot (
             snapshotIndex);
 
-    if (slot < 0 ||
-        !processorRef.hasSavedGP200PresetData (
+    if (!processorRef.hasSavedGP200PresetData (
             snapshotIndex))
     {
         return "empty";
     }
 
-    return formatPresetCompact (
-        slot,
+    const auto savedName =
         processorRef.getSavedGP200PresetSnapshotName (
-            snapshotIndex));
+            snapshotIndex).trim ();
+
+    // Offline snapshots intentionally use slot -1. They are valid DAW
+    // snapshots and must display their saved preset name instead of "empty".
+    if (slot < 0)
+        return savedName.isNotEmpty () ? savedName : "Offline preset";
+
+    return formatPresetCompact (slot, savedName);
 }
 
 int AudioPluginAudioProcessorEditor::wrapPresetSlot (int slot)
