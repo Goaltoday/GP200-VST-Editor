@@ -1356,6 +1356,12 @@ void AudioPluginAudioProcessorEditor::saveCurrentPresetToProject ()
 
     if (!midiConnection.isConnected ())
     {
+        const auto visiblePresetName =
+            presetNameEditor.getText ().trim ().substring (0, gp200::presetNameMaxLength);
+
+        if (visiblePresetName.isNotEmpty ())
+            offlinePreset.patchName = visiblePresetName;
+
         const auto snapshotData = serialiseOfflineSnapshot (
             offlinePreset,
             static_cast<int> (patchVolumeSlider.getValue ()),
