@@ -645,7 +645,19 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::paint (juce::G
         g.setColour (displayColour);
         g.setFont (juce::Font (13.0f, juce::Font::bold));
         g.drawText (item.blockName, tile.reduced (4, 10), juce::Justification::centred);
-        g.fillEllipse (static_cast<float> (tile.getCentreX () - 4), static_cast<float> (tile.getBottom () + 7), 8.0f, 8.0f);
+
+        if (selected)
+        {
+            juce::Path selectionArrow;
+            const auto centreX = static_cast<float> (tile.getCentreX ());
+            const auto arrowTop = static_cast<float> (tile.getBottom () + 5);
+            selectionArrow.startNewSubPath (centreX - 6.0f, arrowTop + 8.0f);
+            selectionArrow.lineTo (centreX, arrowTop);
+            selectionArrow.lineTo (centreX + 6.0f, arrowTop + 8.0f);
+            selectionArrow.closeSubPath ();
+            g.setColour (displayColour);
+            g.fillPath (selectionArrow);
+        }
     }
 
     if (dragging && dragTargetPosition >= 0)
@@ -3128,17 +3140,18 @@ void AudioPluginAudioProcessorEditor::updateEffectChainRibbon (const gp200::GP20
 {
     auto colourForBlock = [] (const juce::String& name)
     {
-        if (name == "VOL") return juce::Colour (0xffe4c21a);
-        if (name == "PRE") return juce::Colour (0xffff8f22);
-        if (name == "WAH") return juce::Colour (0xff3f9cff);
-        if (name == "DST") return juce::Colour (0xffff4f55);
-        if (name == "AMP") return juce::Colour (0xffff941f);
-        if (name == "NR")  return juce::Colour (0xffa767db);
-        if (name == "CAB") return juce::Colour (0xffff5959);
-        if (name == "EQ")  return juce::Colour (0xff5ccf62);
-        if (name == "MOD") return juce::Colour (0xff2fd0bf);
-        if (name == "DLY") return juce::Colour (0xff4d9dff);
-        if (name == "RVB") return juce::Colour (0xffa766e5);
+        // Keep the ribbon palette identical to EffectBlockComponent::colourForSlotIndex().
+        if (name == "PRE") return juce::Colour (0xffffb12b);
+        if (name == "WAH") return juce::Colour (0xffd761ff);
+        if (name == "DST") return juce::Colour (0xffff5050);
+        if (name == "AMP") return juce::Colour (0xffff8a2a);
+        if (name == "NR")  return juce::Colour (0xff9aa6a6);
+        if (name == "CAB") return juce::Colour (0xff3be07d);
+        if (name == "EQ")  return juce::Colour (0xff35c8ff);
+        if (name == "MOD") return juce::Colour (0xff4f8dff);
+        if (name == "DLY") return juce::Colour (0xff7068ff);
+        if (name == "RVB") return juce::Colour (0xffb96cff);
+        if (name == "VOL") return juce::Colour (0xffb7b7b7);
         return juce::Colour (0xffffa42a);
     };
     std::vector<EffectChainRibbonComponent::Item> items;
