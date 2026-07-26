@@ -29,6 +29,190 @@ const juce::Colour mutedTextColour{0xffd8d8d8};
 const juce::Colour statusOnColour{0xff57f05f};
 const juce::Colour statusOffColour{0xffd84545};
 
+void drawRibbonBlockIcon (juce::Graphics& g,
+                          const juce::String& blockName,
+                          juce::Rectangle<float> area,
+                          juce::Colour colour)
+{
+    area = area.reduced (2.0f);
+    g.setColour (colour);
+
+    const auto stroke = juce::PathStrokeType (1.6f,
+                                               juce::PathStrokeType::curved,
+                                               juce::PathStrokeType::rounded);
+
+    if (blockName == "VOL")
+    {
+        const float baseY = area.getBottom() - 2.0f;
+        const float gap = area.getWidth() / 7.0f;
+        for (int i = 0; i < 5; ++i)
+        {
+            const float height = 7.0f + static_cast<float> (i) * 4.0f;
+            const float x = area.getX() + gap * (static_cast<float> (i) + 1.0f);
+            g.fillRoundedRectangle (x, baseY - height, 3.0f, height, 1.5f);
+        }
+        return;
+    }
+
+    if (blockName == "PRE")
+    {
+        auto body = area.withSizeKeepingCentre (area.getWidth() * 0.48f,
+                                                area.getHeight() * 0.78f);
+        g.drawRoundedRectangle (body, 4.0f, 1.6f);
+        g.drawLine (body.getX() + 3.0f, body.getY() + 6.0f,
+                    body.getRight() - 3.0f, body.getY() + 6.0f, 1.3f);
+        g.drawLine (body.getX() + 3.0f, body.getBottom() - 6.0f,
+                    body.getRight() - 3.0f, body.getBottom() - 6.0f, 1.3f);
+        juce::Path filament;
+        filament.startNewSubPath (body.getX() + 4.0f, body.getCentreY());
+        filament.cubicTo (body.getCentreX() - 4.0f, body.getY() + 8.0f,
+                          body.getCentreX() + 4.0f, body.getBottom() - 8.0f,
+                          body.getRight() - 4.0f, body.getCentreY());
+        g.strokePath (filament, stroke);
+        return;
+    }
+
+    if (blockName == "WAH")
+    {
+        juce::Path pedal;
+        pedal.startNewSubPath (area.getX() + 8.0f, area.getBottom() - 5.0f);
+        pedal.lineTo (area.getRight() - 7.0f, area.getBottom() - 5.0f);
+        pedal.lineTo (area.getRight() - 10.0f, area.getY() + 6.0f);
+        pedal.lineTo (area.getX() + 13.0f, area.getY() + 10.0f);
+        pedal.closeSubPath();
+        g.strokePath (pedal, stroke);
+        g.drawLine (area.getX() + 13.0f, area.getY() + 14.0f,
+                    area.getRight() - 11.0f, area.getY() + 10.0f, 1.4f);
+        return;
+    }
+
+    if (blockName == "DST")
+    {
+        juce::Path wave;
+        const float y = area.getCentreY();
+        wave.startNewSubPath (area.getX() + 2.0f, y);
+        wave.lineTo (area.getX() + 8.0f, y);
+        wave.lineTo (area.getX() + 12.0f, y - 11.0f);
+        wave.lineTo (area.getX() + 17.0f, y + 11.0f);
+        wave.lineTo (area.getX() + 22.0f, y - 8.0f);
+        wave.lineTo (area.getX() + 27.0f, y + 8.0f);
+        wave.lineTo (area.getRight() - 2.0f, y);
+        g.strokePath (wave, stroke);
+        return;
+    }
+
+    if (blockName == "AMP")
+    {
+        auto amp = area.withTrimmedTop (7.0f).withTrimmedBottom (5.0f);
+        g.drawRoundedRectangle (amp, 3.0f, 1.6f);
+        g.drawLine (amp.getX() + 3.0f, amp.getY() + 8.0f,
+                    amp.getRight() - 3.0f, amp.getY() + 8.0f, 1.3f);
+        for (int i = 0; i < 3; ++i)
+        {
+            const float x = amp.getX() + 8.0f + static_cast<float> (i) * 8.0f;
+            g.fillEllipse (x, amp.getY() + 3.0f, 3.0f, 3.0f);
+        }
+        g.drawLine (amp.getX() + 6.0f, amp.getBottom() + 1.0f,
+                    amp.getX() + 10.0f, amp.getBottom() + 1.0f, 1.5f);
+        g.drawLine (amp.getRight() - 10.0f, amp.getBottom() + 1.0f,
+                    amp.getRight() - 6.0f, amp.getBottom() + 1.0f, 1.5f);
+        return;
+    }
+
+    if (blockName == "NR")
+    {
+        juce::Path wave;
+        const float y = area.getCentreY();
+        wave.startNewSubPath (area.getX() + 2.0f, y);
+        wave.cubicTo (area.getX() + 8.0f, y - 12.0f,
+                      area.getX() + 12.0f, y + 12.0f,
+                      area.getX() + 18.0f, y);
+        wave.cubicTo (area.getX() + 23.0f, y - 7.0f,
+                      area.getX() + 27.0f, y + 7.0f,
+                      area.getRight() - 2.0f, y);
+        g.strokePath (wave, stroke);
+        return;
+    }
+
+    if (blockName == "CAB")
+    {
+        auto cab = area.reduced (5.0f, 2.0f);
+        g.drawRoundedRectangle (cab, 3.0f, 1.6f);
+        auto speaker = cab.withSizeKeepingCentre (cab.getWidth() * 0.58f,
+                                                  cab.getHeight() * 0.58f);
+        g.drawEllipse (speaker, 1.5f);
+        g.fillEllipse (speaker.withSizeKeepingCentre (5.0f, 5.0f));
+        return;
+    }
+
+    if (blockName == "EQ")
+    {
+        const float top = area.getY() + 2.0f;
+        const float bottom = area.getBottom() - 2.0f;
+        const float xs[] = { area.getX() + area.getWidth() * 0.25f,
+                             area.getCentreX(),
+                             area.getX() + area.getWidth() * 0.75f };
+        const float ys[] = { area.getY() + area.getHeight() * 0.32f,
+                             area.getY() + area.getHeight() * 0.67f,
+                             area.getY() + area.getHeight() * 0.45f };
+        for (int i = 0; i < 3; ++i)
+        {
+            g.drawLine (xs[i], top, xs[i], bottom, 1.5f);
+            g.fillRoundedRectangle (xs[i] - 4.0f, ys[i] - 2.0f, 8.0f, 4.0f, 2.0f);
+        }
+        return;
+    }
+
+    if (blockName == "MOD")
+    {
+        juce::Path wave;
+        const float midY = area.getCentreY();
+        wave.startNewSubPath (area.getX() + 1.0f, midY);
+        const float width = area.getWidth() - 2.0f;
+        wave.cubicTo (area.getX() + width * 0.18f, area.getY() + 1.0f,
+                      area.getX() + width * 0.32f, area.getY() + 1.0f,
+                      area.getX() + width * 0.50f, midY);
+        wave.cubicTo (area.getX() + width * 0.68f, area.getBottom() - 1.0f,
+                      area.getX() + width * 0.82f, area.getBottom() - 1.0f,
+                      area.getRight() - 1.0f, midY);
+        g.strokePath (wave, stroke);
+        return;
+    }
+
+    if (blockName == "DLY")
+    {
+        const auto centre = area.getCentre();
+        for (int i = 0; i < 3; ++i)
+        {
+            const float size = 11.0f + static_cast<float> (i) * 8.0f;
+            g.drawEllipse (centre.x - size * 0.5f,
+                           centre.y - size * 0.5f,
+                           size, size, 1.4f);
+        }
+        g.fillEllipse (centre.x - 2.0f, centre.y - 2.0f, 4.0f, 4.0f);
+        return;
+    }
+
+    if (blockName == "RVB")
+    {
+        const auto c = area.getCentre();
+        const float w = area.getWidth() * 0.52f;
+        const float h = area.getHeight() * 0.48f;
+        juce::Path cube;
+        cube.startNewSubPath (c.x, c.y - h * 0.75f);
+        cube.lineTo (c.x + w * 0.55f, c.y - h * 0.25f);
+        cube.lineTo (c.x + w * 0.55f, c.y + h * 0.45f);
+        cube.lineTo (c.x, c.y + h * 0.85f);
+        cube.lineTo (c.x - w * 0.55f, c.y + h * 0.45f);
+        cube.lineTo (c.x - w * 0.55f, c.y - h * 0.25f);
+        cube.closeSubPath();
+        g.strokePath (cube, stroke);
+        g.drawLine (c.x, c.y - h * 0.75f, c.x, c.y + h * 0.85f, 1.3f);
+        g.drawLine (c.x - w * 0.55f, c.y - h * 0.25f, c.x, c.y + h * 0.10f, 1.3f);
+        g.drawLine (c.x + w * 0.55f, c.y - h * 0.25f, c.x, c.y + h * 0.10f, 1.3f);
+    }
+}
+
 gp200::GP200Preset makeDefaultOfflinePreset ()
 {
     gp200::GP200Preset preset;
@@ -642,9 +826,14 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::paint (juce::G
             g.setColour (displayColour.withAlpha (0.18f));
             g.drawRoundedRectangle (tile.toFloat ().expanded (3.0f), 8.0f, 2.0f);
         }
+        const auto iconArea = tile.toFloat().reduced (10.0f, 8.0f).withTrimmedBottom (24.0f);
+        drawRibbonBlockIcon (g, item.blockName, iconArea, displayColour);
+
         g.setColour (displayColour);
-        g.setFont (juce::Font (13.0f, juce::Font::bold));
-        g.drawText (item.blockName, tile.reduced (4, 10), juce::Justification::centred);
+        g.setFont (juce::Font (11.5f, juce::Font::bold));
+        g.drawText (item.blockName,
+                    tile.withTrimmedTop (tile.getHeight() - 24).reduced (3, 2),
+                    juce::Justification::centred);
 
         if (selected)
         {
