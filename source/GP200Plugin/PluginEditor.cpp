@@ -127,7 +127,7 @@ gp200::GP200Preset makeDefaultOfflinePreset ()
 
 
 constexpr juce::uint32 offlineSnapshotMagic = 0x4f503247u; // "GP2O"
-constexpr int offlineSnapshotVersion = 1;
+constexpr int offlineSnapshotVersion = 2;
 
 juce::MemoryBlock serialiseOfflineSnapshot (const gp200::GP200Preset& preset,
                                             int patchVolume,
@@ -141,6 +141,9 @@ juce::MemoryBlock serialiseOfflineSnapshot (const gp200::GP200Preset& preset,
     out.writeInt (offlineSnapshotVersion);
     out.writeString (preset.patchName);
     out.writeString (preset.author);
+    out.writeInt (static_cast<int> (preset.prstRawSource.getSize ()));
+    if (preset.prstRawSource.getSize () > 0)
+        out.write (preset.prstRawSource.getData (), preset.prstRawSource.getSize ());
     out.writeInt (preset.fxLoopSend);
     out.writeInt (preset.fxLoopReturn);
     out.writeInt (patchVolume);
@@ -175,14 +178,31 @@ bool deserialiseOfflineSnapshot (const juce::MemoryBlock& data,
 
     juce::MemoryInputStream in (data, false);
 
-    if (static_cast<juce::uint32> (in.readInt ()) != offlineSnapshotMagic
-        || in.readInt () != offlineSnapshotVersion)
+    if (static_cast<juce::uint32> (in.readInt ()) != offlineSnapshotMagic)
+        return false;
+
+    const auto snapshotVersion = in.readInt ();
+    if (snapshotVersion != 1 && snapshotVersion != offlineSnapshotVersion)
         return false;
 
     gp200::GP200Preset decoded;
     decoded.isValid = true;
     decoded.patchName = in.readString ();
     decoded.author = in.readString ();
+
+    if (snapshotVersion >= 2)
+    {
+        const auto rawSize = in.readInt ();
+        if (rawSize < 0 || static_cast<juce::int64> (rawSize) > in.getNumBytesRemaining ())
+            return false;
+        if (rawSize > 0)
+        {
+            decoded.prstRawSource.setSize (static_cast<std::size_t> (rawSize), false);
+            if (in.read (decoded.prstRawSource.getData (), rawSize) != rawSize)
+                return false;
+        }
+    }
+
     decoded.fxLoopSend = in.readInt ();
     decoded.fxLoopReturn = in.readInt ();
     patchVolume = juce::jlimit (0, 100, in.readInt ());
@@ -788,6 +808,7 @@ addAndMakeVisible (savePresetButton);
 addAndMakeVisible (recallPresetButton);
 addAndMakeVisible (storePresetButton);
 addAndMakeVisible (importPrstButton);
+addAndMakeVisible (exportPrstButton);
 addAndMakeVisible (importIRButton);
 addAndMakeVisible (soundCloneButton);
 addAndMakeVisible (userIRSlotBox);
@@ -844,6 +865,7 @@ setupButton (compareBButton);
 setupButton (recallPresetButton);
 setupButton (storePresetButton);
 setupButton (importPrstButton);
+setupButton (exportPrstButton);
 setupButton (importIRButton);
 setupButton (soundCloneButton);
 setupButton (tunerButton);
@@ -1056,6 +1078,12 @@ compareBButton.onClick = [this]
     [this]
     {
         openPrstFileChooser ();
+    };
+
+    exportPrstButton.onClick =
+    [this]
+    {
+        openExportPrstFileChooser ();
     };
 
     for (int i = 0; i < gp200::userIRCount; ++i)
@@ -1360,11 +1388,22 @@ storePresetButton.setBounds (
     buttonWidth,
     buttonHeight);
 
+const auto prstX = actionsArea.getX () + buttonWidth + horizontalGap;
+const auto prstY = actionsArea.getY () + buttonHeight + verticalGap;
+constexpr int prstButtonGap = 4;
+const auto prstButtonHeight = (buttonHeight - prstButtonGap) / 2;
+
 importPrstButton.setBounds (
-    actionsArea.getX () + buttonWidth + horizontalGap,
-    actionsArea.getY () + buttonHeight + verticalGap,
+    prstX,
+    prstY,
     buttonWidth,
-    buttonHeight);
+    prstButtonHeight);
+
+exportPrstButton.setBounds (
+    prstX,
+    prstY + prstButtonHeight + prstButtonGap,
+    buttonWidth,
+    buttonHeight - prstButtonHeight - prstButtonGap);
 
     userIRSlotBox.setBounds (418, 191, 130, 28);
     importIRButton.setBounds (558, 191, 140, 28);
@@ -1649,6 +1688,118 @@ void AudioPluginAudioProcessorEditor::saveCurrentPresetToProject ()
                         getSelectedCompareSnapshotLabel () +
                         " to DAW";
     updateEffectBlocksUI ();
+    repaint ();
+}
+
+void AudioPluginAudioProcessorEditor::openExportPrstFileChooser ()
+{
+    gp200::GP200Preset preset;
+
+    if (!midiConnection.isConnected ())
+    {
+        preset = offlinePreset;
+    }
+    else
+    {
+        const auto liveData = midiConnection.getCurrentPresetDumpDataCopy ();
+        preset = gp200::GP200PresetCodec::decodeLivePresetDump (liveData);
+    }
+
+    if (!preset.isValid)
+    {
+        effectsStatusText = "Export PRST failed: no valid current preset";
+        repaint ();
+        return;
+    }
+
+    const auto visibleName = presetNameEditor.getText ().trim ().substring (
+        0, gp200::presetNameMaxLength);
+    if (visibleName.isNotEmpty ())
+        preset.patchName = visibleName;
+
+    auto suggestedName = preset.patchName.trim ();
+    if (suggestedName.isEmpty () || suggestedName == "unknown")
+        suggestedName = "GP200 preset";
+
+    suggestedName = suggestedName.replaceCharacters ("\\/:*?\"<>|", "_________");
+
+    exportPrstFileChooser = std::make_unique<juce::FileChooser> (
+        "Export GP-200 preset",
+        juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
+            .getChildFile (suggestedName + ".prst"),
+        "*.prst");
+
+    exportPrstFileChooser->launchAsync (
+        juce::FileBrowserComponent::saveMode
+            | juce::FileBrowserComponent::canSelectFiles
+            | juce::FileBrowserComponent::warnAboutOverwriting,
+        [safeThis = juce::Component::SafePointer<AudioPluginAudioProcessorEditor> (this)]
+        (const juce::FileChooser& chooser)
+        {
+            if (safeThis == nullptr)
+                return;
+
+            auto file = chooser.getResult ();
+            if (file == juce::File ())
+                return;
+
+            if (!file.hasFileExtension ("prst"))
+                file = file.withFileExtension ("prst");
+
+            safeThis->exportCurrentPresetToPrst (file);
+        });
+}
+
+void AudioPluginAudioProcessorEditor::exportCurrentPresetToPrst (
+    const juce::File& file)
+{
+    gp200::GP200Preset preset;
+
+    if (!midiConnection.isConnected ())
+    {
+        preset = offlinePreset;
+    }
+    else
+    {
+        preset = gp200::GP200PresetCodec::decodeLivePresetDump (
+            midiConnection.getCurrentPresetDumpDataCopy ());
+    }
+
+    if (!preset.isValid)
+    {
+        effectsStatusText = "Export PRST failed: no valid current preset";
+        repaint ();
+        return;
+    }
+
+    const auto visibleName = presetNameEditor.getText ().trim ().substring (
+        0, gp200::presetNameMaxLength);
+    if (visibleName.isNotEmpty ())
+    {
+        preset.patchName = visibleName;
+        if (!midiConnection.isConnected ())
+            offlinePreset.patchName = visibleName;
+    }
+
+    const auto encoded = gp200::GP200PresetCodec::encodePrstFile (preset);
+    if (encoded.getSize () != 1224)
+    {
+        effectsStatusText = "Export PRST failed: encoder returned invalid data";
+        repaint ();
+        return;
+    }
+
+    if (!file.replaceWithData (encoded.getData (), encoded.getSize ()))
+    {
+        effectsStatusText = "Export PRST failed: could not write " + file.getFileName ();
+        repaint ();
+        return;
+    }
+
+    if (!midiConnection.isConnected ())
+        offlinePreset.prstRawSource = encoded;
+
+    effectsStatusText = "Exported PRST: " + file.getFileName ();
     repaint ();
 }
 

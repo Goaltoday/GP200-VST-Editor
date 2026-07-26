@@ -46,6 +46,8 @@ class AudioPluginAudioProcessorEditor final : public juce::AudioProcessorEditor,
 	
 	void openPrstFileChooser ();
     void importPrstFile (const juce::File& file);
+    void openExportPrstFileChooser ();
+    void exportCurrentPresetToPrst (const juce::File& file);
     void openIRFileChooser ();
     void importIRFile (const juce::File& file);
     void openSoundCloneWindow ();
@@ -167,8 +169,10 @@ juce::TextButton savePresetButton{"Save to DAW"};
 juce::TextButton recallPresetButton{"Recall from DAW"};
 juce::TextButton storePresetButton{"Store to GP-200"};
 juce::TextButton importPrstButton{"Import PRST"};
+juce::TextButton exportPrstButton{"Export PRST"};
 juce::TextButton allBlocksOffButton{"FX OFF"};
 std::unique_ptr<juce::FileChooser> prstFileChooser;
+std::unique_ptr<juce::FileChooser> exportPrstFileChooser;
     juce::TextButton importIRButton{"Import IR"};
     juce::ComboBox userIRSlotBox;
     std::unique_ptr<juce::FileChooser> irFileChooser;
