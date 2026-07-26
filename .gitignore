@@ -243,3 +243,6 @@ coverage.xml
 *.gcno
 *.gcov
 source_latest5.zip
+
+!external/
+!external/JUCE/
