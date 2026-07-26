@@ -540,6 +540,164 @@ private:
     std::unique_ptr<juce::PropertiesFile> settings;
 };} // namespace
 
+
+//==============================================================================
+void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::setItems (std::vector<Item> newItems)
+{
+    items = std::move (newItems);
+    const auto selectedStillExists = std::any_of (items.begin (), items.end (), [this] (const Item& item)
+    { return item.blockIndex == selectedBlockIndex; });
+    if (!selectedStillExists)
+        selectedBlockIndex = items.empty () ? -1 : items.front ().blockIndex;
+    repaint ();
+}
+
+void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::setSelectedBlockIndex (int blockIndex)
+{
+    if (selectedBlockIndex != blockIndex)
+    {
+        selectedBlockIndex = blockIndex;
+        repaint ();
+    }
+}
+
+void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::setBlockEnabled (int blockIndex, bool enabled)
+{
+    for (auto& item : items)
+    {
+        if (item.blockIndex == blockIndex)
+        {
+            item.enabled = enabled;
+            repaint ();
+            break;
+        }
+    }
+}
+
+juce::Rectangle<int> AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getTileBounds (int itemIndex) const
+{
+    if (items.empty () || itemIndex < 0 || itemIndex >= static_cast<int> (items.size ()))
+        return {};
+    auto area = getLocalBounds ().reduced (54, 14);
+    constexpr int gap = 9;
+    const auto count = static_cast<int> (items.size ());
+    const auto tileWidth = juce::jmax (54, (area.getWidth () - gap * (count - 1)) / count);
+    const auto tileHeight = juce::jmin (84, area.getHeight ());
+    const auto totalWidth = tileWidth * count + gap * (count - 1);
+    const auto startX = area.getCentreX () - totalWidth / 2;
+    return {startX + itemIndex * (tileWidth + gap), area.getCentreY () - tileHeight / 2, tileWidth, tileHeight};
+}
+
+int AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getItemIndexAt (juce::Point<int> position) const
+{
+    for (int i = 0; i < static_cast<int> (items.size ()); ++i)
+        if (getTileBounds (i).contains (position))
+            return i;
+    return -1;
+}
+
+int AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getTargetPositionAtX (int x) const
+{
+    for (int i = 0; i < static_cast<int> (items.size ()); ++i)
+        if (x < getTileBounds (i).getCentreX ())
+            return i;
+    return static_cast<int> (items.size ());
+}
+
+void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::paint (juce::Graphics& g)
+{
+    const auto bounds = getLocalBounds ().toFloat ().reduced (0.5f);
+    g.setColour (juce::Colour (0xff161a1d));
+    g.fillRoundedRectangle (bounds, 7.0f);
+    g.setColour (juce::Colour (0xff4b4f52));
+    g.drawRoundedRectangle (bounds, 7.0f, 1.0f);
+    if (items.empty ()) return;
+
+    const auto first = getTileBounds (0);
+    const auto chainY = first.getCentreY ();
+    g.setColour (juce::Colour (0xff7b8083));
+    g.drawLine (36.0f, static_cast<float> (chainY), static_cast<float> (getWidth () - 36), static_cast<float> (chainY), 2.0f);
+    g.setFont (10.5f);
+    g.setColour (juce::Colour (0xffb9bdc0));
+    g.drawText ("IN", 12, chainY - 12, 34, 24, juce::Justification::centred);
+    g.drawText ("OUT", getWidth () - 46, chainY - 12, 34, 24, juce::Justification::centred);
+
+    for (int i = 0; i < static_cast<int> (items.size ()); ++i)
+    {
+        const auto& item = items[static_cast<std::size_t> (i)];
+        const auto tile = getTileBounds (i);
+        const auto selected = item.blockIndex == selectedBlockIndex;
+        const auto displayColour = item.enabled ? item.colour : juce::Colour (0xff74787b);
+        g.setColour (juce::Colour (0xff202427));
+        g.fillRoundedRectangle (tile.toFloat (), 6.0f);
+        if (item.enabled)
+        {
+            g.setColour (displayColour.withAlpha (0.13f));
+            g.fillRoundedRectangle (tile.toFloat ().reduced (2.0f), 5.0f);
+        }
+        g.setColour (displayColour.withAlpha (selected ? 1.0f : 0.78f));
+        g.drawRoundedRectangle (tile.toFloat ().reduced (0.5f), 6.0f, selected ? 2.4f : 1.4f);
+        if (selected)
+        {
+            g.setColour (displayColour.withAlpha (0.18f));
+            g.drawRoundedRectangle (tile.toFloat ().expanded (3.0f), 8.0f, 2.0f);
+        }
+        g.setColour (displayColour);
+        g.setFont (juce::Font (13.0f, juce::Font::bold));
+        g.drawText (item.blockName, tile.reduced (4, 10), juce::Justification::centred);
+        g.fillEllipse (static_cast<float> (tile.getCentreX () - 4), static_cast<float> (tile.getBottom () + 7), 8.0f, 8.0f);
+    }
+
+    if (dragging && dragTargetPosition >= 0)
+    {
+        const auto count = static_cast<int> (items.size ());
+        const auto lineX = dragTargetPosition >= count ? getTileBounds (count - 1).getRight () + 5
+                                                       : getTileBounds (dragTargetPosition).getX () - 5;
+        g.setColour (juce::Colour (0xffffa42a));
+        g.fillRoundedRectangle (static_cast<float> (lineX - 2), static_cast<float> (first.getY () - 4),
+                                4.0f, static_cast<float> (first.getHeight () + 8), 2.0f);
+    }
+}
+
+void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::mouseDown (const juce::MouseEvent& event)
+{
+    pressedItemIndex = getItemIndexAt (event.getPosition ());
+    mouseDownPosition = event.getPosition ();
+    dragTargetPosition = -1;
+    dragging = false;
+}
+
+void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::mouseDrag (const juce::MouseEvent& event)
+{
+    if (pressedItemIndex < 0) return;
+    if (!dragging && event.getPosition ().getDistanceFrom (mouseDownPosition) >= 6.0f)
+        dragging = true;
+    if (dragging)
+    {
+        dragTargetPosition = getTargetPositionAtX (event.x);
+        repaint ();
+    }
+}
+
+void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::mouseUp (const juce::MouseEvent&)
+{
+    if (pressedItemIndex < 0 || pressedItemIndex >= static_cast<int> (items.size ()))
+    {
+        dragging = false; dragTargetPosition = -1; return;
+    }
+    const auto blockIndex = items[static_cast<std::size_t> (pressedItemIndex)].blockIndex;
+    if (dragging && dragTargetPosition >= 0)
+    {
+        if (onBlockReordered) onBlockReordered (blockIndex, dragTargetPosition);
+    }
+    else if (onBlockSelected)
+        onBlockSelected (blockIndex);
+    dragging = false;
+    dragTargetPosition = -1;
+    pressedItemIndex = -1;
+    repaint ();
+}
+
 //==============================================================================
 AudioPluginAudioProcessorEditor::AudioPluginAudioProcessorEditor (
     AudioPluginAudioProcessor& p)
@@ -575,7 +733,17 @@ addAndMakeVisible (userIRSlotBox);
 	addChildComponent(tunerDisplay);
 tunerDisplay.setVisible(false);
 
+    addAndMakeVisible (effectChainRibbon);
     addAndMakeVisible (effectsViewport);
+
+    effectChainRibbon.onBlockSelected = [this] (int blockIndex)
+    {
+        selectEffectBlock (blockIndex);
+    };
+    effectChainRibbon.onBlockReordered = [this] (int blockIndex, int targetPosition)
+    {
+        moveEffectBlockToPosition (blockIndex, targetPosition);
+    };
 
     effectsViewport.setViewedComponent (&effectsContent, false);
     effectsViewport.setScrollBarsShown (true, false);
@@ -1158,12 +1326,8 @@ tunerDisplay.setBounds (
     // Effects list
     // ============================================================
 
-    effectsViewport.setBounds (
-        20,
-        246,
-        getWidth() - 40,
-        getHeight() - 266
-    );
+    effectChainRibbon.setBounds (20, 246, getWidth () - 40, 116);
+    effectsViewport.setBounds (20, 372, getWidth () - 40, getHeight () - 392);
 
 
 if (toneMatchPanel != nullptr)
@@ -2789,7 +2953,9 @@ void AudioPluginAudioProcessorEditor::rebuildEffectBlocks (const gp200::GP200Pre
         block->setMoveButtonsEnabled (currentPosition > 0,
                                       currentPosition < static_cast<int> (preset.routingOrder.size ()) - 1);
 
-        block->setExpanded (wasExpanded[static_cast<std::size_t> (blockIndex)]);
+        if (selectedEffectBlockIndex < 0)
+            selectedEffectBlockIndex = blockIndex;
+        block->setExpanded (blockIndex == selectedEffectBlockIndex);
 
         block->onHeightChanged = [this] { layoutEffectBlocks (); };
 
@@ -2815,6 +2981,8 @@ void AudioPluginAudioProcessorEditor::rebuildEffectBlocks (const gp200::GP200Pre
                         break;
                     }
                 }
+
+                effectChainRibbon.setBlockEnabled (blockIndex, shouldBeOn);
             }
 
             repaint ();
@@ -2915,53 +3083,78 @@ void AudioPluginAudioProcessorEditor::rebuildEffectBlocks (const gp200::GP200Pre
             moveEffectBlockToPosition (blockIndex, targetPosition);
         };
 
-        block->onDragReorderPreview = [this] (int blockIndex, int contentY)
-        {
-            juce::ignoreUnused (blockIndex);
-
-            updateDragDropIndicator (contentY);
-        };
-
-        block->onDragReorderRequested = [this] (int blockIndex, int contentY)
-        {
-            const auto targetPosition = getDropPositionForContentY (contentY);
-
-            hideDragDropIndicator ();
-
-            moveEffectBlockToPosition (blockIndex, targetPosition);
-        };
-
         effectsContent.addAndMakeVisible (*block);
         effectBlocks.push_back (std::move (block));
     }
 
     effectBlocksSignature = newSignature;
-
-    layoutEffectBlocks ();
+    updateEffectChainRibbon (preset);
+    selectEffectBlock (selectedEffectBlockIndex);
 }
 
 void AudioPluginAudioProcessorEditor::layoutEffectBlocks ()
 {
-    const auto viewportWidth = effectsViewport.getWidth ();
-    const auto viewportHeight = effectsViewport.getHeight ();
-
-    const auto contentWidth = juce::jmax (100, viewportWidth - 16);
-
-    auto y = 0;
-
+    const auto contentWidth = juce::jmax (100, effectsViewport.getWidth () - 16);
+    int contentHeight = effectsViewport.getHeight ();
     for (auto& block : effectBlocks)
     {
-        if (block == nullptr)
-            continue;
-
+        if (block == nullptr) continue;
+        const auto selected = block->getBlockIndex () == selectedEffectBlockIndex;
+        block->setVisible (selected);
+        if (!selected) continue;
+        block->setExpanded (true);
         const auto height = block->getPreferredHeight (contentWidth);
-
-        block->setBounds (0, y, contentWidth, height);
-
-        y += height + 8;
+        block->setBounds (0, 0, contentWidth, height);
+        contentHeight = juce::jmax (height + 8, effectsViewport.getHeight ());
     }
+    effectsContent.setSize (contentWidth, contentHeight);
+}
 
-    effectsContent.setSize (contentWidth, juce::jmax (y, viewportHeight));
+void AudioPluginAudioProcessorEditor::selectEffectBlock (int blockIndex)
+{
+    bool found = false;
+    for (const auto& block : effectBlocks)
+        if (block != nullptr && block->getBlockIndex () == blockIndex) { found = true; break; }
+    if (!found && !effectBlocks.empty () && effectBlocks.front () != nullptr)
+        blockIndex = effectBlocks.front ()->getBlockIndex ();
+    selectedEffectBlockIndex = blockIndex;
+    effectChainRibbon.setSelectedBlockIndex (blockIndex);
+    effectsViewport.setViewPosition (0, 0);
+    layoutEffectBlocks ();
+    repaint ();
+}
+
+void AudioPluginAudioProcessorEditor::updateEffectChainRibbon (const gp200::GP200Preset& preset)
+{
+    auto colourForBlock = [] (const juce::String& name)
+    {
+        if (name == "VOL") return juce::Colour (0xffe4c21a);
+        if (name == "PRE") return juce::Colour (0xffff8f22);
+        if (name == "WAH") return juce::Colour (0xff3f9cff);
+        if (name == "DST") return juce::Colour (0xffff4f55);
+        if (name == "AMP") return juce::Colour (0xffff941f);
+        if (name == "NR")  return juce::Colour (0xffa767db);
+        if (name == "CAB") return juce::Colour (0xffff5959);
+        if (name == "EQ")  return juce::Colour (0xff5ccf62);
+        if (name == "MOD") return juce::Colour (0xff2fd0bf);
+        if (name == "DLY") return juce::Colour (0xff4d9dff);
+        if (name == "RVB") return juce::Colour (0xffa766e5);
+        return juce::Colour (0xffffa42a);
+    };
+    std::vector<EffectChainRibbonComponent::Item> items;
+    for (const auto blockIndex : preset.routingOrder)
+    {
+        if (!juce::isPositiveAndBelow (blockIndex, static_cast<int> (preset.effects.size ()))) continue;
+        const auto& effect = preset.effects[static_cast<std::size_t> (blockIndex)];
+        EffectChainRibbonComponent::Item item;
+        item.blockIndex = blockIndex;
+        item.blockName = gp200::GP200PresetCodec::blockNameForSlotIndex (effect.slotIndex);
+        item.enabled = effect.enabled;
+        item.colour = colourForBlock (item.blockName);
+        items.push_back (std::move (item));
+    }
+    effectChainRibbon.setItems (std::move (items));
+    effectChainRibbon.setSelectedBlockIndex (selectedEffectBlockIndex);
 }
 
 int AudioPluginAudioProcessorEditor::getDropPositionForContentY (int contentY) const

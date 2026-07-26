@@ -90,6 +90,8 @@ juce::String getSelectedCompareSnapshotLabel () const;
     void updateEffectBlocksUI ();
     void rebuildEffectBlocks (const gp200::GP200Preset& preset, const juce::String& newSignature);
     void layoutEffectBlocks ();
+    void selectEffectBlock (int blockIndex);
+    void updateEffectChainRibbon (const gp200::GP200Preset& preset);
 
     int getDropPositionForContentY (int contentY) const;
     int getDropLineYForPosition (int dropPosition) const;
@@ -174,6 +176,42 @@ CompareSnapshot selectedCompareSnapshot{
     CompareSnapshot::A
 };
 
+
+    class EffectChainRibbonComponent final : public juce::Component
+    {
+      public:
+        struct Item
+        {
+            int blockIndex{-1};
+            juce::String blockName;
+            bool enabled{false};
+            juce::Colour colour;
+        };
+
+        void setItems (std::vector<Item> newItems);
+        void setSelectedBlockIndex (int blockIndex);
+        void setBlockEnabled (int blockIndex, bool enabled);
+        void paint (juce::Graphics& g) override;
+        void mouseDown (const juce::MouseEvent& event) override;
+        void mouseDrag (const juce::MouseEvent& event) override;
+        void mouseUp (const juce::MouseEvent& event) override;
+
+        std::function<void (int blockIndex)> onBlockSelected;
+        std::function<void (int blockIndex, int targetPosition)> onBlockReordered;
+
+      private:
+        juce::Rectangle<int> getTileBounds (int itemIndex) const;
+        int getItemIndexAt (juce::Point<int> position) const;
+        int getTargetPositionAtX (int x) const;
+
+        std::vector<Item> items;
+        int selectedBlockIndex{-1};
+        int pressedItemIndex{-1};
+        int dragTargetPosition{-1};
+        bool dragging{false};
+        juce::Point<int> mouseDownPosition;
+    };
+
     class DropIndicatorComponent final : public juce::Component
     {
       public:
@@ -208,6 +246,7 @@ CompareSnapshot selectedCompareSnapshot{
     bool allBlocksAreTemporarilyOff{false};
     int savedBlockEnabledSlot{-1};
 
+    EffectChainRibbonComponent effectChainRibbon;
     juce::Viewport effectsViewport;
     juce::Component effectsContent;
     DropIndicatorComponent dropIndicator;
@@ -222,6 +261,7 @@ CompareSnapshot selectedCompareSnapshot{
     std::uint64_t offlinePresetRevision{0};
     bool offlinePresetDirty{false};
     bool lastConnectionIndicatorState{false};
+    int selectedEffectBlockIndex{-1};
 	
 	juce::TextButton toneMatchButton{"Tone Match"};
 std::unique_ptr<ToneMatchPanel> toneMatchPanel;
