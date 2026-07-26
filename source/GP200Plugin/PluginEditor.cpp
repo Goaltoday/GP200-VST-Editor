@@ -72,6 +72,91 @@ gp200::GP200Preset makeDefaultOfflinePreset ()
     return preset;
 }
 
+
+constexpr juce::uint32 offlineSnapshotMagic = 0x4f503247u; // "GP2O"
+constexpr int offlineSnapshotVersion = 1;
+
+juce::MemoryBlock serialiseOfflineSnapshot (const gp200::GP200Preset& preset,
+                                            int patchVolume,
+                                            int patchPan,
+                                            int patchTempo)
+{
+    juce::MemoryBlock result;
+    juce::MemoryOutputStream out (result, false);
+
+    out.writeInt (static_cast<int> (offlineSnapshotMagic));
+    out.writeInt (offlineSnapshotVersion);
+    out.writeString (preset.patchName);
+    out.writeString (preset.author);
+    out.writeInt (preset.fxLoopSend);
+    out.writeInt (preset.fxLoopReturn);
+    out.writeInt (patchVolume);
+    out.writeInt (patchPan);
+    out.writeInt (patchTempo);
+
+    for (const auto value : preset.routingOrder)
+        out.writeInt (value);
+
+    for (const auto& effect : preset.effects)
+    {
+        out.writeInt (effect.blockIndex);
+        out.writeInt (effect.slotIndex);
+        out.writeBool (effect.enabled);
+        out.writeInt (static_cast<int> (effect.effectId));
+
+        for (const auto value : effect.params)
+            out.writeFloat (value);
+    }
+
+    return result;
+}
+
+bool deserialiseOfflineSnapshot (const juce::MemoryBlock& data,
+                                 gp200::GP200Preset& preset,
+                                 int& patchVolume,
+                                 int& patchPan,
+                                 int& patchTempo)
+{
+    if (data.getSize () < 8)
+        return false;
+
+    juce::MemoryInputStream in (data, false);
+
+    if (static_cast<juce::uint32> (in.readInt ()) != offlineSnapshotMagic
+        || in.readInt () != offlineSnapshotVersion)
+        return false;
+
+    gp200::GP200Preset decoded;
+    decoded.isValid = true;
+    decoded.patchName = in.readString ();
+    decoded.author = in.readString ();
+    decoded.fxLoopSend = in.readInt ();
+    decoded.fxLoopReturn = in.readInt ();
+    patchVolume = juce::jlimit (0, 100, in.readInt ());
+    patchPan = juce::jlimit (-50, 50, in.readInt ());
+    patchTempo = juce::jlimit (40, 250, in.readInt ());
+
+    for (auto& value : decoded.routingOrder)
+        value = in.readInt ();
+
+    for (auto& effect : decoded.effects)
+    {
+        effect.blockIndex = in.readInt ();
+        effect.slotIndex = in.readInt ();
+        effect.enabled = in.readBool ();
+        effect.effectId = static_cast<juce::uint32> (in.readInt ());
+
+        for (auto& value : effect.params)
+            value = in.readFloat ();
+    }
+
+    if (in.isExhausted () && decoded.patchName.isEmpty ())
+        decoded.patchName = "Offline preset";
+
+    preset = std::move (decoded);
+    return true;
+}
+
 class SoundCloneImportComponent final : public juce::Component,
                                               private juce::ListBoxModel,
                                               private juce::Timer
@@ -1267,6 +1352,31 @@ juce::String AudioPluginAudioProcessorEditor::
 
 void AudioPluginAudioProcessorEditor::saveCurrentPresetToProject ()
 {
+    const auto snapshotIndex = getSelectedCompareSnapshotIndex ();
+
+    if (!midiConnection.isConnected ())
+    {
+        const auto snapshotData = serialiseOfflineSnapshot (
+            offlinePreset,
+            static_cast<int> (patchVolumeSlider.getValue ()),
+            static_cast<int> (panSlider.getValue ()),
+            static_cast<int> (tempoSlider.getValue ()));
+
+        processorRef.setGP200PresetSnapshotState (
+            snapshotIndex,
+            -1,
+            offlinePreset.patchName,
+            snapshotData);
+
+        offlinePresetDirty = false;
+        effectsStatusText = "Saved offline preset snapshot " +
+                            getSelectedCompareSnapshotLabel () +
+                            " to DAW";
+        updateEffectBlocksUI ();
+        repaint ();
+        return;
+    }
+
     const auto currentSlot = midiConnection.getCurrentSlot ();
 
     if (currentSlot < 0)
@@ -1281,21 +1391,18 @@ void AudioPluginAudioProcessorEditor::saveCurrentPresetToProject ()
         return;
     }
 
-    const auto snapshotIndex =
-    getSelectedCompareSnapshotIndex ();
+    processorRef.setGP200PresetSnapshotState (
+        snapshotIndex,
+        currentSlot,
+        midiConnection.getCurrentPresetName (),
+        presetData);
 
-processorRef.setGP200PresetSnapshotState (
-    snapshotIndex,
-    currentSlot,
-    midiConnection.getCurrentPresetName (),
-    presetData);
-
-    effectsStatusText = "Saved full preset snapshot to DAW";
-	getSelectedCompareSnapshotLabel ();
+    effectsStatusText = "Saved full preset snapshot " +
+                        getSelectedCompareSnapshotLabel () +
+                        " to DAW";
     updateEffectBlocksUI ();
     repaint ();
 }
-
 
 void AudioPluginAudioProcessorEditor::openIRFileChooser ()
 {
@@ -1700,6 +1807,47 @@ const auto snapshotLabel =
     if (presetData.getSize () == 0)
     {
         effectsStatusText = "Recall Preset failed: saved preset data is empty";
+        repaint ();
+        return;
+    }
+
+    if (!midiConnection.isConnected ())
+    {
+        int restoredVolume = 50;
+        int restoredPan = 0;
+        int restoredTempo = 120;
+        gp200::GP200Preset restoredPreset;
+
+        if (!deserialiseOfflineSnapshot (presetData,
+                                         restoredPreset,
+                                         restoredVolume,
+                                         restoredPan,
+                                         restoredTempo))
+        {
+            effectsStatusText =
+                "Recall snapshot " + snapshotLabel +
+                " failed: it was saved from a connected GP-200";
+            repaint ();
+            return;
+        }
+
+        offlinePreset = std::move (restoredPreset);
+        offlinePresetDirty = false;
+        ++offlinePresetRevision;
+
+        patchVolumeSlider.setValue (restoredVolume, juce::dontSendNotification);
+        panSlider.setValue (restoredPan, juce::dontSendNotification);
+        tempoSlider.setValue (restoredTempo, juce::dontSendNotification);
+        presetNameEditor.setText (offlinePreset.patchName, juce::dontSendNotification);
+
+        effectBlocksSignature.clear ();
+        patchVolumeSourceSignature.clear ();
+        presetNameEditorSignature.clear ();
+
+        effectsStatusText = "Recalled offline preset snapshot " +
+                            snapshotLabel +
+                            " from DAW";
+        updateEffectBlocksUI ();
         repaint ();
         return;
     }
