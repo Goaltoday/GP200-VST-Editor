@@ -258,7 +258,10 @@ CompareSnapshot selectedCompareSnapshot{
     DropIndicatorComponent dropIndicator;
     std::vector<std::unique_ptr<EffectBlockComponent>> effectBlocks;
 
+    // Structure signature controls component reconstruction; data signature
+    // controls value refreshes. Keeping them separate prevents UI flicker.
     juce::String effectBlocksSignature;
+    juce::String effectBlocksDataSignature;
     juce::String presetNameEditorSignature;
     juce::String patchVolumeSourceSignature;
     juce::String effectsStatusText{"Effects: waiting for preset data"};

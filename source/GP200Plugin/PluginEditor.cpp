@@ -1034,6 +1034,8 @@ presetNameEditor.setFont (presetFont);
                 {
                     if (toneMatchPanel != nullptr)
                         toneMatchPanel->setVisible (false);
+
+                    scheduleEditorHeightUpdate ();
                 });
 
             addAndMakeVisible (*toneMatchPanel);
@@ -1042,6 +1044,7 @@ presetNameEditor.setFont (presetFont);
                 getLocalBounds().reduced (50, 60));
 
             toneMatchPanel->toFront (true);
+            scheduleEditorHeightUpdate ();
         }
         else
         {
@@ -1051,6 +1054,7 @@ presetNameEditor.setFont (presetFont);
                 getLocalBounds().reduced (50, 60));
 
             toneMatchPanel->toFront (true);
+            scheduleEditorHeightUpdate ();
         }
     };
 
@@ -1464,6 +1468,7 @@ void AudioPluginAudioProcessorEditor::timerCallback ()
     {
         lastConnectionIndicatorState = connectedNow;
         effectBlocksSignature.clear ();
+        effectBlocksDataSignature.clear ();
         repaint ();
     }
 	
@@ -1572,6 +1577,7 @@ void AudioPluginAudioProcessorEditor::selectCompareSnapshot (
         getSelectedCompareSnapshotLabel ();
 
     effectBlocksSignature.clear ();
+        effectBlocksDataSignature.clear ();
 
     updateEffectBlocksUI ();
     repaint ();
@@ -2060,6 +2066,7 @@ void AudioPluginAudioProcessorEditor::importPrstFile (
         offlinePresetDirty = false;
         ++offlinePresetRevision;
         effectBlocksSignature.clear ();
+        effectBlocksDataSignature.clear ();
         presetNameEditorSignature.clear ();
         presetNameEditor.setText (offlinePreset.patchName, juce::dontSendNotification);
         effectsStatusText = "Offline preset loaded: " + offlinePreset.patchName;
@@ -2158,6 +2165,7 @@ void AudioPluginAudioProcessorEditor::importPrstFile (
     startTimerHz (restoreTimerHz);
 
     effectBlocksSignature.clear ();
+        effectBlocksDataSignature.clear ();
     patchVolumeSourceSignature.clear ();
     presetNameEditorSignature.clear ();
 
@@ -2240,6 +2248,7 @@ const auto snapshotLabel =
         presetNameEditor.setText (offlinePreset.patchName, juce::dontSendNotification);
 
         effectBlocksSignature.clear ();
+        effectBlocksDataSignature.clear ();
         patchVolumeSourceSignature.clear ();
         presetNameEditorSignature.clear ();
 
@@ -2297,6 +2306,7 @@ const auto snapshotLabel =
     startTimerHz (restoreTimerHz);
 
     effectBlocksSignature.clear ();
+        effectBlocksDataSignature.clear ();
     patchVolumeSourceSignature.clear ();
     presetNameEditorSignature.clear ();
 
@@ -2525,6 +2535,7 @@ void AudioPluginAudioProcessorEditor::finishFullPresetRestore ()
     presetRestoreStepIndex = 0;
 
     effectBlocksSignature.clear ();
+        effectBlocksDataSignature.clear ();
     patchVolumeSourceSignature.clear ();
     presetNameEditorSignature.clear ();
 
@@ -2569,6 +2580,7 @@ void AudioPluginAudioProcessorEditor::storeCurrentPresetToGP200 ()
 
         presetNameEditorSignature.clear ();
         effectBlocksSignature.clear ();
+        effectBlocksDataSignature.clear ();
     }
 
     if (!midiConnection.storeCurrentPresetToGP200 ())
@@ -2936,6 +2948,7 @@ bool AudioPluginAudioProcessorEditor::applyBlockEnabledStates (const BlockEnable
     }
 
     effectBlocksSignature.clear ();
+        effectBlocksDataSignature.clear ();
 
     return true;
 }
@@ -3018,9 +3031,10 @@ void AudioPluginAudioProcessorEditor::loadPresetRelative (int delta)
 
     midiConnection.sendPresetChange (targetSlot);
 
-    effectBlocksSignature.clear ();
-    effectBlocks.clear ();
-    effectsContent.removeAllChildren ();
+    // Keep the current ribbon and selected editor visible until the new preset
+    // dump is complete. Clearing the components here produced a visible flash
+    // between the preset-change command and the incoming preset data.
+    effectBlocksDataSignature.clear ();
 
     hasSavedBlockEnabledStates = false;
     allBlocksAreTemporarilyOff = false;
@@ -3051,22 +3065,18 @@ void AudioPluginAudioProcessorEditor::updateEffectBlocksUI ()
         presetRevision = midiConnection.getPresetRevision ();
     }
     else if (processorRef.hasSavedGP200PresetData (
-             getSelectedCompareSnapshotIndex ()))
+                 getSelectedCompareSnapshotIndex ()))
     {
-        const auto snapshotIndex =
-    getSelectedCompareSnapshotIndex ();
+        const auto snapshotIndex = getSelectedCompareSnapshotIndex ();
 
-presetDataForDisplay =
-    processorRef.getSavedGP200PresetDataCopy (
-        snapshotIndex);
+        presetDataForDisplay =
+            processorRef.getSavedGP200PresetDataCopy (snapshotIndex);
 
-sourceText =
-    "DAW snapshot " +
-    getSelectedCompareSnapshotLabel ();
+        sourceText =
+            "DAW snapshot " + getSelectedCompareSnapshotLabel ();
 
-presetRevision =
-    processorRef.getSavedPresetRevision (
-        snapshotIndex);
+        presetRevision =
+            processorRef.getSavedPresetRevision (snapshotIndex);
     }
     else
     {
@@ -3074,37 +3084,114 @@ presetRevision =
         return;
     }
 
-    const auto assignmentRevision = midiConnection.getAssignmentNamesRevision ();
-    const auto revisionText = juce::String (static_cast<juce::int64> (presetRevision));
+    const auto assignmentRevision =
+        midiConnection.getAssignmentNamesRevision ();
 
-    const auto patchVolumeSignature = sourceText + ":" + revisionText;
+    const auto revisionText =
+        juce::String (static_cast<juce::int64> (presetRevision));
 
-    const auto newSignature =
-        sourceText + ":" + revisionText + ":" + juce::String (static_cast<juce::int64> (assignmentRevision));
+    const auto patchVolumeSignature =
+        sourceText + ":" + revisionText;
 
-    if (newSignature == effectBlocksSignature)
+    const auto dataSignature =
+        sourceText + ":" + revisionText + ":"
+        + juce::String (
+            static_cast<juce::int64> (assignmentRevision));
+
+    if (dataSignature == effectBlocksDataSignature)
         return;
 
-    const auto preset = !midiConnection.isConnected ()
-                            ? offlinePreset
-                            : gp200::GP200PresetCodec::decodeLivePresetDump (presetDataForDisplay);
+    const auto preset =
+        !midiConnection.isConnected ()
+            ? offlinePreset
+            : gp200::GP200PresetCodec::decodeLivePresetDump (
+                  presetDataForDisplay);
 
     if (!preset.isValid)
     {
-        effectBlocksSignature = newSignature;
-        effectBlocks.clear ();
-        effectsContent.removeAllChildren ();
+        effectBlocksDataSignature = dataSignature;
         effectsStatusText = "Effects: could not decode preset data";
-        layoutEffectBlocks ();
         return;
     }
 
     if (midiConnection.isConnected ())
-        syncPatchVolumeSliderFromPresetData (presetDataForDisplay, patchVolumeSignature);
+        syncPatchVolumeSliderFromPresetData (
+            presetDataForDisplay,
+            patchVolumeSignature);
 
-    effectsStatusText = "Effects: " + sourceText + " | " + preset.getSignalChainText ();
+    effectsStatusText =
+        "Effects: " + sourceText + " | "
+        + preset.getSignalChainText ();
 
-    rebuildEffectBlocks (preset, newSignature);
+    // Rebuild only when the chain structure or selected effect models change.
+    // ON/OFF and parameter changes are applied to the existing components.
+    // This prevents the grey/colour flash caused by destroying and recreating
+    // the complete ribbon and editor after every preset revision.
+    juce::String structureSignature =
+        sourceText + ":assign="
+        + juce::String (
+            static_cast<juce::int64> (assignmentRevision));
+
+    structureSignature << ":order=";
+
+    for (const auto blockIndex : preset.routingOrder)
+        structureSignature << juce::String (blockIndex) << ",";
+
+    structureSignature << ":effects=";
+
+    for (const auto& effect : preset.effects)
+    {
+        structureSignature
+            << juce::String (effect.blockIndex) << "/"
+            << juce::String (effect.slotIndex) << "/"
+            << juce::String::toHexString (
+                   static_cast<juce::int64> (effect.effectId))
+            << ";";
+    }
+
+    const bool canRefreshInPlace =
+        !effectBlocks.empty ()
+        && structureSignature == effectBlocksSignature;
+
+    if (canRefreshInPlace)
+    {
+        for (const auto& effect : preset.effects)
+        {
+            const auto blockIndex =
+                effect.blockIndex >= 0
+                    ? effect.blockIndex
+                    : effect.slotIndex;
+
+            for (auto& block : effectBlocks)
+            {
+                if (block == nullptr
+                    || block->getBlockIndex () != blockIndex)
+                    continue;
+
+                block->setEnabledForDisplay (effect.enabled);
+
+                for (int paramIndex = 0;
+                     paramIndex < static_cast<int> (effect.params.size ());
+                     ++paramIndex)
+                {
+                    block->setParameterValueForDisplay (
+                        paramIndex,
+                        effect.params[
+                            static_cast<std::size_t> (paramIndex)]);
+                }
+
+                break;
+            }
+        }
+
+        updateEffectChainRibbon (preset);
+        effectBlocksDataSignature = dataSignature;
+        repaint ();
+        return;
+    }
+
+    rebuildEffectBlocks (preset, structureSignature);
+    effectBlocksDataSignature = dataSignature;
 }
 
 void AudioPluginAudioProcessorEditor::rebuildEffectBlocks (const gp200::GP200Preset& preset,
@@ -3252,6 +3339,7 @@ void AudioPluginAudioProcessorEditor::rebuildEffectBlocks (const gp200::GP200Pre
                 [this]
                 {
                     effectBlocksSignature.clear ();
+        effectBlocksDataSignature.clear ();
                     updateEffectBlocksUI ();
                     repaint ();
                 });
@@ -3395,6 +3483,21 @@ void AudioPluginAudioProcessorEditor::updateEditorHeight ()
     constexpr int editorTop = 372;
     constexpr int editorBottomMargin = 20;
     constexpr int maximumHeight = 900;
+
+    // Tone Match needs enough vertical room for the two capture panels,
+    // the status row, the spectrum graph and the bottom button row.
+    // The normal compact/expanded editor height is restored when it closes.
+    if (toneMatchPanel != nullptr && toneMatchPanel->isVisible ())
+    {
+        constexpr int toneMatchEditorHeight = 690;
+
+        if (getHeight () != toneMatchEditorHeight)
+            setSize (getWidth (), toneMatchEditorHeight);
+        else
+            resized ();
+
+        return;
+    }
 
     int targetHeight = compactHeight;
 
@@ -3546,6 +3649,7 @@ void AudioPluginAudioProcessorEditor::moveEffectBlockToPosition (int blockIndex,
         offlinePresetDirty = true;
         ++offlinePresetRevision;
         effectBlocksSignature.clear ();
+        effectBlocksDataSignature.clear ();
         updateEffectBlocksUI ();
         repaint ();
         return;
@@ -3619,6 +3723,7 @@ void AudioPluginAudioProcessorEditor::moveEffectBlockToPosition (int blockIndex,
         [this]
         {
             effectBlocksSignature.clear ();
+        effectBlocksDataSignature.clear ();
             updateEffectBlocksUI ();
             repaint ();
         });
