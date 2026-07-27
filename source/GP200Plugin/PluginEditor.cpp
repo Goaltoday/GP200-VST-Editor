@@ -407,7 +407,7 @@ private:
 
         g.setColour (entry.isDirectory ? panelOutlineColour
                                        : (rowIsSelected ? panelOutlineColour : textColour));
-        g.setFont (gp200ui::regular (14.0f));
+        g.setFont (gp200ui::regular (14.5f));
 
         juce::String displayText;
         if (entry.isParent)
@@ -726,7 +726,7 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::paint (juce::G
         drawRibbonBlockIcon (g, item.blockName, iconArea, displayColour);
 
         g.setColour (displayColour);
-        g.setFont (gp200ui::semibold (11.5f));
+        g.setFont (gp200ui::semibold (12.75f));
         g.drawText (item.blockName,
                     tile.withTrimmedTop (tile.getHeight() - 24).reduced (3, 2),
                     juce::Justification::centred);

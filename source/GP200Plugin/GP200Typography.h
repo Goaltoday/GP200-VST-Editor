@@ -59,8 +59,8 @@ public:
     juce::Font getTextButtonFont (juce::TextButton& button,
                                   int buttonHeight) override
     {
-        const auto height = juce::jlimit (11.5f, 17.0f,
-                                          static_cast<float> (buttonHeight) * 0.38f);
+        const auto height = juce::jlimit (13.0f, 18.5f,
+                                          static_cast<float> (buttonHeight) * 0.44f);
 
         const bool emphasised = button.getButtonText () == "Store to GP-200";
         return emphasised ? semibold (height) : medium (height);
@@ -68,17 +68,17 @@ public:
 
     juce::Font getComboBoxFont (juce::ComboBox&) override
     {
-        return medium (14.0f);
+        return medium (15.0f);
     }
 
     juce::Font getPopupMenuFont () override
     {
-        return regular (14.0f);
+        return regular (15.0f);
     }
 
     juce::Font getLabelFont (juce::Label&) override
     {
-        return regular (13.0f);
+        return regular (14.0f);
     }
 };
 } // namespace gp200ui
