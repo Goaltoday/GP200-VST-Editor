@@ -230,6 +230,64 @@ bool deserialiseOfflineSnapshot (const juce::MemoryBlock& data,
     return true;
 }
 
+
+class SpaceGroteskActionLookAndFeel final : public juce::LookAndFeel_V4
+{
+public:
+    SpaceGroteskActionLookAndFeel ()
+    {
+        regularTypeface = juce::Typeface::createSystemTypefaceFor (
+            BinaryData::SpaceGroteskRegular_ttf,
+            BinaryData::SpaceGroteskRegular_ttfSize);
+
+        mediumTypeface = juce::Typeface::createSystemTypefaceFor (
+            BinaryData::SpaceGroteskMedium_ttf,
+            BinaryData::SpaceGroteskMedium_ttfSize);
+
+        semiboldTypeface = juce::Typeface::createSystemTypefaceFor (
+            BinaryData::SpaceGroteskSemiBold_ttf,
+            BinaryData::SpaceGroteskSemiBold_ttfSize);
+    }
+
+    juce::Font getTextButtonFont (juce::TextButton& button,
+                                  int buttonHeight) override
+    {
+        const auto height = juce::jlimit (12.0f, 17.0f,
+                                          static_cast<float> (buttonHeight) * 0.36f);
+
+        const bool emphasised = button.getButtonText () == "Store to GP-200";
+        const auto typeface = emphasised && semiboldTypeface != nullptr
+                                  ? semiboldTypeface
+                                  : mediumTypeface;
+
+        return makeFont (typeface, height);
+    }
+
+    juce::Font getComboBoxFont (juce::ComboBox&) override
+    {
+        return makeFont (mediumTypeface, 15.0f);
+    }
+
+    juce::Font getPopupMenuFont () override
+    {
+        return makeFont (regularTypeface, 14.0f);
+    }
+
+private:
+    static juce::Font makeFont (const juce::Typeface::Ptr& typeface,
+                                float height)
+    {
+        if (typeface != nullptr)
+            return juce::Font (juce::FontOptions (typeface).withHeight (height));
+
+        return juce::Font (juce::FontOptions (height));
+    }
+
+    juce::Typeface::Ptr regularTypeface;
+    juce::Typeface::Ptr mediumTypeface;
+    juce::Typeface::Ptr semiboldTypeface;
+};
+
 class SoundCloneImportComponent final : public juce::Component,
                                               private juce::ListBoxModel,
                                               private juce::Timer
@@ -884,6 +942,8 @@ tapTempoButton.setColour (
 setupButton (allBlocksOffButton);
 setupButton (toneMatchButton);
 
+    applyActionSectionTypography ();
+
 // Store to GP-200 is the main hardware action.
 storePresetButton.setColour (
     juce::TextButton::buttonColourId,
@@ -1111,7 +1171,41 @@ lastInitialPresetRequestMs =
 startTimerHz (idleTimerHz);
 }
 
-AudioPluginAudioProcessorEditor::~AudioPluginAudioProcessorEditor () = default;
+AudioPluginAudioProcessorEditor::~AudioPluginAudioProcessorEditor ()
+{
+    clearActionSectionTypography ();
+}
+
+void AudioPluginAudioProcessorEditor::applyActionSectionTypography ()
+{
+    actionSectionLookAndFeel = std::make_unique<SpaceGroteskActionLookAndFeel> ();
+
+    auto applyToButton = [this] (juce::TextButton& button)
+    {
+        button.setLookAndFeel (actionSectionLookAndFeel.get ());
+    };
+
+    applyToButton (savePresetButton);
+    applyToButton (recallPresetButton);
+    applyToButton (storePresetButton);
+    applyToButton (importPrstButton);
+    applyToButton (exportPrstButton);
+    applyToButton (importIRButton);
+
+    userIRSlotBox.setLookAndFeel (actionSectionLookAndFeel.get ());
+}
+
+void AudioPluginAudioProcessorEditor::clearActionSectionTypography ()
+{
+    savePresetButton.setLookAndFeel (nullptr);
+    recallPresetButton.setLookAndFeel (nullptr);
+    storePresetButton.setLookAndFeel (nullptr);
+    importPrstButton.setLookAndFeel (nullptr);
+    exportPrstButton.setLookAndFeel (nullptr);
+    importIRButton.setLookAndFeel (nullptr);
+    userIRSlotBox.setLookAndFeel (nullptr);
+    actionSectionLookAndFeel.reset ();
+}
 
 //==============================================================================
 void AudioPluginAudioProcessorEditor::paint (juce::Graphics& g)

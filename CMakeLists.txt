@@ -44,6 +44,10 @@ juce_add_binary_data(GP200RibbonAssets
         assets/ribbon/mod.svg
         assets/ribbon/dly.svg
         assets/ribbon/rvb.svg
+        assets/fonts/SpaceGrotesk-Regular.ttf
+        assets/fonts/SpaceGrotesk-Medium.ttf
+        assets/fonts/SpaceGrotesk-SemiBold.ttf
+        assets/fonts/OFL.txt
 )
 
 

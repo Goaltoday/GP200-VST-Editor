@@ -96,6 +96,8 @@ juce::String getSelectedCompareSnapshotLabel () const;
     void scheduleEditorHeightUpdate ();
     void updateEditorHeight ();
     void updateEffectChainRibbon (const gp200::GP200Preset& preset);
+    void applyActionSectionTypography ();
+    void clearActionSectionTypography ();
 
     int getDropPositionForContentY (int contentY) const;
     int getDropLineYForPosition (int dropPosition) const;
@@ -148,7 +150,8 @@ juce::String getSelectedCompareSnapshotLabel () const;
     static constexpr int restoreTimerHz = 100;
 
     AudioPluginAudioProcessor& processorRef;
-gp200::MidiConnection& midiConnection;
+    gp200::MidiConnection& midiConnection;
+    std::unique_ptr<juce::LookAndFeel_V4> actionSectionLookAndFeel;
 double lastInitialPresetRequestMs{0.0};
 
     std::vector<PresetRestoreStep> presetRestoreSteps;

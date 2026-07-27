@@ -56,3 +56,11 @@ as GPL-3.0-or-later.
 A commercial JUCE licence may change the obligations that arise solely
 from the use of JUCE. It does not remove or replace the GPL obligations
 applicable to code adapted from gp200editor.
+
+## Space Grotesk
+
+Space Grotesk Regular, Medium and SemiBold are embedded in the plugin UI.
+
+Copyright 2020 The Space Grotesk Project Authors.
+Licensed under the SIL Open Font License, Version 1.1.
+The complete license is included at `assets/fonts/OFL.txt`.
