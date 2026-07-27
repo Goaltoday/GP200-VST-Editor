@@ -8,6 +8,7 @@
     SPDX-License-Identifier: GPL-3.0-or-later
 */
 #include "PluginEditor.h"
+#include "GP200Typography.h"
 #include "BinaryData.h"
 #include "../libgp200/GP200Preset.h"
 #include "../libgp200/GP200EffectParamDatabase.h"
@@ -231,63 +232,6 @@ bool deserialiseOfflineSnapshot (const juce::MemoryBlock& data,
 }
 
 
-class SpaceGroteskActionLookAndFeel final : public juce::LookAndFeel_V4
-{
-public:
-    SpaceGroteskActionLookAndFeel ()
-    {
-        regularTypeface = juce::Typeface::createSystemTypefaceFor (
-            BinaryData::SpaceGroteskRegular_ttf,
-            BinaryData::SpaceGroteskRegular_ttfSize);
-
-        mediumTypeface = juce::Typeface::createSystemTypefaceFor (
-            BinaryData::SpaceGroteskMedium_ttf,
-            BinaryData::SpaceGroteskMedium_ttfSize);
-
-        semiboldTypeface = juce::Typeface::createSystemTypefaceFor (
-            BinaryData::SpaceGroteskSemiBold_ttf,
-            BinaryData::SpaceGroteskSemiBold_ttfSize);
-    }
-
-    juce::Font getTextButtonFont (juce::TextButton& button,
-                                  int buttonHeight) override
-    {
-        const auto height = juce::jlimit (12.0f, 17.0f,
-                                          static_cast<float> (buttonHeight) * 0.36f);
-
-        const bool emphasised = button.getButtonText () == "Store to GP-200";
-        const auto typeface = emphasised && semiboldTypeface != nullptr
-                                  ? semiboldTypeface
-                                  : mediumTypeface;
-
-        return makeFont (typeface, height);
-    }
-
-    juce::Font getComboBoxFont (juce::ComboBox&) override
-    {
-        return makeFont (mediumTypeface, 15.0f);
-    }
-
-    juce::Font getPopupMenuFont () override
-    {
-        return makeFont (regularTypeface, 14.0f);
-    }
-
-private:
-    static juce::Font makeFont (const juce::Typeface::Ptr& typeface,
-                                float height)
-    {
-        if (typeface != nullptr)
-            return juce::Font (juce::FontOptions (typeface).withHeight (height));
-
-        return juce::Font (juce::FontOptions (height));
-    }
-
-    juce::Typeface::Ptr regularTypeface;
-    juce::Typeface::Ptr mediumTypeface;
-    juce::Typeface::Ptr semiboldTypeface;
-};
-
 class SoundCloneImportComponent final : public juce::Component,
                                               private juce::ListBoxModel,
                                               private juce::Timer
@@ -304,6 +248,8 @@ public:
           getUploadStatus (std::move (statusCallback)),
           isUploadBusy (std::move (busyCallback))
     {
+        setLookAndFeel (&spaceGroteskLookAndFeel);
+
         addAndMakeVisible (pathLabel);
         addAndMakeVisible (pathEditor);
         addAndMakeVisible (browseButton);
@@ -325,6 +271,7 @@ public:
         pathEditor.setTextToShowWhenEmpty (
             "Choose or type a folder containing .clo or .tone files",
             mutedTextColour.withAlpha (0.65f));
+        pathEditor.setFont (gp200ui::regular (14.0f));
         pathEditor.setColour (juce::TextEditor::backgroundColourId, panelColour);
         pathEditor.setColour (juce::TextEditor::textColourId, textColour);
         pathEditor.setColour (juce::TextEditor::outlineColourId, panelOutlineColour);
@@ -406,6 +353,7 @@ public:
 
     ~SoundCloneImportComponent () override
     {
+        setLookAndFeel (nullptr);
         stopTimer();
         fileList.setModel (nullptr);
     }
@@ -459,7 +407,7 @@ private:
 
         g.setColour (entry.isDirectory ? panelOutlineColour
                                        : (rowIsSelected ? panelOutlineColour : textColour));
-        g.setFont (juce::FontOptions (14.0f));
+        g.setFont (gp200ui::regular (14.0f));
 
         juce::String displayText;
         if (entry.isParent)
@@ -652,6 +600,7 @@ private:
         importButton.setEnabled (selectedFile);
     }
 
+    gp200ui::SpaceGroteskLookAndFeel spaceGroteskLookAndFeel;
     ImportCallback onImport;
     StatusCallback getUploadStatus;
     BusyCallback isUploadBusy;
@@ -748,7 +697,7 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::paint (juce::G
     const auto chainY = first.getCentreY ();
     g.setColour (juce::Colour (0xff7b8083));
     g.drawLine (36.0f, static_cast<float> (chainY), static_cast<float> (getWidth () - 36), static_cast<float> (chainY), 2.0f);
-    g.setFont (10.5f);
+    g.setFont (gp200ui::regular (10.5f));
     g.setColour (juce::Colour (0xffb9bdc0));
     g.drawText ("IN", 12, chainY - 12, 34, 24, juce::Justification::centred);
     g.drawText ("OUT", getWidth () - 46, chainY - 12, 34, 24, juce::Justification::centred);
@@ -777,7 +726,7 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::paint (juce::G
         drawRibbonBlockIcon (g, item.blockName, iconArea, displayColour);
 
         g.setColour (displayColour);
-        g.setFont (juce::Font (11.5f, juce::Font::bold));
+        g.setFont (gp200ui::semibold (11.5f));
         g.drawText (item.blockName,
                     tile.withTrimmedTop (tile.getHeight() - 24).reduced (3, 2),
                     juce::Justification::centred);
@@ -942,7 +891,7 @@ tapTempoButton.setColour (
 setupButton (allBlocksOffButton);
 setupButton (toneMatchButton);
 
-    applyActionSectionTypography ();
+    applyInterfaceTypography ();
 
 // Store to GP-200 is the main hardware action.
 storePresetButton.setColour (
@@ -1032,10 +981,7 @@ storePresetButton.setColour (
     presetNameEditor.setReturnKeyStartsNewLine (false);
     presetNameEditor.setInputRestrictions (gp200::presetNameMaxLength);
     presetNameEditor.setSelectAllWhenFocused (true);
-    auto presetFont = juce::Font (16.0f, juce::Font::bold);
-presetFont.setHorizontalScale (0.88f);
-
-presetNameEditor.setFont (presetFont);
+    presetNameEditor.setFont (gp200ui::semibold (16.0f));
     presetNameEditor.setJustification (juce::Justification::centredLeft);
     presetNameEditor.setTextToShowWhenEmpty ("Preset name", mutedTextColour);
 
@@ -1173,38 +1119,36 @@ startTimerHz (idleTimerHz);
 
 AudioPluginAudioProcessorEditor::~AudioPluginAudioProcessorEditor ()
 {
-    clearActionSectionTypography ();
+    clearInterfaceTypography ();
 }
 
-void AudioPluginAudioProcessorEditor::applyActionSectionTypography ()
+void AudioPluginAudioProcessorEditor::applyInterfaceTypography ()
 {
-    actionSectionLookAndFeel = std::make_unique<SpaceGroteskActionLookAndFeel> ();
+    interfaceLookAndFeel = std::make_unique<gp200ui::SpaceGroteskLookAndFeel> ();
+    patchSettingsLookAndFeel = std::make_unique<juce::LookAndFeel_V4> ();
 
-    auto applyToButton = [this] (juce::TextButton& button)
-    {
-        button.setLookAndFeel (actionSectionLookAndFeel.get ());
-    };
+    // Space Grotesk is the default for the complete editor and all child
+    // components. PATCH SETTINGS deliberately keeps JUCE's original font.
+    setLookAndFeel (interfaceLookAndFeel.get ());
 
-    applyToButton (savePresetButton);
-    applyToButton (recallPresetButton);
-    applyToButton (storePresetButton);
-    applyToButton (importPrstButton);
-    applyToButton (exportPrstButton);
-    applyToButton (importIRButton);
+    patchVolumeSlider.setLookAndFeel (patchSettingsLookAndFeel.get ());
+    panSlider.setLookAndFeel (patchSettingsLookAndFeel.get ());
+    tempoSlider.setLookAndFeel (patchSettingsLookAndFeel.get ());
+    tapTempoButton.setLookAndFeel (patchSettingsLookAndFeel.get ());
 
-    userIRSlotBox.setLookAndFeel (actionSectionLookAndFeel.get ());
+    presetNameEditor.setFont (gp200ui::semibold (16.0f));
 }
 
-void AudioPluginAudioProcessorEditor::clearActionSectionTypography ()
+void AudioPluginAudioProcessorEditor::clearInterfaceTypography ()
 {
-    savePresetButton.setLookAndFeel (nullptr);
-    recallPresetButton.setLookAndFeel (nullptr);
-    storePresetButton.setLookAndFeel (nullptr);
-    importPrstButton.setLookAndFeel (nullptr);
-    exportPrstButton.setLookAndFeel (nullptr);
-    importIRButton.setLookAndFeel (nullptr);
-    userIRSlotBox.setLookAndFeel (nullptr);
-    actionSectionLookAndFeel.reset ();
+    patchVolumeSlider.setLookAndFeel (nullptr);
+    panSlider.setLookAndFeel (nullptr);
+    tempoSlider.setLookAndFeel (nullptr);
+    tapTempoButton.setLookAndFeel (nullptr);
+
+    setLookAndFeel (nullptr);
+    patchSettingsLookAndFeel.reset ();
+    interfaceLookAndFeel.reset ();
 }
 
 //==============================================================================
@@ -1216,19 +1160,19 @@ void AudioPluginAudioProcessorEditor::paint (juce::Graphics& g)
     // Plugin title
     // ============================================================
 
-    g.setFont (juce::Font (24.0f, juce::Font::bold));
+    g.setFont (gp200ui::semibold (24.0f));
     g.setColour (textColour);
     g.drawText ("GP200",
                 20, 8, 92, 30,
                 juce::Justification::centredLeft);
 
-    g.setFont (juce::Font (21.0f));
+    g.setFont (gp200ui::regular (21.0f));
     g.setColour (mutedTextColour);
     g.drawText ("VST",
                 112, 9, 74, 29,
                 juce::Justification::centredLeft);
 
-    g.setFont (juce::Font (14.0f, juce::Font::bold));
+    g.setFont (gp200ui::semibold (14.0f));
     g.setColour (panelOutlineColour);
     g.drawText ("0.1",
                 184, 11, 42, 26,
@@ -1294,7 +1238,7 @@ void AudioPluginAudioProcessorEditor::paint (juce::Graphics& g)
 
     // El slot se mantiene totalmente blanco y con un tamaño menor
     // que el nombre para que ambos elementos queden equilibrados.
-    g.setFont (juce::Font (24.0f, juce::Font::bold));
+    g.setFont (gp200ui::semibold (24.0f));
     g.setColour (textColour);
 
     g.drawText (
@@ -1313,7 +1257,7 @@ void AudioPluginAudioProcessorEditor::paint (juce::Graphics& g)
         static_cast<float> (currentPresetBox.getRight() - 16)
     );
 
-    g.setFont (juce::Font (13.5f));
+    g.setFont (gp200ui::regular (13.5f));
     g.setColour (mutedTextColour.withAlpha (0.72f));
 
     g.drawText (
@@ -1325,7 +1269,7 @@ void AudioPluginAudioProcessorEditor::paint (juce::Graphics& g)
     juce::Justification::centredLeft
 );
 
-    g.setFont (juce::Font (14.5f, juce::Font::bold));
+    g.setFont (gp200ui::semibold (14.5f));
     g.setColour (textColour);
 
     auto savedPresetText = getSavedPresetCompactText();
@@ -3837,17 +3781,17 @@ void AudioPluginAudioProcessorEditor::drawInfoBox (juce::Graphics& g,
 
     if (value.isEmpty ())
     {
-        g.setFont (15.0f);
+        g.setFont (gp200ui::medium (15.0f));
         g.setColour (panelOutlineColour);
         g.drawText (title, bounds.reduced (8, 0), juce::Justification::centred);
         return;
     }
 
-    g.setFont (12.5f);
+    g.setFont (gp200ui::regular (12.5f));
     g.setColour (mutedTextColour);
     g.drawText (title, bounds.withHeight (18).reduced (8, 0), juce::Justification::centred);
 
-    g.setFont (15.0f);
+    g.setFont (gp200ui::medium (15.0f));
     g.setColour (textColour);
     g.drawText (value, bounds.withTrimmedTop (18).reduced (8, 0), juce::Justification::centred);
 }
@@ -3860,7 +3804,7 @@ void AudioPluginAudioProcessorEditor::drawStatusPill (juce::Graphics& g, juce::R
     g.fillRoundedRectangle (bounds.toFloat (), 5.0f);
 
     g.setColour (juce::Colours::black);
-    g.setFont (15.0f);
+    g.setFont (gp200ui::medium (15.0f));
     g.drawText (connected ? "ON" : "OFF", bounds, juce::Justification::centred);
 }
 

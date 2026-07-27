@@ -1,4 +1,5 @@
 #include "TunerDisplayComponent.h"
+#include "GP200Typography.h"
 
 #include <algorithm>
 #include <cmath>
@@ -24,7 +25,7 @@ void TunerDisplayComponent::paint(juce::Graphics& g)
 
     if (!hasValidReading)
     {
-        g.setFont(juce::Font(14.0f));
+        g.setFont (gp200ui::regular (14.0f));
         g.setColour(mutedTextColour);
 
         g.drawText("Play a note",
@@ -38,7 +39,7 @@ void TunerDisplayComponent::paint(juce::Graphics& g)
 
 auto noteBounds = contentBounds.removeFromLeft(88);
 
-g.setFont(juce::Font(25.0f, juce::Font::bold));
+g.setFont (gp200ui::semibold (25.0f));
 g.setColour(textColour);
 
 g.drawText(noteText,
@@ -47,7 +48,7 @@ g.drawText(noteText,
 
 auto topBounds = contentBounds.removeFromTop(16);
 
-    g.setFont(juce::Font(11.0f));
+    g.setFont (gp200ui::regular (11.0f));
     g.setColour(mutedTextColour);
 
     g.drawText(juce::String(frequency, 2) + " Hz",

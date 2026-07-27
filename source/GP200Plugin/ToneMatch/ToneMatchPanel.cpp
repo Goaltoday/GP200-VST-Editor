@@ -8,6 +8,7 @@
     SPDX-License-Identifier: GPL-3.0-or-later
 */
 #include "ToneMatchPanel.h"
+#include "../GP200Typography.h"
 
 namespace
 {
@@ -298,7 +299,7 @@ void ToneMatchPanel::paint (juce::Graphics& g)
         1.0f);
 
     g.setColour (textColour);
-    g.setFont (juce::FontOptions (22.0f).withStyle ("Bold"));
+    g.setFont (gp200ui::semibold (22.0f));
     g.drawText (
         "TONE MATCH",
         20,
@@ -308,7 +309,7 @@ void ToneMatchPanel::paint (juce::Graphics& g)
         juce::Justification::centredLeft);
 
     g.setColour (mutedTextColour);
-    g.setFont (juce::FontOptions (13.0f));
+    g.setFont (gp200ui::regular (13.0f));
     g.drawText (
         "Capture the GP-200 source and the desired target separately.",
         20,
@@ -338,7 +339,7 @@ void ToneMatchPanel::paint (juce::Graphics& g)
     g.drawRoundedRectangle (targetBox.toFloat().reduced (0.5f), 6.0f, 1.0f);
 
     g.setColour (outlineColour);
-    g.setFont (juce::FontOptions (13.0f).withStyle ("Bold"));
+    g.setFont (gp200ui::semibold (13.0f));
     g.drawText (
         "SOURCE — GP-200 NAM, CAB OFF",
         sourceBox.getX() + 14,
