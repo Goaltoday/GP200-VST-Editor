@@ -271,7 +271,7 @@ public:
         pathEditor.setTextToShowWhenEmpty (
             "Choose or type a folder containing .clo or .tone files",
             mutedTextColour.withAlpha (0.65f));
-        pathEditor.setFont (gp200ui::regular (14.0f));
+        pathEditor.setFont (gp200ui::regular (14.75f));
         pathEditor.setColour (juce::TextEditor::backgroundColourId, panelColour);
         pathEditor.setColour (juce::TextEditor::textColourId, textColour);
         pathEditor.setColour (juce::TextEditor::outlineColourId, panelOutlineColour);
@@ -407,7 +407,7 @@ private:
 
         g.setColour (entry.isDirectory ? panelOutlineColour
                                        : (rowIsSelected ? panelOutlineColour : textColour));
-        g.setFont (gp200ui::regular (14.5f));
+        g.setFont (gp200ui::regular (15.25f));
 
         juce::String displayText;
         if (entry.isParent)
@@ -697,7 +697,7 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::paint (juce::G
     const auto chainY = first.getCentreY ();
     g.setColour (juce::Colour (0xff7b8083));
     g.drawLine (36.0f, static_cast<float> (chainY), static_cast<float> (getWidth () - 36), static_cast<float> (chainY), 2.0f);
-    g.setFont (gp200ui::regular (10.5f));
+    g.setFont (gp200ui::regular (12.75f));
     g.setColour (juce::Colour (0xffb9bdc0));
     g.drawText ("IN", 12, chainY - 12, 34, 24, juce::Justification::centred);
     g.drawText ("OUT", getWidth () - 46, chainY - 12, 34, 24, juce::Justification::centred);
@@ -726,7 +726,7 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::paint (juce::G
         drawRibbonBlockIcon (g, item.blockName, iconArea, displayColour);
 
         g.setColour (displayColour);
-        g.setFont (gp200ui::semibold (12.75f));
+        g.setFont (gp200ui::semibold (14.25f));
         g.drawText (item.blockName,
                     tile.withTrimmedTop (tile.getHeight() - 24).reduced (3, 2),
                     juce::Justification::centred);
@@ -981,7 +981,7 @@ storePresetButton.setColour (
     presetNameEditor.setReturnKeyStartsNewLine (false);
     presetNameEditor.setInputRestrictions (gp200::presetNameMaxLength);
     presetNameEditor.setSelectAllWhenFocused (true);
-    presetNameEditor.setFont (gp200ui::semibold (16.0f));
+    presetNameEditor.setFont (gp200ui::semibold (17.0f));
     presetNameEditor.setJustification (juce::Justification::centredLeft);
     presetNameEditor.setTextToShowWhenEmpty ("Preset name", mutedTextColour);
 
@@ -1136,7 +1136,7 @@ void AudioPluginAudioProcessorEditor::applyInterfaceTypography ()
     tempoSlider.setLookAndFeel (patchSettingsLookAndFeel.get ());
     tapTempoButton.setLookAndFeel (patchSettingsLookAndFeel.get ());
 
-    presetNameEditor.setFont (gp200ui::semibold (16.0f));
+    presetNameEditor.setFont (gp200ui::semibold (17.0f));
 }
 
 void AudioPluginAudioProcessorEditor::clearInterfaceTypography ()
@@ -1160,19 +1160,19 @@ void AudioPluginAudioProcessorEditor::paint (juce::Graphics& g)
     // Plugin title
     // ============================================================
 
-    g.setFont (gp200ui::semibold (24.0f));
+    g.setFont (gp200ui::semibold (25.0f));
     g.setColour (textColour);
     g.drawText ("GP200",
                 20, 8, 92, 30,
                 juce::Justification::centredLeft);
 
-    g.setFont (gp200ui::regular (21.0f));
+    g.setFont (gp200ui::regular (22.0f));
     g.setColour (mutedTextColour);
     g.drawText ("VST",
                 112, 9, 74, 29,
                 juce::Justification::centredLeft);
 
-    g.setFont (gp200ui::semibold (14.0f));
+    g.setFont (gp200ui::semibold (14.75f));
     g.setColour (panelOutlineColour);
     g.drawText ("0.1",
                 184, 11, 42, 26,
@@ -1238,7 +1238,7 @@ void AudioPluginAudioProcessorEditor::paint (juce::Graphics& g)
 
     // El slot se mantiene totalmente blanco y con un tamaño menor
     // que el nombre para que ambos elementos queden equilibrados.
-    g.setFont (gp200ui::semibold (24.0f));
+    g.setFont (gp200ui::semibold (25.0f));
     g.setColour (textColour);
 
     g.drawText (
@@ -1257,7 +1257,7 @@ void AudioPluginAudioProcessorEditor::paint (juce::Graphics& g)
         static_cast<float> (currentPresetBox.getRight() - 16)
     );
 
-    g.setFont (gp200ui::regular (13.5f));
+    g.setFont (gp200ui::regular (14.25f));
     g.setColour (mutedTextColour.withAlpha (0.72f));
 
     g.drawText (
@@ -1269,7 +1269,7 @@ void AudioPluginAudioProcessorEditor::paint (juce::Graphics& g)
     juce::Justification::centredLeft
 );
 
-    g.setFont (gp200ui::semibold (14.5f));
+    g.setFont (gp200ui::semibold (15.25f));
     g.setColour (textColour);
 
     auto savedPresetText = getSavedPresetCompactText();
@@ -3781,17 +3781,17 @@ void AudioPluginAudioProcessorEditor::drawInfoBox (juce::Graphics& g,
 
     if (value.isEmpty ())
     {
-        g.setFont (gp200ui::medium (15.0f));
+        g.setFont (gp200ui::medium (15.75f));
         g.setColour (panelOutlineColour);
         g.drawText (title, bounds.reduced (8, 0), juce::Justification::centred);
         return;
     }
 
-    g.setFont (gp200ui::regular (12.5f));
+    g.setFont (gp200ui::regular (14.25f));
     g.setColour (mutedTextColour);
     g.drawText (title, bounds.withHeight (18).reduced (8, 0), juce::Justification::centred);
 
-    g.setFont (gp200ui::medium (15.0f));
+    g.setFont (gp200ui::medium (15.75f));
     g.setColour (textColour);
     g.drawText (value, bounds.withTrimmedTop (18).reduced (8, 0), juce::Justification::centred);
 }
@@ -3804,7 +3804,7 @@ void AudioPluginAudioProcessorEditor::drawStatusPill (juce::Graphics& g, juce::R
     g.fillRoundedRectangle (bounds.toFloat (), 5.0f);
 
     g.setColour (juce::Colours::black);
-    g.setFont (gp200ui::medium (15.0f));
+    g.setFont (gp200ui::medium (15.75f));
     g.drawText (connected ? "ON" : "OFF", bounds, juce::Justification::centred);
 }
 

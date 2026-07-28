@@ -70,6 +70,15 @@ ToneMatchPanel::ToneMatchPanel (
     targetDetailsLabel.setJustificationType (juce::Justification::centredLeft);
     globalStatusLabel.setJustificationType (juce::Justification::centred);
 
+    // Keep the secondary Tone Match text readable with Space Grotesk.
+    // These labels do not use the button LookAndFeel, so set their sizes
+    // explicitly instead of relying on JUCE's smaller default label font.
+    sourceStatusLabel.setFont (gp200ui::medium (15.25f));
+    targetStatusLabel.setFont (gp200ui::medium (15.25f));
+    sourceDetailsLabel.setFont (gp200ui::regular (14.75f));
+    targetDetailsLabel.setFont (gp200ui::regular (14.75f));
+    globalStatusLabel.setFont (gp200ui::regular (14.5f));
+
     sourceCaptureButton.onClick = [this] { handleSourceCapture(); };
     targetCaptureButton.onClick = [this] { handleTargetCapture(); };
 
@@ -299,7 +308,7 @@ void ToneMatchPanel::paint (juce::Graphics& g)
         1.0f);
 
     g.setColour (textColour);
-    g.setFont (gp200ui::semibold (22.0f));
+    g.setFont (gp200ui::semibold (23.0f));
     g.drawText (
         "TONE MATCH",
         20,
@@ -309,7 +318,7 @@ void ToneMatchPanel::paint (juce::Graphics& g)
         juce::Justification::centredLeft);
 
     g.setColour (mutedTextColour);
-    g.setFont (gp200ui::regular (13.0f));
+    g.setFont (gp200ui::regular (15.75f));
     g.drawText (
         "Capture the GP-200 source and the desired target separately.",
         20,
@@ -339,9 +348,9 @@ void ToneMatchPanel::paint (juce::Graphics& g)
     g.drawRoundedRectangle (targetBox.toFloat().reduced (0.5f), 6.0f, 1.0f);
 
     g.setColour (outlineColour);
-    g.setFont (gp200ui::semibold (13.0f));
+    g.setFont (gp200ui::semibold (15.5f));
     g.drawText (
-        "SOURCE — GP-200 NAM, CAB OFF",
+        "SOURCE | GP-200 NAM, CAB OFF",
         sourceBox.getX() + 14,
         sourceBox.getY() + 8,
         sourceBox.getWidth() - 28,
@@ -349,7 +358,7 @@ void ToneMatchPanel::paint (juce::Graphics& g)
         juce::Justification::centredLeft);
 
     g.drawText (
-        "TARGET — REFERENCE NAM + IR",
+        "TARGET | REFERENCE NAM + IR",
         targetBox.getX() + 14,
         targetBox.getY() + 8,
         targetBox.getWidth() - 28,

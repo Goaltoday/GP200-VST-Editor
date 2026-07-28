@@ -59,26 +59,38 @@ public:
     juce::Font getTextButtonFont (juce::TextButton& button,
                                   int buttonHeight) override
     {
-        const auto height = juce::jlimit (13.0f, 18.5f,
-                                          static_cast<float> (buttonHeight) * 0.44f);
+        const auto text = button.getButtonText ();
 
-        const bool emphasised = button.getButtonText () == "Store to GP-200";
-        return emphasised ? semibold (height) : medium (height);
+        // Preserve the current size of the three principal actions.
+        if (text == "Save to DAW"
+            || text == "Recall from DAW"
+            || text == "Store to GP-200")
+        {
+            const auto height = juce::jlimit (13.0f, 18.5f,
+                                              static_cast<float> (buttonHeight) * 0.44f);
+            return text == "Store to GP-200" ? semibold (height)
+                                               : medium (height);
+        }
+
+        // The remaining controls have enough room for a slightly larger face.
+        const auto height = juce::jlimit (14.75f, 20.5f,
+                                          static_cast<float> (buttonHeight) * 0.48f);
+        return medium (height);
     }
 
     juce::Font getComboBoxFont (juce::ComboBox&) override
     {
-        return medium (15.0f);
+        return medium (16.5f);
     }
 
     juce::Font getPopupMenuFont () override
     {
-        return regular (15.0f);
+        return regular (16.5f);
     }
 
     juce::Font getLabelFont (juce::Label&) override
     {
-        return regular (14.0f);
+        return regular (15.5f);
     }
 };
 } // namespace gp200ui

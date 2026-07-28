@@ -181,13 +181,13 @@ EffectBlockComponent::EffectBlockComponent (const gp200::GP200EffectSlot& effect
 
     effectNameLabel.setInterceptsMouseClicks (false, false);
     effectNameLabel.setJustificationType (juce::Justification::centredLeft);
-    effectNameLabel.setFont (gp200ui::medium (14.0f));
+    effectNameLabel.setFont (gp200ui::medium (14.75f));
     effectNameLabel.setColour (juce::Label::backgroundColourId, juce::Colour (0xff1b1b1b));
     effectNameLabel.setColour (juce::Label::textColourId, textColour);
 
     effectDescriptionLabel.setInterceptsMouseClicks (false, false);
     effectDescriptionLabel.setJustificationType (juce::Justification::centredLeft);
-    effectDescriptionLabel.setFont (gp200ui::regular (11.75f));
+    effectDescriptionLabel.setFont (gp200ui::regular (14.0f));
     effectDescriptionLabel.setColour (juce::Label::backgroundColourId, juce::Colour (0xff1b1b1b));
     effectDescriptionLabel.setColour (juce::Label::textColourId, mutedTextColour.withAlpha (0.72f));
 
@@ -308,11 +308,11 @@ void EffectBlockComponent::paint (juce::Graphics& g)
     g.setColour (blockColour);
     g.drawRoundedRectangle (tagBounds.toFloat (), 4.0f, 1.2f);
 
-    g.setFont (gp200ui::medium (14.0f));
+    g.setFont (gp200ui::medium (14.75f));
     g.drawText (getBlockName (), tagBounds, juce::Justification::centred);
 
     g.setColour (mutedTextColour);
-    g.setFont (gp200ui::medium (14.0f));
+    g.setFont (gp200ui::medium (14.75f));
     g.drawText (expanded ? "v" : ">",
                 header.withX (getWidth () - 250).withWidth (25).withHeight (28).withY (header.getY () + 10),
                 juce::Justification::centred);
@@ -325,7 +325,7 @@ void EffectBlockComponent::paint (juce::Graphics& g)
     g.setColour (effect.enabled ? blockColour : juce::Colour (0xff707070));
     g.drawRoundedRectangle (onOffBounds.toFloat (), 4.0f, 1.1f);
 
-    g.setFont (gp200ui::regular (12.25f));
+    g.setFont (gp200ui::regular (14.0f));
     g.drawText (effect.enabled ? "ON" : "OFF", onOffBounds, juce::Justification::centred);
 
     if (draggingForReorder)
@@ -350,7 +350,7 @@ void EffectBlockComponent::paint (juce::Graphics& g)
         const auto y = headerHeight + verticalPadding;
 
         g.setColour (mutedTextColour);
-        g.setFont (gp200ui::medium (14.0f));
+        g.setFont (gp200ui::medium (14.75f));
         g.drawText ("No editable parameters available.",
                     20,
                     y,
@@ -653,7 +653,7 @@ void EffectBlockComponent::rebuildParameterControls ()
         control.label->setText (control.name, juce::dontSendNotification);
         control.label->setJustificationType (juce::Justification::centredLeft);
         control.label->setColour (juce::Label::textColourId, textColour);
-        control.label->setFont (gp200ui::regular (13.75f));
+        control.label->setFont (gp200ui::regular (14.75f));
 
         control.slider = std::make_unique<juce::Slider> ();
         control.slider->setSliderStyle (juce::Slider::LinearHorizontal);
@@ -705,7 +705,7 @@ void EffectBlockComponent::rebuildParameterControls ()
                 control.valueLabel = std::make_unique<juce::Label> ();
                 control.valueLabel->setInterceptsMouseClicks (false, false);
                 control.valueLabel->setJustificationType (juce::Justification::centred);
-                control.valueLabel->setFont (gp200ui::medium (13.0f));
+                control.valueLabel->setFont (gp200ui::medium (14.25f));
                 control.valueLabel->setColour (juce::Label::textColourId, textColour);
                 control.valueLabel->setColour (juce::Label::backgroundColourId, juce::Colour (0xff1b1b1b));
                 control.valueLabel->setColour (juce::Label::outlineColourId, juce::Colour (0xff454545));
