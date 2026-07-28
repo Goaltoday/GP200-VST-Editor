@@ -279,6 +279,16 @@ CompareSnapshot selectedCompareSnapshot{
 
     juce::String presetNameEditorSignature;
     juce::String patchVolumeSourceSignature;
+
+    // Optimistic guards prevent delayed live dumps from briefly restoring the
+    // previous patch-setting value after a local slider edit.
+    int pendingPatchVolumeValue{50};
+    int pendingPatchPanValue{0};
+    int pendingPatchTempoValue{120};
+    double patchVolumeLocalEditUntilMs{0.0};
+    double patchPanLocalEditUntilMs{0.0};
+    double patchTempoLocalEditUntilMs{0.0};
+
     juce::String effectsStatusText{"Effects: waiting for preset data"};
 
     gp200::GP200Preset offlinePreset;

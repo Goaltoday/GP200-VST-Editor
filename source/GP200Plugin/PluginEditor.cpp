@@ -2638,9 +2638,16 @@ void AudioPluginAudioProcessorEditor::sendPatchVolumeFromSlider ()
     const auto value = static_cast<int> (patchVolumeSlider.getValue ());
 
     if (midiConnection.isConnected ())
+    {
+        pendingPatchVolumeValue = value;
+        patchVolumeLocalEditUntilMs =
+            juce::Time::getMillisecondCounterHiRes () + 450.0;
         midiConnection.sendPatchVolume (value);
+    }
     else
+    {
         offlinePresetDirty = true;
+    }
 
     repaint ();
 }
@@ -2650,9 +2657,16 @@ void AudioPluginAudioProcessorEditor::sendPatchPanFromSlider ()
     const auto value = static_cast<int> (panSlider.getValue ());
 
     if (midiConnection.isConnected ())
+    {
+        pendingPatchPanValue = value;
+        patchPanLocalEditUntilMs =
+            juce::Time::getMillisecondCounterHiRes () + 450.0;
         midiConnection.sendPatchPan (value);
+    }
     else
+    {
         offlinePresetDirty = true;
+    }
 
     repaint ();
 }
@@ -2662,9 +2676,16 @@ void AudioPluginAudioProcessorEditor::sendPatchTempoFromSlider ()
     const auto bpm = static_cast<int> (tempoSlider.getValue ());
 
     if (midiConnection.isConnected ())
+    {
+        pendingPatchTempoValue = bpm;
+        patchTempoLocalEditUntilMs =
+            juce::Time::getMillisecondCounterHiRes () + 450.0;
         midiConnection.sendPatchTempoBpm (bpm);
+    }
     else
+    {
         offlinePresetDirty = true;
+    }
 
     repaint ();
 }
@@ -3026,9 +3047,24 @@ void AudioPluginAudioProcessorEditor::syncPatchVolumeSliderFromPresetData (
     if (data == nullptr)
         return;
 
-    const auto patchVolume = juce::jlimit (0, 100, static_cast<int> (data[gp200::patchVolumeOffset]));
+    const auto patchVolume = juce::jlimit (
+        0, 100, static_cast<int> (data[gp200::patchVolumeOffset]));
 
-    patchVolumeSlider.setValue (static_cast<double> (patchVolume), juce::dontSendNotification);
+    const auto nowMs = juce::Time::getMillisecondCounterHiRes ();
+
+    // MIDI echo/live-dump updates can lag behind the user's slider movement.
+    // Do not paint an older value during that round trip. Release the guard as
+    // soon as the dump confirms the locally sent value, or after the timeout.
+    if (patchVolumeLocalEditUntilMs > nowMs)
+    {
+        if (patchVolume == pendingPatchVolumeValue)
+            patchVolumeLocalEditUntilMs = 0.0;
+        else
+            return;
+    }
+
+    patchVolumeSlider.setValue (static_cast<double> (patchVolume),
+                                juce::dontSendNotification);
 }
 
 //==============================================================================
@@ -3102,23 +3138,15 @@ void AudioPluginAudioProcessorEditor::updateEffectBlocksUI ()
         sourceText = "Current GP-200 preset";
         presetRevision = midiConnection.getPresetRevision ();
     }
-    else if (processorRef.hasSavedGP200PresetData (
-                 getSelectedCompareSnapshotIndex ()))
-    {
-        const auto snapshotIndex = getSelectedCompareSnapshotIndex ();
-
-        presetDataForDisplay =
-            processorRef.getSavedGP200PresetDataCopy (snapshotIndex);
-
-        sourceText =
-            "DAW snapshot " + getSelectedCompareSnapshotLabel ();
-
-        presetRevision =
-            processorRef.getSavedPresetRevision (snapshotIndex);
-    }
     else
     {
-        effectsStatusText = "Effects: waiting for preset data";
+        // Never substitute a DAW snapshot while the GP-200 is connected.
+        // During a preset change the live dump is briefly unavailable; showing
+        // the saved DAW snapshot here created the visible intermediate preset.
+        // Keep the currently painted chain until the new live dump arrives.
+        effectsStatusText = effectBlocks.empty ()
+                                ? "Effects: waiting for GP-200 preset data"
+                                : "Effects: changing preset...";
         return;
     }
 
