@@ -266,6 +266,17 @@ CompareSnapshot selectedCompareSnapshot{
     // controls value refreshes. Keeping them separate prevents UI flicker.
     juce::String effectBlocksSignature;
     juce::String effectBlocksDataSignature;
+
+    // Structural changes can arrive as several partial live-preset revisions.
+    // Keep the currently painted chain until the incoming structure has been
+    // quiet for a short period, then rebuild once. This avoids visible
+    // intermediate states when changing presets, effects or User IR models.
+    gp200::GP200Preset pendingStructuralPreset;
+    juce::String pendingStructuralSignature;
+    juce::String pendingStructuralDataSignature;
+    double pendingStructuralLastChangeMs{0.0};
+    bool pendingStructuralRefresh{false};
+
     juce::String presetNameEditorSignature;
     juce::String patchVolumeSourceSignature;
     juce::String effectsStatusText{"Effects: waiting for preset data"};

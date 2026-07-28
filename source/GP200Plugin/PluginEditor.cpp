@@ -3136,8 +3136,32 @@ void AudioPluginAudioProcessorEditor::updateEffectBlocksUI ()
         + juce::String (
             static_cast<juce::int64> (assignmentRevision));
 
+    // A connected GP-200 may publish several intermediate revisions while a
+    // preset/effect model is being changed. If no newer revision has arrived
+    // for the debounce interval, apply the last complete staged structure.
+    constexpr double structuralDebounceMs = 140.0;
+    const auto nowMs = juce::Time::getMillisecondCounterHiRes ();
+
     if (dataSignature == effectBlocksDataSignature)
+    {
+        if (pendingStructuralRefresh
+            && nowMs - pendingStructuralLastChangeMs >= structuralDebounceMs)
+        {
+            const auto presetToApply = pendingStructuralPreset;
+            const auto signatureToApply = pendingStructuralSignature;
+            const auto dataSignatureToApply = pendingStructuralDataSignature;
+
+            pendingStructuralRefresh = false;
+            pendingStructuralSignature.clear ();
+            pendingStructuralDataSignature.clear ();
+
+            rebuildEffectBlocks (presetToApply, signatureToApply);
+            effectBlocksDataSignature = dataSignatureToApply;
+            repaint ();
+        }
+
         return;
+    }
 
     const auto preset =
         !midiConnection.isConnected ()
@@ -3193,6 +3217,12 @@ void AudioPluginAudioProcessorEditor::updateEffectBlocksUI ()
 
     if (canRefreshInPlace)
     {
+        // Any staged structural refresh is obsolete: the current component
+        // tree already matches the newest preset structure.
+        pendingStructuralRefresh = false;
+        pendingStructuralSignature.clear ();
+        pendingStructuralDataSignature.clear ();
+
         for (const auto& effect : preset.effects)
         {
             const auto blockIndex =
@@ -3228,7 +3258,29 @@ void AudioPluginAudioProcessorEditor::updateEffectBlocksUI ()
         return;
     }
 
-    rebuildEffectBlocks (preset, structureSignature);
+    // Offline edits are deterministic and the first population has nothing
+    // visible to preserve, so those can be rebuilt immediately. Connected
+    // structural changes are staged until the device stops publishing partial
+    // revisions. A single synchronous rebuild then replaces the old UI.
+    if (!midiConnection.isConnected () || effectBlocks.empty ())
+    {
+        pendingStructuralRefresh = false;
+        pendingStructuralSignature.clear ();
+        pendingStructuralDataSignature.clear ();
+        rebuildEffectBlocks (preset, structureSignature);
+        effectBlocksDataSignature = dataSignature;
+        return;
+    }
+
+    pendingStructuralPreset = preset;
+    pendingStructuralSignature = structureSignature;
+    pendingStructuralDataSignature = dataSignature;
+    pendingStructuralLastChangeMs = nowMs;
+    pendingStructuralRefresh = true;
+
+    // Mark this revision as consumed while leaving the currently painted
+    // component tree intact. The timer will commit the staged preset after the
+    // quiet period, or replace it if a newer revision arrives first.
     effectBlocksDataSignature = dataSignature;
 }
 
@@ -3376,8 +3428,10 @@ void AudioPluginAudioProcessorEditor::rebuildEffectBlocks (const gp200::GP200Pre
             juce::MessageManager::callAsync (
                 [this]
                 {
-                    effectBlocksSignature.clear ();
-        effectBlocksDataSignature.clear ();
+                    // Keep the existing component tree visible. The incoming
+                    // live revisions will be staged and committed once, rather
+                    // than rebuilding through every intermediate effect state.
+                    effectBlocksDataSignature.clear ();
                     updateEffectBlocksUI ();
                     repaint ();
                 });
