@@ -806,6 +806,7 @@ AudioPluginAudioProcessorEditor::AudioPluginAudioProcessorEditor (
 
     addAndMakeVisible (previousBankButton);
     addAndMakeVisible (previousPresetButton);
+    addAndMakeVisible (presetSlotButton);
     addAndMakeVisible (nextPresetButton);
     addAndMakeVisible (nextBankButton);
 
@@ -862,6 +863,7 @@ tunerDisplay.setVisible(false);
 
     setupButton (previousBankButton);
     setupButton (previousPresetButton);
+    setupButton (presetSlotButton);
     setupButton (nextPresetButton);
     setupButton (nextBankButton);
 	
@@ -890,6 +892,15 @@ tapTempoButton.setColour (
 
 setupButton (allBlocksOffButton);
 setupButton (toneMatchButton);
+
+    presetSlotButton.setTooltip ("Click the slot number to show all GP-200 presets");
+    presetSlotButton.setMouseClickGrabsKeyboardFocus (false);
+    presetSlotButton.setTriggeredOnMouseDown (false);
+    presetSlotButton.setColour (juce::TextButton::buttonColourId, juce::Colours::transparentBlack);
+    presetSlotButton.setColour (juce::TextButton::buttonOnColourId, juce::Colours::transparentBlack);
+    presetSlotButton.setColour (juce::TextButton::textColourOffId, textColour);
+    presetSlotButton.setColour (juce::TextButton::textColourOnId, panelOutlineColour);
+    presetSlotButton.onClick = [this] { openPresetSlotMenu (); };
 
     applyInterfaceTypography ();
 
@@ -1067,7 +1078,12 @@ storePresetButton.setColour (
     previousBankButton.onClick = [this] { loadPreviousBank (); };
     previousPresetButton.onClick = [this] { loadPreviousPreset (); };
 
-    nextPresetButton.onClick = [this] { loadNextPreset (); };
+    nextPresetButton.onClick = [this]
+    {
+        openPresetMenuWhenScanFinishes = false;
+        midiConnection.cancelPresetNameScan ();
+        loadNextPreset ();
+    };
     nextBankButton.onClick = [this] { loadNextBank (); };
 	
 	compareAButton.onClick = [this]
@@ -1229,26 +1245,8 @@ void AudioPluginAudioProcessorEditor::paint (juce::Graphics& g)
         1.25f
     );
 
-    const auto currentSlot = midiConnection.getCurrentSlot();
-
-    const auto slotText =
-        currentSlot >= 0
-            ? formatSlotCompact (currentSlot)
-            : "--";
-
-    // El slot se mantiene totalmente blanco y con un tamaño menor
-    // que el nombre para que ambos elementos queden equilibrados.
-    g.setFont (gp200ui::semibold (25.0f));
-    g.setColour (textColour);
-
-    g.drawText (
-        slotText,
-        currentPresetBox.getX() + 104,
-        currentPresetBox.getY() + 18,
-        56,
-        42,
-        juce::Justification::centred
-    );
+    // The current slot is rendered by presetSlotButton.
+    // Do not draw it here as well, otherwise the text appears duplicated.
 
     // Divider between current and saved preset information.
     g.drawHorizontalLine (
@@ -1387,13 +1385,14 @@ void AudioPluginAudioProcessorEditor::resized ()
 
     previousBankButton.setBounds (30, 70, 50, 42);
     previousPresetButton.setBounds (86, 70, 30, 42);
+    presetSlotButton.setBounds (122, 70, 64, 42);
     nextPresetButton.setBounds (314, 70, 30, 42);
     nextBankButton.setBounds (350, 70, 50, 42);
 
     compareAButton.setBounds (96, 142, 30, 24);
     compareBButton.setBounds (132, 142, 30, 24);
 
-    presetNameEditor.setBounds (176, 70, 132, 42);
+    presetNameEditor.setBounds (192, 70, 116, 42);
 
     // ============================================================
     // DAW / GP-200 actions
@@ -1549,6 +1548,27 @@ void AudioPluginAudioProcessorEditor::timerCallback ()
         tapTempoButton.repaint();
     }
 
+    midiConnection.processPresetNameScan ();
+
+    const auto scanRevision = midiConnection.getPresetNameScanRevision ();
+    if (scanRevision != lastPresetNameScanRevision)
+    {
+        lastPresetNameScanRevision = scanRevision;
+
+        if (openPresetMenuWhenScanFinishes && !midiConnection.isPresetNameScanRunning ())
+        {
+            openPresetMenuWhenScanFinishes = false;
+            showPresetSlotMenu ();
+        }
+    }
+
+    if (openPresetMenuWhenScanFinishes && midiConnection.isPresetNameScanRunning ())
+    {
+        const auto completed = juce::roundToInt (midiConnection.getPresetNameScanProgress () * 256.0f);
+        effectsStatusText = "Reading GP-200 preset names: "
+                            + juce::String (juce::jlimit (0, 256, completed)) + "/256";
+    }
+
     if (presetRestoreInProgress)
     {
         constexpr int restoreStepsPerTimerTick = 4;
@@ -1568,6 +1588,13 @@ void AudioPluginAudioProcessorEditor::timerCallback ()
     }
 
     syncPresetNameEditorFromCurrentPreset ();
+
+    {
+        const auto displayedSlot = midiConnection.getCurrentSlot ();
+        const auto displayedSlotText = displayedSlot >= 0 ? formatSlotCompact (displayedSlot) : juce::String ("--");
+        if (presetSlotButton.getButtonText () != displayedSlotText)
+            presetSlotButton.setButtonText (displayedSlotText);
+    }
 
     updateEffectBlocksUI ();
 	
@@ -3068,6 +3095,67 @@ void AudioPluginAudioProcessorEditor::syncPatchVolumeSliderFromPresetData (
 }
 
 //==============================================================================
+void AudioPluginAudioProcessorEditor::openPresetSlotMenu ()
+{
+    if (!midiConnection.isConnected ())
+    {
+        effectsStatusText = "Preset browser requires a connected GP-200";
+        repaint ();
+        return;
+    }
+
+    if (midiConnection.hasCompletePresetNameCache ())
+    {
+        openPresetMenuWhenScanFinishes = false;
+        showPresetSlotMenu ();
+        return;
+    }
+
+    if (midiConnection.isPresetNameScanRunning ())
+        return;
+
+    openPresetMenuWhenScanFinishes = true;
+    lastPresetNameScanRevision = midiConnection.getPresetNameScanRevision ();
+    midiConnection.startPresetNameScan (midiConnection.getCurrentSlot ());
+}
+
+void AudioPluginAudioProcessorEditor::showPresetSlotMenu ()
+{
+    juce::PopupMenu menu;
+    const int currentSlot = midiConnection.getCurrentSlot ();
+
+    for (int bank = 0; bank < 64; ++bank)
+    {
+        juce::PopupMenu bankMenu;
+
+        for (int subSlot = 0; subSlot < 4; ++subSlot)
+        {
+            const int slot = bank * 4 + subSlot;
+            auto name = midiConnection.getPresetSlotName (slot);
+            if (name.isEmpty ())
+                name = "(name unavailable)";
+
+            const auto itemText = formatSlotCompact (slot) + "   " + name;
+            bankMenu.addItem (slot + 1, itemText, true, slot == currentSlot);
+        }
+
+        const auto bankText = juce::String (bank + 1).paddedLeft ('0', 2);
+        menu.addSubMenu ("BANK " + bankText, bankMenu);
+    }
+
+    auto safeThis = juce::Component::SafePointer<AudioPluginAudioProcessorEditor> (this);
+    menu.showMenuAsync (juce::PopupMenu::Options ().withTargetComponent (&presetSlotButton),
+                        [safeThis] (int result)
+                        {
+                            if (safeThis == nullptr || result <= 0)
+                                return;
+
+                            const int slot = result - 1;
+                            if (slot >= 0 && slot < 256)
+                                safeThis->midiConnection.sendPresetChange (slot);
+                        });
+}
+
 void AudioPluginAudioProcessorEditor::loadPreviousBank ()
 {
     // Cada banco del GP-200 contiene cuatro presets: A, B, C y D.

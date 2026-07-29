@@ -70,6 +70,8 @@ target_sources(GP200Plugin
         source/libgp200/MidiDeviceScanner.h
         source/libgp200/MidiConnection.cpp
         source/libgp200/MidiConnection.h
+        source/libgp200/GP200PresetNameScanner.cpp
+        source/libgp200/GP200PresetNameScanner.h
         source/libgp200/GP200Preset.cpp
         source/libgp200/GP200Preset.h
         source/libgp200/GP200EffectDatabase.cpp
@@ -157,6 +159,8 @@ source_group(
         source/libgp200/MidiDeviceScanner.h
         source/libgp200/MidiConnection.cpp
         source/libgp200/MidiConnection.h
+        source/libgp200/GP200PresetNameScanner.cpp
+        source/libgp200/GP200PresetNameScanner.h
         source/libgp200/GP200Preset.cpp
         source/libgp200/GP200Preset.h
         source/libgp200/GP200EffectDatabase.cpp

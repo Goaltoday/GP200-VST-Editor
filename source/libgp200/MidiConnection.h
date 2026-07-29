@@ -12,6 +12,7 @@
 #include "GP200Preset.h"
 #include "GP200IR.h"
 #include "GP200SoundClone.h"
+#include "GP200PresetNameScanner.h"
 
 #include <JuceHeader.h>
 #include <array>
@@ -41,6 +42,16 @@ class MidiConnection final : private juce::MidiInputCallback
     juce::String getSnapToneDisplayName (int zeroBasedIndex) const;
 
     bool sendPresetChange (int slot);
+
+    void startPresetNameScan (int prioritySlot);
+    void cancelPresetNameScan ();
+    void processPresetNameScan ();
+    bool isPresetNameScanRunning () const;
+    float getPresetNameScanProgress () const;
+    std::uint64_t getPresetNameScanRevision () const;
+    juce::String getPresetSlotName (int slot) const;
+    bool hasPresetSlotName (int slot) const;
+    bool hasCompletePresetNameCache () const;
 
     bool startIRUpload (const juce::File& wavFile, int zeroBasedUserIRSlot);
     void processIRUpload ();
@@ -109,6 +120,7 @@ class MidiConnection final : private juce::MidiInputCallback
     bool sendAssignmentNameQuery (int section, int page, int block);
     void handleAssignmentNameResponse (const juce::uint8* data, int size);
 
+    bool sendNextPresetNameScanRequestUnlocked ();
     bool sendReadRequestForSlot (int slot);
     bool sendLiveReadRequestForSlot (int slot);
     void scheduleLivePresetRefresh ();
@@ -150,6 +162,7 @@ class MidiConnection final : private juce::MidiInputCallback
 
     std::unique_ptr<juce::MidiInput> midiInput;
     std::unique_ptr<juce::MidiOutput> midiOutput;
+    GP200PresetNameScanner presetNameScanner;
 
     juce::String statusText{"Not connected"};
     juce::String lastMessageText{"No MIDI messages received yet"};

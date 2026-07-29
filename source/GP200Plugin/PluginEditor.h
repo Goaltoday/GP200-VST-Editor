@@ -83,6 +83,9 @@ juce::String getSelectedCompareSnapshotLabel () const;
     void syncPatchVolumeSliderFromPresetData (const juce::MemoryBlock& presetData,
                                               const juce::String& presetDataSignature);
 
+    void openPresetSlotMenu ();
+    void showPresetSlotMenu ();
+
     void loadPreviousBank ();
     void loadNextBank ();
     void loadPreviousPreset ();
@@ -154,6 +157,8 @@ juce::String getSelectedCompareSnapshotLabel () const;
     std::unique_ptr<juce::LookAndFeel_V4> interfaceLookAndFeel;
     std::unique_ptr<juce::LookAndFeel_V4> patchSettingsLookAndFeel;
 double lastInitialPresetRequestMs{0.0};
+    bool openPresetMenuWhenScanFinishes{false};
+    std::uint64_t lastPresetNameScanRevision{0};
 
     std::vector<PresetRestoreStep> presetRestoreSteps;
     int presetRestoreStepIndex{0};
@@ -165,6 +170,7 @@ double lastInitialPresetRequestMs{0.0};
 
     juce::TextButton previousBankButton{"BANK -"};
     juce::TextButton previousPresetButton{"<"};
+    juce::TextButton presetSlotButton{"--"};
     juce::TextButton nextPresetButton{">"};
     juce::TextButton nextBankButton{"BANK +"};
 	juce::TextButton compareAButton{"A"};
