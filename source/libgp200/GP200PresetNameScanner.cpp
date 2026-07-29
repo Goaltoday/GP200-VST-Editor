@@ -146,6 +146,42 @@ juce::String GP200PresetNameScanner::getName (int slot) const
     return hasName (slot) ? names[static_cast<std::size_t> (slot)] : juce::String{};
 }
 
+void GP200PresetNameScanner::setCachedName (int slot, const juce::String& name)
+{
+    if (!juce::isPositiveAndBelow (slot, 256))
+        return;
+
+    const auto safeName = name.trim ().substring (0, 16);
+    const auto index = static_cast<std::size_t> (slot);
+
+    if (safeName.isEmpty ())
+    {
+        invalidateSlot (slot);
+        return;
+    }
+
+    if (valid[index] && names[index] == safeName)
+        return;
+
+    names[index] = safeName;
+    valid[index] = true;
+
+    cacheComplete = std::all_of (valid.begin (), valid.end (), [] (bool value) { return value; });
+    ++revision;
+}
+
+void GP200PresetNameScanner::invalidateSlot (int slot)
+{
+    if (!juce::isPositiveAndBelow (slot, 256))
+        return;
+
+    const auto index = static_cast<std::size_t> (slot);
+    names[index].clear ();
+    valid[index] = false;
+    cacheComplete = false;
+    ++revision;
+}
+
 void GP200PresetNameScanner::finishPending (const juce::String& name, bool validName, double nowMs)
 {
     if (pendingSlot >= 0 && pendingSlot < 256)

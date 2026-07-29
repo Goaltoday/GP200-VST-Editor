@@ -1,6 +1,7 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <vector>
@@ -27,6 +28,8 @@ class GP200PresetNameScanner final
     bool hasName (int slot) const noexcept;
     bool isCacheComplete () const noexcept;
     juce::String getName (int slot) const;
+    void setCachedName (int slot, const juce::String& name);
+    void invalidateSlot (int slot);
 
   private:
     enum class ReadMode

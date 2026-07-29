@@ -958,6 +958,8 @@ bool MidiConnection::storeCurrentPresetToGP200 ()
 
     midiOutput->sendMessageNow (message);
 
+    presetNameScanner.setCachedName (currentSlot, presetName);
+
     lastMessageText =
         "Stored current preset to GP-200 slot " + juce::String (currentSlot) + ": " + presetName;
 
@@ -1433,6 +1435,18 @@ bool MidiConnection::hasCompletePresetNameCache () const
 {
     const juce::ScopedLock lock (stateLock);
     return presetNameScanner.isCacheComplete ();
+}
+
+void MidiConnection::updatePresetNameCache (int slot, const juce::String& name)
+{
+    const juce::ScopedLock lock (stateLock);
+    presetNameScanner.setCachedName (slot, name);
+}
+
+void MidiConnection::invalidatePresetNameCacheSlot (int slot)
+{
+    const juce::ScopedLock lock (stateLock);
+    presetNameScanner.invalidateSlot (slot);
 }
 
 bool MidiConnection::sendReadRequestForSlot (int slot)
@@ -2138,6 +2152,8 @@ void MidiConnection::parseGP200SysEx (const juce::uint8* data, int size)
                     currentSlot = lastRequestedNameSlot;
 
                 currentPresetName = name;
+                if (currentSlot >= 0)
+                    presetNameScanner.setCachedName (currentSlot, name);
                 presetNameRequestPending = false;
 
                 lastMessageText = "Preset name received: " + name + " for slot " + juce::String (currentSlot);
@@ -2173,6 +2189,9 @@ void MidiConnection::parseGP200SysEx (const juce::uint8* data, int size)
 
                 if (name.isNotEmpty ())
                     currentPresetName = name;
+
+                if (name.isNotEmpty () && currentSlot >= 0)
+                    presetNameScanner.setCachedName (currentSlot, name);
                 else
                     currentPresetName = "requesting...";
 

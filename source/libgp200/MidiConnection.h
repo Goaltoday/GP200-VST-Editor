@@ -52,6 +52,8 @@ class MidiConnection final : private juce::MidiInputCallback
     juce::String getPresetSlotName (int slot) const;
     bool hasPresetSlotName (int slot) const;
     bool hasCompletePresetNameCache () const;
+    void updatePresetNameCache (int slot, const juce::String& name);
+    void invalidatePresetNameCacheSlot (int slot);
 
     bool startIRUpload (const juce::File& wavFile, int zeroBasedUserIRSlot);
     void processIRUpload ();

@@ -1548,6 +1548,39 @@ void AudioPluginAudioProcessorEditor::timerCallback ()
         tapTempoButton.repaint();
     }
 
+    // Start or resume the low-priority name scan only after the normal GP-200
+    // synchronisation has settled. The scanner itself still sends one request
+    // at a time and pauses while higher-priority MIDI operations are active.
+    if (!midiConnection.isConnected ())
+    {
+        automaticPresetNameScanArmed = false;
+        automaticPresetNameScanDueMs = 0.0;
+    }
+    else if (!midiConnection.hasCompletePresetNameCache ()
+             && !midiConnection.isPresetNameScanRunning ())
+    {
+        const bool presetIsReady = midiConnection.getCurrentSlot () >= 0
+                                   && midiConnection.getCurrentPresetDumpSize () > 0;
+
+        if (presetIsReady)
+        {
+            if (!automaticPresetNameScanArmed)
+            {
+                automaticPresetNameScanArmed = true;
+                automaticPresetNameScanDueMs = nowMs + 900.0;
+            }
+            else if (nowMs >= automaticPresetNameScanDueMs)
+            {
+                automaticPresetNameScanArmed = false;
+                midiConnection.startPresetNameScan (midiConnection.getCurrentSlot ());
+            }
+        }
+    }
+    else
+    {
+        automaticPresetNameScanArmed = false;
+    }
+
     midiConnection.processPresetNameScan ();
 
     const auto scanRevision = midiConnection.getPresetNameScanRevision ();
@@ -3104,19 +3137,16 @@ void AudioPluginAudioProcessorEditor::openPresetSlotMenu ()
         return;
     }
 
-    if (midiConnection.hasCompletePresetNameCache ())
-    {
-        openPresetMenuWhenScanFinishes = false;
-        showPresetSlotMenu ();
-        return;
-    }
+    // Always open immediately. Names already present in the cache are shown
+    // now; pending entries are labelled as loading while the background scan
+    // continues independently.
+    openPresetMenuWhenScanFinishes = false;
 
-    if (midiConnection.isPresetNameScanRunning ())
-        return;
+    if (!midiConnection.hasCompletePresetNameCache ()
+        && !midiConnection.isPresetNameScanRunning ())
+        midiConnection.startPresetNameScan (midiConnection.getCurrentSlot ());
 
-    openPresetMenuWhenScanFinishes = true;
-    lastPresetNameScanRevision = midiConnection.getPresetNameScanRevision ();
-    midiConnection.startPresetNameScan (midiConnection.getCurrentSlot ());
+    showPresetSlotMenu ();
 }
 
 void AudioPluginAudioProcessorEditor::showPresetSlotMenu ()
@@ -3133,7 +3163,7 @@ void AudioPluginAudioProcessorEditor::showPresetSlotMenu ()
             const int slot = bank * 4 + subSlot;
             auto name = midiConnection.getPresetSlotName (slot);
             if (name.isEmpty ())
-                name = "(name unavailable)";
+                name = midiConnection.isPresetNameScanRunning () ? "Loading..." : "(name unavailable)";
 
             const auto itemText = formatSlotCompact (slot) + "   " + name;
             bankMenu.addItem (slot + 1, itemText, true, slot == currentSlot);

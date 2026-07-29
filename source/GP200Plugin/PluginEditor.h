@@ -159,6 +159,8 @@ juce::String getSelectedCompareSnapshotLabel () const;
 double lastInitialPresetRequestMs{0.0};
     bool openPresetMenuWhenScanFinishes{false};
     std::uint64_t lastPresetNameScanRevision{0};
+    bool automaticPresetNameScanArmed{false};
+    double automaticPresetNameScanDueMs{0.0};
 
     std::vector<PresetRestoreStep> presetRestoreSteps;
     int presetRestoreStepIndex{0};
