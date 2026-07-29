@@ -57,6 +57,8 @@ target_sources(GP200Plugin
         source/GP200Plugin/PluginProcessor.h
         source/GP200Plugin/PluginEditor.cpp
         source/GP200Plugin/PluginEditor.h
+        source/GP200Plugin/PresetSlotSearchPopup.cpp
+        source/GP200Plugin/PresetSlotSearchPopup.h
         source/GP200Plugin/GP200Typography.h
         source/GP200Plugin/EffectBlockComponent.cpp
         source/GP200Plugin/EffectBlockComponent.h
@@ -146,6 +148,8 @@ source_group(
         source/GP200Plugin/PluginProcessor.h
         source/GP200Plugin/PluginEditor.cpp
         source/GP200Plugin/PluginEditor.h
+        source/GP200Plugin/PresetSlotSearchPopup.cpp
+        source/GP200Plugin/PresetSlotSearchPopup.h
         source/GP200Plugin/GP200Typography.h
         source/GP200Plugin/EffectBlockComponent.cpp
         source/GP200Plugin/EffectBlockComponent.h

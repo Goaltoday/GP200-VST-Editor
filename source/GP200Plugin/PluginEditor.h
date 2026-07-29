@@ -11,6 +11,7 @@
 
 #include "EffectBlockComponent.h"
 #include "PluginProcessor.h"
+#include "PresetSlotSearchPopup.h"
 #include "../libgp200/MidiConnection.h"
 #include "../libgp200/GP200Preset.h"
 #include "TunerDisplayComponent.h"
@@ -85,6 +86,7 @@ juce::String getSelectedCompareSnapshotLabel () const;
 
     void openPresetSlotMenu ();
     void showPresetSlotMenu ();
+    void refreshPresetSlotSearchPopup ();
 
     void loadPreviousBank ();
     void loadNextBank ();
@@ -173,6 +175,7 @@ double lastInitialPresetRequestMs{0.0};
     juce::TextButton previousBankButton{"BANK -"};
     juce::TextButton previousPresetButton{"<"};
     juce::TextButton presetSlotButton{"--"};
+    PresetSlotSearchPopup presetSlotSearchPopup;
     juce::TextButton nextPresetButton{">"};
     juce::TextButton nextBankButton{"BANK +"};
 	juce::TextButton compareAButton{"A"};

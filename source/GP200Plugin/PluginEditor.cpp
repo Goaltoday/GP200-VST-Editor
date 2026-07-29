@@ -807,6 +807,7 @@ AudioPluginAudioProcessorEditor::AudioPluginAudioProcessorEditor (
     addAndMakeVisible (previousBankButton);
     addAndMakeVisible (previousPresetButton);
     addAndMakeVisible (presetSlotButton);
+    addChildComponent (presetSlotSearchPopup);
     addAndMakeVisible (nextPresetButton);
     addAndMakeVisible (nextBankButton);
 
@@ -901,6 +902,10 @@ setupButton (toneMatchButton);
     presetSlotButton.setColour (juce::TextButton::textColourOffId, textColour);
     presetSlotButton.setColour (juce::TextButton::textColourOnId, panelOutlineColour);
     presetSlotButton.onClick = [this] { openPresetSlotMenu (); };
+    presetSlotSearchPopup.onSlotSelected = [this] (int slot)
+    {
+        midiConnection.sendPresetChange (slot);
+    };
 
     applyInterfaceTypography ();
 
@@ -1587,6 +1592,9 @@ void AudioPluginAudioProcessorEditor::timerCallback ()
     if (scanRevision != lastPresetNameScanRevision)
     {
         lastPresetNameScanRevision = scanRevision;
+
+        if (presetSlotSearchPopup.isPopupVisible ())
+            refreshPresetSlotSearchPopup ();
 
         if (openPresetMenuWhenScanFinishes && !midiConnection.isPresetNameScanRunning ())
         {
@@ -3151,39 +3159,19 @@ void AudioPluginAudioProcessorEditor::openPresetSlotMenu ()
 
 void AudioPluginAudioProcessorEditor::showPresetSlotMenu ()
 {
-    juce::PopupMenu menu;
-    const int currentSlot = midiConnection.getCurrentSlot ();
+    refreshPresetSlotSearchPopup ();
+    presetSlotSearchPopup.showFor (presetSlotButton.getBounds (), getLocalBounds ());
+}
 
-    for (int bank = 0; bank < 64; ++bank)
-    {
-        juce::PopupMenu bankMenu;
+void AudioPluginAudioProcessorEditor::refreshPresetSlotSearchPopup ()
+{
+    std::array<juce::String, 256> names;
+    for (int slot = 0; slot < 256; ++slot)
+        names[static_cast<std::size_t> (slot)] = midiConnection.getPresetSlotName (slot);
 
-        for (int subSlot = 0; subSlot < 4; ++subSlot)
-        {
-            const int slot = bank * 4 + subSlot;
-            auto name = midiConnection.getPresetSlotName (slot);
-            if (name.isEmpty ())
-                name = midiConnection.isPresetNameScanRunning () ? "Loading..." : "(name unavailable)";
-
-            const auto itemText = formatSlotCompact (slot) + "   " + name;
-            bankMenu.addItem (slot + 1, itemText, true, slot == currentSlot);
-        }
-
-        const auto bankText = juce::String (bank + 1).paddedLeft ('0', 2);
-        menu.addSubMenu ("BANK " + bankText, bankMenu);
-    }
-
-    auto safeThis = juce::Component::SafePointer<AudioPluginAudioProcessorEditor> (this);
-    menu.showMenuAsync (juce::PopupMenu::Options ().withTargetComponent (&presetSlotButton),
-                        [safeThis] (int result)
-                        {
-                            if (safeThis == nullptr || result <= 0)
-                                return;
-
-                            const int slot = result - 1;
-                            if (slot >= 0 && slot < 256)
-                                safeThis->midiConnection.sendPresetChange (slot);
-                        });
+    presetSlotSearchPopup.setPresetNames (names,
+                                          midiConnection.getCurrentSlot (),
+                                          midiConnection.isPresetNameScanRunning ());
 }
 
 void AudioPluginAudioProcessorEditor::loadPreviousBank ()
