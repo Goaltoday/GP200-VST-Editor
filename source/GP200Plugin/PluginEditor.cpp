@@ -83,50 +83,6 @@ void drawRibbonBlockIcon (juce::Graphics& g,
     icon->replaceColour (colour, sourceColour);
 }
 
-gp200::GP200Preset makeDefaultOfflinePreset ()
-{
-    gp200::GP200Preset preset;
-    preset.isValid = true;
-    preset.patchName = "Offline preset";
-    preset.fxLoopSend = 4;
-    preset.fxLoopReturn = 4;
-
-    static constexpr const char* modules[] = {
-        "PRE", "WAH", "DST", "AMP", "NR", "CAB",
-        "EQ", "MOD", "DLY", "RVB", "VOL"
-    };
-
-    static constexpr int defaultRoutingOrder[] = { 10, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 };
-
-    for (int blockIndex = 0; blockIndex < static_cast<int> (gp200::effectBlockCount); ++blockIndex)
-    {
-        preset.routingOrder[static_cast<std::size_t> (blockIndex)] = defaultRoutingOrder[blockIndex];
-
-        auto& slot = preset.effects[static_cast<std::size_t> (blockIndex)];
-        slot.blockIndex = blockIndex;
-        slot.slotIndex = blockIndex;
-        slot.enabled = false;
-        slot.params.fill (0.0f);
-
-        const auto effects = gp200::GP200EffectDatabase::getEffectsForModule (modules[blockIndex]);
-        if (!effects.empty ())
-            slot.effectId = effects.front ().effectId;
-
-        if (const auto* paramSet = gp200::GP200EffectParamDatabase::findParamsForEffect (slot.effectId))
-        {
-            for (int i = 0; i < paramSet->count; ++i)
-            {
-                const auto& param = paramSet->params[i];
-                if (param.idx >= 0 && param.idx < static_cast<int> (slot.params.size ()))
-                    slot.params[static_cast<std::size_t> (param.idx)] = param.defaultValue;
-            }
-        }
-    }
-
-    return preset;
-}
-
-
 constexpr juce::uint32 offlineSnapshotMagic = 0x4f503247u; // "GP2O"
 constexpr int offlineSnapshotVersion = 2;
 
@@ -800,7 +756,10 @@ AudioPluginAudioProcessorEditor::AudioPluginAudioProcessorEditor (
     AudioPluginAudioProcessor& p)
     : AudioProcessorEditor (&p),
       processorRef (p),
-      midiConnection (p.getMidiConnection())
+      midiConnection (p.getMidiConnection()),
+      offlinePreset (p.getOfflinePreset()),
+      offlinePresetRevision (p.getOfflinePresetRevision()),
+      offlinePresetDirty (p.getOfflinePresetDirty())
 {
     setSize (960, 390);
 
@@ -1128,8 +1087,6 @@ compareBButton.onClick = [this]
     soundCloneButton.onClick = [this] { openSoundCloneWindow (); };
 	updateCompareSnapshotButtons ();
 
-  offlinePreset = makeDefaultOfflinePreset ();
-  offlinePresetRevision = 1;
   processorRef.ensureGP200Connection();
 
 lastInitialPresetRequestMs =

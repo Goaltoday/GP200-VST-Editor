@@ -10,6 +10,54 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include "../libgp200/GP200Constants.h"
+#include "../libgp200/GP200EffectDatabase.h"
+#include "../libgp200/GP200EffectParamDatabase.h"
+
+namespace
+{
+gp200::GP200Preset makeDefaultOfflinePreset ()
+{
+    gp200::GP200Preset preset;
+    preset.isValid = true;
+    preset.patchName = "Offline preset";
+    preset.fxLoopSend = 4;
+    preset.fxLoopReturn = 4;
+
+    static constexpr const char* modules[] = {
+        "PRE", "WAH", "DST", "AMP", "NR", "CAB",
+        "EQ", "MOD", "DLY", "RVB", "VOL"
+    };
+
+    static constexpr int defaultRoutingOrder[] = { 10, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 };
+
+    for (int blockIndex = 0; blockIndex < static_cast<int> (gp200::effectBlockCount); ++blockIndex)
+    {
+        preset.routingOrder[static_cast<std::size_t> (blockIndex)] = defaultRoutingOrder[blockIndex];
+
+        auto& slot = preset.effects[static_cast<std::size_t> (blockIndex)];
+        slot.blockIndex = blockIndex;
+        slot.slotIndex = blockIndex;
+        slot.enabled = false;
+        slot.params.fill (0.0f);
+
+        const auto effects = gp200::GP200EffectDatabase::getEffectsForModule (modules[blockIndex]);
+        if (!effects.empty ())
+            slot.effectId = effects.front ().effectId;
+
+        if (const auto* paramSet = gp200::GP200EffectParamDatabase::findParamsForEffect (slot.effectId))
+        {
+            for (int i = 0; i < paramSet->count; ++i)
+            {
+                const auto& param = paramSet->params[i];
+                if (param.idx >= 0 && param.idx < static_cast<int> (slot.params.size ()))
+                    slot.params[static_cast<std::size_t> (param.idx)] = param.defaultValue;
+            }
+        }
+    }
+
+    return preset;
+}
+}
 
 //==============================================================================
 AudioPluginAudioProcessor::AudioPluginAudioProcessor ()
@@ -20,7 +68,8 @@ AudioPluginAudioProcessor::AudioPluginAudioProcessor ()
 #endif
                           .withOutput ("Output", juce::AudioChannelSet::stereo (), true)
 #endif
-      )
+      ),
+      offlinePreset (makeDefaultOfflinePreset ())
 {
 }
 
@@ -33,6 +82,24 @@ gp200::MidiConnection&
 AudioPluginAudioProcessor::getMidiConnection() noexcept
 {
     return midiConnection;
+}
+
+gp200::GP200Preset&
+AudioPluginAudioProcessor::getOfflinePreset() noexcept
+{
+    return offlinePreset;
+}
+
+std::uint64_t&
+AudioPluginAudioProcessor::getOfflinePresetRevision() noexcept
+{
+    return offlinePresetRevision;
+}
+
+bool&
+AudioPluginAudioProcessor::getOfflinePresetDirty() noexcept
+{
+    return offlinePresetDirty;
 }
 
 void AudioPluginAudioProcessor::ensureGP200Connection()
