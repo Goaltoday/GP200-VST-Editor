@@ -92,7 +92,7 @@ Win32/
 # Audio plugin build output
 # ------------------------------------------------------------
 
-*.vst3
+# *.vst3
 *.component
 *.aaxplugin
 *.lv2
