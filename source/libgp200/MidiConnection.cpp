@@ -318,7 +318,7 @@ void MidiConnection::processSoundCloneUpload ()
 
             ++soundCloneUploadChunkIndex;
             soundCloneUploadPhase = SoundCloneUploadPhase::SendingChunks;
-            soundCloneUploadNextActionMs = now + 5.0;
+            soundCloneUploadNextActionMs = now + 30.0;
             soundCloneUploadStatusText =
                 "Sound Clone upload: block " + juce::String (soundCloneUploadChunkIndex) + "/" +
                 juce::String (static_cast<int> (soundCloneUpload.chunks.size ()));
@@ -327,7 +327,7 @@ void MidiConnection::processSoundCloneUpload ()
         }
 
         soundCloneUploadPhase = SoundCloneUploadPhase::WaitingBeforeCommit;
-        soundCloneUploadNextActionMs = now + 100.0;
+        soundCloneUploadNextActionMs = now + 200.0;
         soundCloneUploadStatusText = "Sound Clone upload: waiting before commit";
         return;
     }
@@ -336,7 +336,7 @@ void MidiConnection::processSoundCloneUpload ()
     {
         midiOutput->sendMessageNow (soundCloneUpload.commitMessage);
         soundCloneUploadPhase = SoundCloneUploadPhase::WaitingAfterCommit;
-        soundCloneUploadNextActionMs = now + 50.0;
+        soundCloneUploadNextActionMs = now + 100.0;
         soundCloneUploadStatusText = "Sound Clone upload: commit sent";
         lastMessageText = soundCloneUploadStatusText;
         return;
