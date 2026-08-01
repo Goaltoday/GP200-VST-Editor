@@ -70,7 +70,7 @@ std::vector<juce::uint8> GP200PresetNameScanner::beginNextRequest (double nowMs)
     if (queueIndex >= static_cast<int> (queue.size ()))
     {
         scanning = false;
-        cacheComplete = true;
+        cacheComplete = std::all_of (valid.begin (), valid.end (), [] (bool value) { return value; });
         ++revision;
         return {};
     }
@@ -208,7 +208,7 @@ void GP200PresetNameScanner::finishPending (const juce::String& name, bool valid
     if (queueIndex >= static_cast<int> (queue.size ()))
     {
         scanning = false;
-        cacheComplete = true;
+        cacheComplete = std::all_of (valid.begin (), valid.end (), [] (bool value) { return value; });
         ++revision;
     }
 }
