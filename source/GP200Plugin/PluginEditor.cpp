@@ -240,13 +240,16 @@ public:
     using ImportCallback = std::function<void (const juce::File&, int)>;
     using StatusCallback = std::function<juce::String ()>;
     using BusyCallback = std::function<bool ()>;
+    using SnapToneNameCallback = std::function<juce::String (int)>;
 
     SoundCloneImportComponent (ImportCallback callback,
                                StatusCallback statusCallback,
-                               BusyCallback busyCallback)
+                               BusyCallback busyCallback,
+                               SnapToneNameCallback snapToneNameCallback)
         : onImport (std::move (callback)),
           getUploadStatus (std::move (statusCallback)),
-          isUploadBusy (std::move (busyCallback))
+          isUploadBusy (std::move (busyCallback)),
+          getSnapToneDisplayName (std::move (snapToneNameCallback))
     {
         setLookAndFeel (&spaceGroteskLookAndFeel);
 
@@ -319,12 +322,7 @@ public:
         fileList.setColour (juce::ListBox::outlineColourId, panelOutlineColour);
         fileList.setOutlineThickness (1);
 
-        for (int i = 1; i <= 5; ++i)
-            destinationBox.addItem ("SnapTone " + juce::String (i) + " (AMP)", i);
-
-        for (int i = 6; i <= 10; ++i)
-            destinationBox.addItem ("SnapTone " + juce::String (i) + " (DIST)", i);
-
+        refreshDestinationItems ();
         destinationBox.setSelectedId (1, juce::dontSendNotification);
         destinationBox.setColour (juce::ComboBox::backgroundColourId, panelColour);
         destinationBox.setColour (juce::ComboBox::textColourId, panelOutlineColour);
@@ -348,7 +346,7 @@ public:
             setLibraryRoot (juce::File (savedPath));
 
         startTimerHz (10);
-        setSize (620, 420);
+        setSize (780, 420);
     }
 
     ~SoundCloneImportComponent () override
@@ -371,14 +369,46 @@ public:
         statusLabel.setBounds (area.removeFromTop (24));
         area.removeFromTop (8);
         auto bottomRow = area.removeFromBottom (34);
-        destinationBox.setBounds (bottomRow.removeFromLeft (190));
-        bottomRow.removeFromLeft (12);
-        importButton.setBounds (bottomRow.removeFromLeft (190));
+        importButton.setBounds (bottomRow.removeFromRight (190));
+        bottomRow.removeFromRight (12);
+        destinationBox.setBounds (bottomRow);
         area.removeFromBottom (12);
         fileList.setBounds (area);
     }
 
 private:
+    void refreshDestinationItems ()
+    {
+        const auto selectedId = juce::jlimit (1, 10, destinationBox.getSelectedId ());
+
+        destinationBox.clear (juce::dontSendNotification);
+
+        for (int slot = 1; slot <= 10; ++slot)
+        {
+            const auto blockType = slot <= 5 ? "AMP" : "DIST";
+            auto itemText = "SnapTone " + juce::String (slot)
+                          + " (" + blockType + ")";
+
+            if (getSnapToneDisplayName)
+            {
+                auto displayName = getSnapToneDisplayName (slot - 1).trim ();
+                const auto separatorIndex = displayName.indexOf (" - ");
+
+                if (separatorIndex >= 0)
+                    displayName = displayName.substring (separatorIndex + 3).trim ();
+                else if (displayName.startsWithIgnoreCase ("SnapTone "))
+                    displayName.clear ();
+
+                if (displayName.isNotEmpty ())
+                    itemText += " - " + displayName;
+            }
+
+            destinationBox.addItem (itemText, slot);
+        }
+
+        destinationBox.setSelectedId (selectedId, juce::dontSendNotification);
+    }
+
     struct BrowserEntry
     {
         juce::File file;
@@ -604,6 +634,7 @@ private:
     ImportCallback onImport;
     StatusCallback getUploadStatus;
     BusyCallback isUploadBusy;
+    SnapToneNameCallback getSnapToneDisplayName;
     juce::Label pathLabel;
     juce::TextEditor pathEditor;
     juce::TextButton browseButton;
@@ -800,7 +831,13 @@ AudioPluginAudioProcessorEditor::AudioPluginAudioProcessorEditor (
     AudioPluginAudioProcessor& p)
     : AudioProcessorEditor (&p),
       processorRef (p),
-      midiConnection (p.getMidiConnection())
+      midiConnection (p.getMidiConnection()),
+      offlinePreset (p.getOfflinePreset()),
+      offlinePresetRevision (p.getOfflinePresetRevision()),
+      offlinePresetDirty (p.getOfflinePresetDirty()),
+      offlinePatchVolume (p.getOfflinePatchVolume()),
+      offlinePatchPan (p.getOfflinePatchPan()),
+      offlinePatchTempo (p.getOfflinePatchTempo())
 {
     setSize (960, 390);
 
@@ -1128,8 +1165,10 @@ compareBButton.onClick = [this]
     soundCloneButton.onClick = [this] { openSoundCloneWindow (); };
 	updateCompareSnapshotButtons ();
 
-  offlinePreset = makeDefaultOfflinePreset ();
-  offlinePresetRevision = 1;
+  patchVolumeSlider.setValue (offlinePatchVolume, juce::dontSendNotification);
+  panSlider.setValue (offlinePatchPan, juce::dontSendNotification);
+  tempoSlider.setValue (offlinePatchTempo, juce::dontSendNotification);
+  presetNameEditor.setText (offlinePreset.patchName, juce::dontSendNotification);
   processorRef.ensureGP200Connection();
 
 lastInitialPresetRequestMs =
@@ -1140,6 +1179,14 @@ startTimerHz (idleTimerHz);
 
 AudioPluginAudioProcessorEditor::~AudioPluginAudioProcessorEditor ()
 {
+    if (!midiConnection.isConnected ())
+    {
+        offlinePatchVolume = static_cast<int> (patchVolumeSlider.getValue ());
+        offlinePatchPan = static_cast<int> (panSlider.getValue ());
+        offlinePatchTempo = static_cast<int> (tempoSlider.getValue ());
+        processorRef.notifyOfflineStateChanged ();
+    }
+
     clearInterfaceTypography ();
 }
 
@@ -2035,6 +2082,13 @@ void AudioPluginAudioProcessorEditor::openSoundCloneWindow ()
         {
             return safeThis != nullptr
                        && safeThis->midiConnection.isSoundCloneUploadInProgress();
+        },
+        [safeThis = juce::Component::SafePointer<AudioPluginAudioProcessorEditor> (this)]
+        (int zeroBasedIndex)
+        {
+            return safeThis != nullptr
+                       ? safeThis->midiConnection.getSnapToneDisplayName (zeroBasedIndex)
+                       : juce::String();
         }));
 
     options.launchAsync ();
@@ -2348,9 +2402,12 @@ const auto snapshotLabel =
         offlinePresetDirty = false;
         ++offlinePresetRevision;
 
-        patchVolumeSlider.setValue (restoredVolume, juce::dontSendNotification);
-        panSlider.setValue (restoredPan, juce::dontSendNotification);
-        tempoSlider.setValue (restoredTempo, juce::dontSendNotification);
+        offlinePatchVolume = restoredVolume;
+        offlinePatchPan = restoredPan;
+        offlinePatchTempo = restoredTempo;
+        patchVolumeSlider.setValue (offlinePatchVolume, juce::dontSendNotification);
+        panSlider.setValue (offlinePatchPan, juce::dontSendNotification);
+        tempoSlider.setValue (offlinePatchTempo, juce::dontSendNotification);
         presetNameEditor.setText (offlinePreset.patchName, juce::dontSendNotification);
 
         effectBlocksSignature.clear ();
@@ -2358,6 +2415,7 @@ const auto snapshotLabel =
         patchVolumeSourceSignature.clear ();
         presetNameEditorSignature.clear ();
 
+        processorRef.notifyOfflineStateChanged ();
         effectsStatusText = "Recalled offline preset snapshot " +
                             snapshotLabel +
                             " from DAW";
@@ -2714,7 +2772,10 @@ void AudioPluginAudioProcessorEditor::sendPatchVolumeFromSlider ()
     }
     else
     {
+        offlinePatchVolume = value;
         offlinePresetDirty = true;
+        ++offlinePresetRevision;
+        processorRef.notifyOfflineStateChanged ();
     }
 
     repaint ();
@@ -2733,7 +2794,10 @@ void AudioPluginAudioProcessorEditor::sendPatchPanFromSlider ()
     }
     else
     {
+        offlinePatchPan = value;
         offlinePresetDirty = true;
+        ++offlinePresetRevision;
+        processorRef.notifyOfflineStateChanged ();
     }
 
     repaint ();
@@ -2752,7 +2816,10 @@ void AudioPluginAudioProcessorEditor::sendPatchTempoFromSlider ()
     }
     else
     {
+        offlinePatchTempo = bpm;
         offlinePresetDirty = true;
+        ++offlinePresetRevision;
+        processorRef.notifyOfflineStateChanged ();
     }
 
     repaint ();

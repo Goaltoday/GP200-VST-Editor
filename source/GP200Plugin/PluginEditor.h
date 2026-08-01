@@ -302,9 +302,12 @@ CompareSnapshot selectedCompareSnapshot{
 
     juce::String effectsStatusText{"Effects: waiting for preset data"};
 
-    gp200::GP200Preset offlinePreset;
-    std::uint64_t offlinePresetRevision{0};
-    bool offlinePresetDirty{false};
+    gp200::GP200Preset& offlinePreset;
+    std::uint64_t& offlinePresetRevision;
+    bool& offlinePresetDirty;
+    int& offlinePatchVolume;
+    int& offlinePatchPan;
+    int& offlinePatchTempo;
     bool lastConnectionIndicatorState{false};
     int selectedEffectBlockIndex{-1};
     bool editorHeightUpdatePending{false};

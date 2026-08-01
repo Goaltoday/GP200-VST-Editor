@@ -17,6 +17,7 @@
 
 #include "TunerEngine.h"
 #include "../libgp200/MidiConnection.h"
+#include "../libgp200/GP200Preset.h"
 
 #include "ToneMatch/ToneMatchCapture.h"
 #include "ToneMatch/ToneAnalysis.h"
@@ -33,6 +34,14 @@ class AudioPluginAudioProcessor final : public juce::AudioProcessor
 
     gp200::MidiConnection& getMidiConnection() noexcept;
     void ensureGP200Connection();
+
+    gp200::GP200Preset& getOfflinePreset() noexcept;
+    std::uint64_t& getOfflinePresetRevision() noexcept;
+    bool& getOfflinePresetDirty() noexcept;
+    int& getOfflinePatchVolume() noexcept;
+    int& getOfflinePatchPan() noexcept;
+    int& getOfflinePatchTempo() noexcept;
+    void notifyOfflineStateChanged();
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources () override;
@@ -133,6 +142,14 @@ bool saveToneMatchIRToFile (
     static bool isUsefulPresetName (const juce::String& presetName);
 	
 	gp200::MidiConnection midiConnection;
+
+    gp200::GP200Preset offlinePreset;
+    std::uint64_t offlinePresetRevision{1};
+    bool offlinePresetDirty{false};
+    int offlinePatchVolume{50};
+    int offlinePatchPan{0};
+    int offlinePatchTempo{120};
+
 	TunerEngine tunerEngine;
 	tonematch::ToneMatchCapture toneMatchCapture;
 	

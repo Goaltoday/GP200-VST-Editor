@@ -10,6 +10,154 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include "../libgp200/GP200Constants.h"
+#include "../libgp200/GP200EffectDatabase.h"
+#include "../libgp200/GP200EffectParamDatabase.h"
+
+
+namespace
+{
+gp200::GP200Preset makeDefaultOfflinePreset()
+{
+    gp200::GP200Preset preset;
+    preset.isValid = true;
+    preset.patchName = "Offline preset";
+    preset.fxLoopSend = 4;
+    preset.fxLoopReturn = 4;
+
+    static constexpr const char* modules[] = {
+        "PRE", "WAH", "DST", "AMP", "NR", "CAB",
+        "EQ", "MOD", "DLY", "RVB", "VOL"
+    };
+
+    static constexpr int defaultRoutingOrder[] = {
+        10, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9
+    };
+
+    for (int blockIndex = 0; blockIndex < static_cast<int> (gp200::effectBlockCount); ++blockIndex)
+    {
+        const auto index = static_cast<std::size_t> (blockIndex);
+        preset.routingOrder[index] = defaultRoutingOrder[blockIndex];
+
+        auto& slot = preset.effects[index];
+        slot.blockIndex = blockIndex;
+        slot.slotIndex = blockIndex;
+        slot.enabled = false;
+        slot.params.fill (0.0f);
+
+        const auto effects = gp200::GP200EffectDatabase::getEffectsForModule (modules[blockIndex]);
+        if (!effects.empty ())
+            slot.effectId = effects.front ().effectId;
+
+        if (const auto* paramSet = gp200::GP200EffectParamDatabase::findParamsForEffect (slot.effectId))
+        {
+            for (int i = 0; i < paramSet->count; ++i)
+            {
+                const auto& param = paramSet->params[i];
+                if (param.idx >= 0 && param.idx < static_cast<int> (slot.params.size ()))
+                    slot.params[static_cast<std::size_t> (param.idx)] = param.defaultValue;
+            }
+        }
+    }
+
+    return preset;
+}
+
+constexpr juce::uint32 offlineSnapshotMagic = 0x4f503247u;
+constexpr int offlineSnapshotVersion = 2;
+
+juce::MemoryBlock serialiseOfflineState (const gp200::GP200Preset& preset,
+                                         int patchVolume,
+                                         int patchPan,
+                                         int patchTempo)
+{
+    juce::MemoryBlock result;
+    juce::MemoryOutputStream out (result, false);
+    out.writeInt (static_cast<int> (offlineSnapshotMagic));
+    out.writeInt (offlineSnapshotVersion);
+    out.writeString (preset.patchName);
+    out.writeString (preset.author);
+    out.writeInt (static_cast<int> (preset.prstRawSource.getSize ()));
+    if (preset.prstRawSource.getSize () > 0)
+        out.write (preset.prstRawSource.getData (), preset.prstRawSource.getSize ());
+    out.writeInt (preset.fxLoopSend);
+    out.writeInt (preset.fxLoopReturn);
+    out.writeInt (patchVolume);
+    out.writeInt (patchPan);
+    out.writeInt (patchTempo);
+    for (const auto value : preset.routingOrder)
+        out.writeInt (value);
+    for (const auto& effect : preset.effects)
+    {
+        out.writeInt (effect.blockIndex);
+        out.writeInt (effect.slotIndex);
+        out.writeBool (effect.enabled);
+        out.writeInt (static_cast<int> (effect.effectId));
+        for (const auto value : effect.params)
+            out.writeFloat (value);
+    }
+    return result;
+}
+
+bool deserialiseOfflineState (const juce::MemoryBlock& data,
+                              gp200::GP200Preset& preset,
+                              int& patchVolume,
+                              int& patchPan,
+                              int& patchTempo)
+{
+    if (data.getSize () < 8)
+        return false;
+
+    juce::MemoryInputStream in (data, false);
+    if (static_cast<juce::uint32> (in.readInt ()) != offlineSnapshotMagic)
+        return false;
+
+    const auto version = in.readInt ();
+    if (version != 1 && version != offlineSnapshotVersion)
+        return false;
+
+    gp200::GP200Preset decoded;
+    decoded.isValid = true;
+    decoded.patchName = in.readString ();
+    decoded.author = in.readString ();
+
+    if (version >= 2)
+    {
+        const auto rawSize = in.readInt ();
+        if (rawSize < 0 || static_cast<juce::int64> (rawSize) > in.getNumBytesRemaining ())
+            return false;
+        if (rawSize > 0)
+        {
+            decoded.prstRawSource.setSize (static_cast<std::size_t> (rawSize), false);
+            if (in.read (decoded.prstRawSource.getData (), rawSize) != rawSize)
+                return false;
+        }
+    }
+
+    decoded.fxLoopSend = in.readInt ();
+    decoded.fxLoopReturn = in.readInt ();
+    patchVolume = juce::jlimit (0, 100, in.readInt ());
+    patchPan = juce::jlimit (-100, 100, in.readInt ());
+    patchTempo = juce::jlimit (40, 250, in.readInt ());
+
+    for (auto& value : decoded.routingOrder)
+        value = in.readInt ();
+    for (auto& effect : decoded.effects)
+    {
+        effect.blockIndex = in.readInt ();
+        effect.slotIndex = in.readInt ();
+        effect.enabled = in.readBool ();
+        effect.effectId = static_cast<juce::uint32> (in.readInt ());
+        for (auto& value : effect.params)
+            value = in.readFloat ();
+    }
+
+    if (decoded.patchName.isEmpty ())
+        decoded.patchName = "Offline preset";
+
+    preset = std::move (decoded);
+    return true;
+}
+}
 
 //==============================================================================
 AudioPluginAudioProcessor::AudioPluginAudioProcessor ()
@@ -20,7 +168,8 @@ AudioPluginAudioProcessor::AudioPluginAudioProcessor ()
 #endif
                           .withOutput ("Output", juce::AudioChannelSet::stereo (), true)
 #endif
-      )
+      ),
+      offlinePreset (makeDefaultOfflinePreset ())
 {
 }
 
@@ -33,6 +182,42 @@ gp200::MidiConnection&
 AudioPluginAudioProcessor::getMidiConnection() noexcept
 {
     return midiConnection;
+}
+
+gp200::GP200Preset& AudioPluginAudioProcessor::getOfflinePreset() noexcept
+{
+    return offlinePreset;
+}
+
+std::uint64_t& AudioPluginAudioProcessor::getOfflinePresetRevision() noexcept
+{
+    return offlinePresetRevision;
+}
+
+bool& AudioPluginAudioProcessor::getOfflinePresetDirty() noexcept
+{
+    return offlinePresetDirty;
+}
+
+int& AudioPluginAudioProcessor::getOfflinePatchVolume() noexcept
+{
+    return offlinePatchVolume;
+}
+
+int& AudioPluginAudioProcessor::getOfflinePatchPan() noexcept
+{
+    return offlinePatchPan;
+}
+
+int& AudioPluginAudioProcessor::getOfflinePatchTempo() noexcept
+{
+    return offlinePatchTempo;
+}
+
+void AudioPluginAudioProcessor::notifyOfflineStateChanged()
+{
+    updateHostDisplay (juce::AudioProcessorListener::ChangeDetails {}
+                           .withNonParameterStateChanged (true));
 }
 
 void AudioPluginAudioProcessor::ensureGP200Connection()
@@ -429,7 +614,7 @@ void AudioPluginAudioProcessor::getStateInformation (
     {
         const juce::ScopedLock lock (stateLock);
 
-        xml->setAttribute ("version", 5);
+        xml->setAttribute ("version", 6);
 
         xml->setAttribute ("slotReferenceSlot", savedGP200Slot);
         xml->setAttribute ("slotReferenceName",
@@ -449,6 +634,15 @@ void AudioPluginAudioProcessor::getStateInformation (
         xml->setAttribute (
             "snapshotBDataBase64",
             snapshotB.data.toBase64Encoding ());
+
+        const auto offlineData = serialiseOfflineState (
+            offlinePreset,
+            offlinePatchVolume,
+            offlinePatchPan,
+            offlinePatchTempo);
+        xml->setAttribute ("offlinePresetDataBase64",
+                           offlineData.toBase64Encoding ());
+        xml->setAttribute ("offlinePresetDirty", offlinePresetDirty);
     }
 
     copyXmlToBinary (*xml, destData);
@@ -484,6 +678,35 @@ void AudioPluginAudioProcessor::setStateInformation (
         snapshot.name = "unknown";
         snapshot.data.setSize (0);
         ++snapshot.revision;
+    }
+
+    const auto offlineDataBase64 =
+        xml->getStringAttribute ("offlinePresetDataBase64", {});
+
+    if (offlineDataBase64.isNotEmpty ())
+    {
+        juce::MemoryBlock offlineData;
+        if (offlineData.fromBase64Encoding (offlineDataBase64))
+        {
+            gp200::GP200Preset restoredPreset;
+            int restoredVolume = 50;
+            int restoredPan = 0;
+            int restoredTempo = 120;
+
+            if (deserialiseOfflineState (offlineData,
+                                         restoredPreset,
+                                         restoredVolume,
+                                         restoredPan,
+                                         restoredTempo))
+            {
+                offlinePreset = std::move (restoredPreset);
+                offlinePatchVolume = restoredVolume;
+                offlinePatchPan = restoredPan;
+                offlinePatchTempo = restoredTempo;
+                offlinePresetDirty = xml->getBoolAttribute ("offlinePresetDirty", false);
+                ++offlinePresetRevision;
+            }
+        }
     }
 
     const auto hasNewSnapshotFormat =

@@ -291,7 +291,7 @@ bool MidiConnection::startSoundCloneUpload (const juce::File& cloFile, int globa
     soundCloneUploadChunkIndex = 0;
     midiOutput->sendMessageNow (soundCloneUpload.prepareMessage);
     soundCloneUploadPhase = SoundCloneUploadPhase::WaitingAfterPrepare;
-    soundCloneUploadNextActionMs = juce::Time::getMillisecondCounterHiRes () + 200.0;
+    soundCloneUploadNextActionMs = juce::Time::getMillisecondCounterHiRes () + 100.0;
     soundCloneUploadStatusText = "Sound Clone upload: preparing slot " + juce::String (globalSlot + 1);
     lastMessageText = soundCloneUploadStatusText;
     return true;
@@ -327,7 +327,7 @@ void MidiConnection::processSoundCloneUpload ()
         }
 
         soundCloneUploadPhase = SoundCloneUploadPhase::WaitingBeforeCommit;
-        soundCloneUploadNextActionMs = now + 100.0;
+        soundCloneUploadNextActionMs = now + 200.0;
         soundCloneUploadStatusText = "Sound Clone upload: waiting before commit";
         return;
     }
