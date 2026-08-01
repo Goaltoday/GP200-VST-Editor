@@ -37,6 +37,9 @@ struct GP200Preset
     RoutingOrder routingOrder{};
     std::array<GP200EffectSlot, effectBlockCount> effects{};
 
+    // Original user .prst bytes, retained for byte-preserving round trips.
+    juce::MemoryBlock prstRawSource;
+
     juce::String getSignalChainText () const;
     juce::StringArray getEffectSummaryLines () const;
 
@@ -51,6 +54,9 @@ class GP200PresetCodec
 
     static GP200Preset decodePrstFile (
         const juce::MemoryBlock& fileData);
+
+    static juce::MemoryBlock encodePrstFile (
+        const GP200Preset& preset);
 
     static juce::MemoryBlock makeLivePresetDumpFromPrst (
         const GP200Preset& preset,

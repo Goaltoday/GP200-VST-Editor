@@ -78,6 +78,8 @@ void MidiConnection::disconnect ()
 
     const juce::ScopedLock lock (stateLock);
 
+    presetNameScanner.cancel ();
+
     statusText = "Not connected";
     currentSlot = -1;
     currentPresetName = "unknown";
@@ -956,6 +958,8 @@ bool MidiConnection::storeCurrentPresetToGP200 ()
 
     midiOutput->sendMessageNow (message);
 
+    presetNameScanner.setCachedName (currentSlot, presetName);
+
     lastMessageText =
         "Stored current preset to GP-200 slot " + juce::String (currentSlot) + ": " + presetName;
 
@@ -1164,6 +1168,7 @@ int MidiConnection::getEffectOnOffCCForBlockIndex (int blockIndex)
 bool MidiConnection::sendPresetChange (int slot)
 {
     const juce::ScopedLock lock (stateLock);
+    presetNameScanner.cancel ();
     if (slot < 0 || slot > 255)
     {
         lastMessageText = "Cannot restore preset: invalid slot";
@@ -1339,6 +1344,109 @@ bool MidiConnection::requestPresetNameForCurrentSlotIfNeeded ()
         return sendLiveReadRequestForSlot (currentSlot);
 
     return sendReadRequestForSlot (currentSlot);
+}
+
+
+void MidiConnection::startPresetNameScan (int prioritySlot)
+{
+    const juce::ScopedLock lock (stateLock);
+
+    if (midiOutput == nullptr)
+        return;
+
+    presetNameScanner.start (prioritySlot);
+}
+
+void MidiConnection::cancelPresetNameScan ()
+{
+    const juce::ScopedLock lock (stateLock);
+    presetNameScanner.cancel ();
+}
+
+void MidiConnection::processPresetNameScan ()
+{
+    const juce::ScopedLock lock (stateLock);
+
+    if (!presetNameScanner.isScanning ())
+        return;
+
+    const bool busy = midiOutput == nullptr
+                      || irUploadPhase != IRUploadPhase::Idle
+                      || soundCloneUploadPhase != SoundCloneUploadPhase::Idle
+                      || presetNameRequestPending
+                      || livePresetReadPending
+                      || liveRefreshPending;
+
+    if (busy)
+        return;
+
+    const auto nowMs = juce::Time::getMillisecondCounterHiRes ();
+    presetNameScanner.handleTimeout (nowMs);
+    sendNextPresetNameScanRequestUnlocked ();
+}
+
+bool MidiConnection::sendNextPresetNameScanRequestUnlocked ()
+{
+    const auto nowMs = juce::Time::getMillisecondCounterHiRes ();
+    if (midiOutput == nullptr || !presetNameScanner.shouldSendNextRequest (nowMs))
+        return false;
+
+    const auto bytes = presetNameScanner.beginNextRequest (nowMs);
+    if (bytes.size () < 3)
+        return false;
+
+    const auto message = juce::MidiMessage::createSysExMessage (
+        bytes.data () + 1, static_cast<int> (bytes.size () - 2));
+    midiOutput->sendMessageNow (message);
+    return true;
+}
+
+bool MidiConnection::isPresetNameScanRunning () const
+{
+    const juce::ScopedLock lock (stateLock);
+    return presetNameScanner.isScanning ();
+}
+
+float MidiConnection::getPresetNameScanProgress () const
+{
+    const juce::ScopedLock lock (stateLock);
+    return presetNameScanner.getProgress ();
+}
+
+std::uint64_t MidiConnection::getPresetNameScanRevision () const
+{
+    const juce::ScopedLock lock (stateLock);
+    return presetNameScanner.getRevision ();
+}
+
+juce::String MidiConnection::getPresetSlotName (int slot) const
+{
+    const juce::ScopedLock lock (stateLock);
+    return presetNameScanner.getName (slot);
+}
+
+bool MidiConnection::hasPresetSlotName (int slot) const
+{
+    const juce::ScopedLock lock (stateLock);
+    return presetNameScanner.hasName (slot);
+}
+
+bool MidiConnection::hasCompletePresetNameCache () const
+{
+    const juce::ScopedLock lock (stateLock);
+    return presetNameScanner.isCacheComplete ();
+}
+
+void MidiConnection::updatePresetNameCache (int slot, const juce::String& name)
+{
+    const juce::ScopedLock lock (stateLock);
+    presetNameScanner.setCachedName (slot, name);
+}
+
+void MidiConnection::invalidatePresetNameCacheSlot (int slot)
+{
+    const juce::ScopedLock lock (stateLock);
+    presetNameScanner.invalidateSlot (slot);
 }
 
 bool MidiConnection::sendReadRequestForSlot (int slot)
@@ -2013,6 +2121,20 @@ void MidiConnection::parseGP200SysEx (const juce::uint8* data, int size)
         return;
     }
 
+    // The optional preset-name scanner uses the dedicated 0x20 request and
+    // owns exactly one pending reply at a time. Consume that reply here so it
+    // cannot be mistaken for the currently loaded preset.
+    if (command == 0x12 && subCommand == 0x18
+        && presetNameScanner.hasPendingRequest ()
+        && presetNameScanner.handleSysEx (data, size, juce::Time::getMillisecondCounterHiRes ()))
+    {
+        // Continue immediately after a valid reply. This remains entirely in
+        // the MIDI layer and avoids limiting the scan to the editor's 20 Hz
+        // UI timer. There is still never more than one request in flight.
+        sendNextPresetNameScanRequestUnlocked ();
+        return;
+    }
+
     // Response to preset read request. We use the same 7 chunks for:
     // - preset name
     // - full decoded preset dump capture
@@ -2030,6 +2152,8 @@ void MidiConnection::parseGP200SysEx (const juce::uint8* data, int size)
                     currentSlot = lastRequestedNameSlot;
 
                 currentPresetName = name;
+                if (currentSlot >= 0)
+                    presetNameScanner.setCachedName (currentSlot, name);
                 presetNameRequestPending = false;
 
                 lastMessageText = "Preset name received: " + name + " for slot " + juce::String (currentSlot);
@@ -2065,6 +2189,9 @@ void MidiConnection::parseGP200SysEx (const juce::uint8* data, int size)
 
                 if (name.isNotEmpty ())
                     currentPresetName = name;
+
+                if (name.isNotEmpty () && currentSlot >= 0)
+                    presetNameScanner.setCachedName (currentSlot, name);
                 else
                     currentPresetName = "requesting...";
 
