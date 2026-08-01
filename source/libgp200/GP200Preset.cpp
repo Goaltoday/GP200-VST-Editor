@@ -349,6 +349,8 @@ GP200Preset GP200PresetCodec::decodePrstFile (
             return preset;
     }
 
+    preset.prstRawSource = fileData;
+
     preset.patchName =
         readAsciiString (
             data,
@@ -467,6 +469,133 @@ GP200Preset GP200PresetCodec::decodePrstFile (
 
     preset.isValid = true;
     return preset;
+}
+
+juce::MemoryBlock GP200PresetCodec::encodePrstFile (
+    const GP200Preset& preset)
+{
+    juce::MemoryBlock result;
+    result.setSize (prstUserFileSize, true);
+
+    auto* data = static_cast<juce::uint8*> (result.getData ());
+    if (data == nullptr)
+        return {};
+
+    // Preserve every unmodelled byte when this preset came from a real
+    // 1224-byte user PRST. Otherwise seed the confirmed GP-200 structure.
+    if (preset.prstRawSource.getSize () >= prstUserFileSize)
+    {
+        std::memcpy (data,
+                     preset.prstRawSource.getData (),
+                     prstUserFileSize);
+    }
+    else
+    {
+        const auto writeAscii = [data] (std::size_t offset,
+                                        const char* text,
+                                        std::size_t length)
+        {
+            std::memcpy (data + offset, text, length);
+        };
+
+        writeAscii (0x00, "TSRP", 4);
+        data[0x0B] = 0x06;
+        writeAscii (0x10, "2-PG", 4);
+        data[0x14] = 0x00;
+        data[0x15] = 0x01;
+        data[0x16] = 0x01;
+        data[0x17] = 0x00;
+
+        const auto timestamp = static_cast<juce::uint32> (
+            juce::Time::getCurrentTime ().toMilliseconds () / 1000);
+        writeUInt32LE (data, prstUserFileSize, 0x1C, timestamp);
+
+        data[0x24] = 0x94;
+        data[0x25] = 0x04;
+        writeAscii (0x28, "MRAP", 4);
+        writeUInt32LE (data, prstUserFileSize, 0x2C, 1172u);
+
+        data[0x30] = 0x02;
+        data[0x32] = 0x58;
+        data[0x36] = 0x78;
+        data[0x38] = 0x32;
+
+        data[0x8C] = 0x08;
+        data[0x8D] = 0x00;
+        data[0x8E] = 0x10;
+        data[0x8F] = 0x00;
+
+        for (std::size_t block = 0; block < effectBlockCount; ++block)
+        {
+            const auto base = prstEffectBlockStart + block * prstEffectBlockSize;
+            data[base + 0] = 0x14;
+            data[base + 2] = 0x44;
+            data[base + 4] = static_cast<juce::uint8> (block);
+            data[base + 7] = 0x0F;
+        }
+    }
+
+    writeAsciiString (data,
+                      prstUserFileSize,
+                      prstPatchNameOffset,
+                      prstTextLength,
+                      preset.patchName);
+    writeAsciiString (data,
+                      prstUserFileSize,
+                      prstAuthorOffset,
+                      prstTextLength,
+                      preset.author);
+
+    data[prstFxLoopSendOffset] = static_cast<juce::uint8> (
+        juce::jlimit (1, 10, preset.fxLoopSend));
+    data[prstFxLoopReturnOffset] = static_cast<juce::uint8> (
+        juce::jlimit (1, 10, preset.fxLoopReturn));
+
+    for (std::size_t i = 0; i < effectBlockCount; ++i)
+    {
+        data[prstRoutingOrderOffset + i] = static_cast<juce::uint8> (
+            juce::jlimit (0,
+                          static_cast<int> (effectBlockCount) - 1,
+                          preset.routingOrder[i]));
+    }
+
+    for (const auto& effect : preset.effects)
+    {
+        const auto physicalSlot = juce::jlimit (
+            0,
+            static_cast<int> (effectBlockCount) - 1,
+            effect.slotIndex >= 0 ? effect.slotIndex : effect.blockIndex);
+        const auto base = prstEffectBlockStart
+                        + static_cast<std::size_t> (physicalSlot) * prstEffectBlockSize;
+
+        data[base + slotIndexOffset] = static_cast<juce::uint8> (physicalSlot);
+        data[base + enabledOffset] = effect.enabled ? 1 : 0;
+        writeUInt32LE (data,
+                       prstUserFileSize,
+                       base + effectIdOffset,
+                       effect.effectId);
+
+        for (std::size_t param = 0; param < effectParamCount; ++param)
+        {
+            const auto value = std::isfinite (effect.params[param])
+                                   ? effect.params[param]
+                                   : 0.0f;
+            writeFloat32LE (data,
+                            prstUserFileSize,
+                            base + paramsOffset + param * sizeof (float),
+                            value);
+        }
+    }
+
+    juce::uint32 checksum = 0;
+    for (std::size_t i = 0; i < prstChecksumOffset; ++i)
+        checksum += data[i];
+
+    checksum &= 0xFFFFu;
+    data[prstChecksumOffset] = static_cast<juce::uint8> ((checksum >> 8) & 0xFFu);
+    data[prstChecksumOffset + 1] = static_cast<juce::uint8> (checksum & 0xFFu);
+
+    return result;
 }
 
 juce::MemoryBlock

@@ -31,12 +31,35 @@ juce_add_plugin(GP200Plugin
 
 juce_generate_juce_header(GP200Plugin)
 
+juce_add_binary_data(GP200RibbonAssets
+    SOURCES
+        assets/ribbon/vol.svg
+        assets/ribbon/pre.svg
+        assets/ribbon/wah.svg
+        assets/ribbon/dst.svg
+        assets/ribbon/amp.svg
+        assets/ribbon/nr.svg
+        assets/ribbon/cab.svg
+        assets/ribbon/eq.svg
+        assets/ribbon/mod.svg
+        assets/ribbon/dly.svg
+        assets/ribbon/rvb.svg
+        assets/fonts/SpaceGrotesk-Regular.ttf
+        assets/fonts/SpaceGrotesk-Medium.ttf
+        assets/fonts/SpaceGrotesk-SemiBold.ttf
+        assets/fonts/OFL.txt
+)
+
+
 target_sources(GP200Plugin
     PRIVATE
         source/GP200Plugin/PluginProcessor.cpp
         source/GP200Plugin/PluginProcessor.h
         source/GP200Plugin/PluginEditor.cpp
         source/GP200Plugin/PluginEditor.h
+        source/GP200Plugin/PresetSlotSearchPopup.cpp
+        source/GP200Plugin/PresetSlotSearchPopup.h
+        source/GP200Plugin/GP200Typography.h
         source/GP200Plugin/EffectBlockComponent.cpp
         source/GP200Plugin/EffectBlockComponent.h
         source/GP200Plugin/TunerDisplayComponent.cpp
@@ -49,6 +72,8 @@ target_sources(GP200Plugin
         source/libgp200/MidiDeviceScanner.h
         source/libgp200/MidiConnection.cpp
         source/libgp200/MidiConnection.h
+        source/libgp200/GP200PresetNameScanner.cpp
+        source/libgp200/GP200PresetNameScanner.h
         source/libgp200/GP200Preset.cpp
         source/libgp200/GP200Preset.h
         source/libgp200/GP200EffectDatabase.cpp
@@ -93,6 +118,7 @@ target_compile_definitions(GP200Plugin
 
 target_link_libraries(GP200Plugin
     PRIVATE
+        GP200RibbonAssets
         juce::juce_audio_devices
         juce::juce_audio_processors
         juce::juce_audio_utils
@@ -122,6 +148,9 @@ source_group(
         source/GP200Plugin/PluginProcessor.h
         source/GP200Plugin/PluginEditor.cpp
         source/GP200Plugin/PluginEditor.h
+        source/GP200Plugin/PresetSlotSearchPopup.cpp
+        source/GP200Plugin/PresetSlotSearchPopup.h
+        source/GP200Plugin/GP200Typography.h
         source/GP200Plugin/EffectBlockComponent.cpp
         source/GP200Plugin/EffectBlockComponent.h
         source/GP200Plugin/TunerDisplayComponent.cpp
@@ -134,6 +163,8 @@ source_group(
         source/libgp200/MidiDeviceScanner.h
         source/libgp200/MidiConnection.cpp
         source/libgp200/MidiConnection.h
+        source/libgp200/GP200PresetNameScanner.cpp
+        source/libgp200/GP200PresetNameScanner.h
         source/libgp200/GP200Preset.cpp
         source/libgp200/GP200Preset.h
         source/libgp200/GP200EffectDatabase.cpp

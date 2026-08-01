@@ -8,6 +8,7 @@
     SPDX-License-Identifier: GPL-3.0-or-later
 */
 #include "ToneMatchCurveComponent.h"
+#include "../GP200Typography.h"
 
 #include <algorithm>
 #include <cmath>
@@ -126,12 +127,10 @@ void ToneMatchCurveComponent::paint (
         1.0f);
 
     g.setColour (graphOutline);
-    g.setFont (
-        juce::FontOptions (13.0f)
-            .withStyle ("Bold"));
+    g.setFont (gp200ui::semibold (15.5f));
 
     g.drawText (
-        "MATCH CURVE — TARGET minus SOURCE",
+        "MATCH CURVE | TARGET minus SOURCE",
         12,
         8,
         getWidth() - 24,
@@ -163,7 +162,7 @@ void ToneMatchCurveComponent::paint (
         10000.0
     };
 
-    g.setFont (juce::FontOptions (10.0f));
+    g.setFont (gp200ui::regular (13.5f));
 
     for (const auto frequency : frequencyMarks)
     {
@@ -233,6 +232,7 @@ void ToneMatchCurveComponent::paint (
     if (!comparison.isValid())
     {
         g.setColour (graphText);
+        g.setFont (gp200ui::regular (14.5f));
 
         g.drawText (
             "Capture SOURCE and TARGET, then press Analyse",

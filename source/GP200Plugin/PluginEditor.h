@@ -11,11 +11,14 @@
 
 #include "EffectBlockComponent.h"
 #include "PluginProcessor.h"
+#include "PresetSlotSearchPopup.h"
 #include "../libgp200/MidiConnection.h"
+#include "../libgp200/GP200Preset.h"
 #include "TunerDisplayComponent.h"
 #include "ToneMatch/ToneMatchPanel.h"
 
 #include <array>
+#include <cstdint>
 #include <deque>
 #include <memory>
 #include <vector>
@@ -44,6 +47,8 @@ class AudioPluginAudioProcessorEditor final : public juce::AudioProcessorEditor,
 	
 	void openPrstFileChooser ();
     void importPrstFile (const juce::File& file);
+    void openExportPrstFileChooser ();
+    void exportCurrentPresetToPrst (const juce::File& file);
     void openIRFileChooser ();
     void importIRFile (const juce::File& file);
     void openSoundCloneWindow ();
@@ -79,6 +84,10 @@ juce::String getSelectedCompareSnapshotLabel () const;
     void syncPatchVolumeSliderFromPresetData (const juce::MemoryBlock& presetData,
                                               const juce::String& presetDataSignature);
 
+    void openPresetSlotMenu ();
+    void showPresetSlotMenu ();
+    void refreshPresetSlotSearchPopup ();
+
     void loadPreviousBank ();
     void loadNextBank ();
     void loadPreviousPreset ();
@@ -88,6 +97,12 @@ juce::String getSelectedCompareSnapshotLabel () const;
     void updateEffectBlocksUI ();
     void rebuildEffectBlocks (const gp200::GP200Preset& preset, const juce::String& newSignature);
     void layoutEffectBlocks ();
+    void selectEffectBlock (int blockIndex);
+    void scheduleEditorHeightUpdate ();
+    void updateEditorHeight ();
+    void updateEffectChainRibbon (const gp200::GP200Preset& preset);
+    void applyInterfaceTypography ();
+    void clearInterfaceTypography ();
 
     int getDropPositionForContentY (int contentY) const;
     int getDropLineYForPosition (int dropPosition) const;
@@ -140,8 +155,14 @@ juce::String getSelectedCompareSnapshotLabel () const;
     static constexpr int restoreTimerHz = 100;
 
     AudioPluginAudioProcessor& processorRef;
-gp200::MidiConnection& midiConnection;
+    gp200::MidiConnection& midiConnection;
+    std::unique_ptr<juce::LookAndFeel_V4> interfaceLookAndFeel;
+    std::unique_ptr<juce::LookAndFeel_V4> patchSettingsLookAndFeel;
 double lastInitialPresetRequestMs{0.0};
+    bool openPresetMenuWhenScanFinishes{false};
+    std::uint64_t lastPresetNameScanRevision{0};
+    bool automaticPresetNameScanArmed{false};
+    double automaticPresetNameScanDueMs{0.0};
 
     std::vector<PresetRestoreStep> presetRestoreSteps;
     int presetRestoreStepIndex{0};
@@ -153,6 +174,8 @@ double lastInitialPresetRequestMs{0.0};
 
     juce::TextButton previousBankButton{"BANK -"};
     juce::TextButton previousPresetButton{"<"};
+    juce::TextButton presetSlotButton{"--"};
+    PresetSlotSearchPopup presetSlotSearchPopup;
     juce::TextButton nextPresetButton{">"};
     juce::TextButton nextBankButton{"BANK +"};
 	juce::TextButton compareAButton{"A"};
@@ -161,8 +184,10 @@ juce::TextButton savePresetButton{"Save to DAW"};
 juce::TextButton recallPresetButton{"Recall from DAW"};
 juce::TextButton storePresetButton{"Store to GP-200"};
 juce::TextButton importPrstButton{"Import PRST"};
+juce::TextButton exportPrstButton{"Export PRST"};
 juce::TextButton allBlocksOffButton{"FX OFF"};
 std::unique_ptr<juce::FileChooser> prstFileChooser;
+std::unique_ptr<juce::FileChooser> exportPrstFileChooser;
     juce::TextButton importIRButton{"Import IR"};
     juce::ComboBox userIRSlotBox;
     std::unique_ptr<juce::FileChooser> irFileChooser;
@@ -171,6 +196,42 @@ std::unique_ptr<juce::FileChooser> prstFileChooser;
 CompareSnapshot selectedCompareSnapshot{
     CompareSnapshot::A
 };
+
+
+    class EffectChainRibbonComponent final : public juce::Component
+    {
+      public:
+        struct Item
+        {
+            int blockIndex{-1};
+            juce::String blockName;
+            bool enabled{false};
+            juce::Colour colour;
+        };
+
+        void setItems (std::vector<Item> newItems);
+        void setSelectedBlockIndex (int blockIndex);
+        void setBlockEnabled (int blockIndex, bool enabled);
+        void paint (juce::Graphics& g) override;
+        void mouseDown (const juce::MouseEvent& event) override;
+        void mouseDrag (const juce::MouseEvent& event) override;
+        void mouseUp (const juce::MouseEvent& event) override;
+
+        std::function<void (int blockIndex)> onBlockSelected;
+        std::function<void (int blockIndex, int targetPosition)> onBlockReordered;
+
+      private:
+        juce::Rectangle<int> getTileBounds (int itemIndex) const;
+        int getItemIndexAt (juce::Point<int> position) const;
+        int getTargetPositionAtX (int x) const;
+
+        std::vector<Item> items;
+        int selectedBlockIndex{-1};
+        int pressedItemIndex{-1};
+        int dragTargetPosition{-1};
+        bool dragging{false};
+        juce::Point<int> mouseDownPosition;
+    };
 
     class DropIndicatorComponent final : public juce::Component
     {
@@ -206,15 +267,47 @@ CompareSnapshot selectedCompareSnapshot{
     bool allBlocksAreTemporarilyOff{false};
     int savedBlockEnabledSlot{-1};
 
+    EffectChainRibbonComponent effectChainRibbon;
     juce::Viewport effectsViewport;
     juce::Component effectsContent;
     DropIndicatorComponent dropIndicator;
     std::vector<std::unique_ptr<EffectBlockComponent>> effectBlocks;
 
+    // Structure signature controls component reconstruction; data signature
+    // controls value refreshes. Keeping them separate prevents UI flicker.
     juce::String effectBlocksSignature;
+    juce::String effectBlocksDataSignature;
+
+    // Structural changes can arrive as several partial live-preset revisions.
+    // Keep the currently painted chain until the incoming structure has been
+    // quiet for a short period, then rebuild once. This avoids visible
+    // intermediate states when changing presets, effects or User IR models.
+    gp200::GP200Preset pendingStructuralPreset;
+    juce::String pendingStructuralSignature;
+    juce::String pendingStructuralDataSignature;
+    double pendingStructuralLastChangeMs{0.0};
+    bool pendingStructuralRefresh{false};
+
     juce::String presetNameEditorSignature;
     juce::String patchVolumeSourceSignature;
+
+    // Optimistic guards prevent delayed live dumps from briefly restoring the
+    // previous patch-setting value after a local slider edit.
+    int pendingPatchVolumeValue{50};
+    int pendingPatchPanValue{0};
+    int pendingPatchTempoValue{120};
+    double patchVolumeLocalEditUntilMs{0.0};
+    double patchPanLocalEditUntilMs{0.0};
+    double patchTempoLocalEditUntilMs{0.0};
+
     juce::String effectsStatusText{"Effects: waiting for preset data"};
+
+    gp200::GP200Preset offlinePreset;
+    std::uint64_t offlinePresetRevision{0};
+    bool offlinePresetDirty{false};
+    bool lastConnectionIndicatorState{false};
+    int selectedEffectBlockIndex{-1};
+    bool editorHeightUpdatePending{false};
 	
 	juce::TextButton toneMatchButton{"Tone Match"};
 std::unique_ptr<ToneMatchPanel> toneMatchPanel;
