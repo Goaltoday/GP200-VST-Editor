@@ -38,6 +38,10 @@ class AudioPluginAudioProcessor final : public juce::AudioProcessor
     gp200::GP200Preset& getOfflinePreset() noexcept;
     std::uint64_t& getOfflinePresetRevision() noexcept;
     bool& getOfflinePresetDirty() noexcept;
+    int& getOfflinePatchVolume() noexcept;
+    int& getOfflinePatchPan() noexcept;
+    int& getOfflinePatchTempo() noexcept;
+    void notifyOfflineStateChanged();
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources () override;
@@ -142,6 +146,9 @@ bool saveToneMatchIRToFile (
     gp200::GP200Preset offlinePreset;
     std::uint64_t offlinePresetRevision{1};
     bool offlinePresetDirty{false};
+    int offlinePatchVolume{50};
+    int offlinePatchPan{0};
+    int offlinePatchTempo{120};
 
 	TunerEngine tunerEngine;
 	tonematch::ToneMatchCapture toneMatchCapture;

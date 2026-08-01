@@ -305,6 +305,9 @@ CompareSnapshot selectedCompareSnapshot{
     gp200::GP200Preset& offlinePreset;
     std::uint64_t& offlinePresetRevision;
     bool& offlinePresetDirty;
+    int& offlinePatchVolume;
+    int& offlinePatchPan;
+    int& offlinePatchTempo;
     bool lastConnectionIndicatorState{false};
     int selectedEffectBlockIndex{-1};
     bool editorHeightUpdatePending{false};
