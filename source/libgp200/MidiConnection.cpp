@@ -291,7 +291,7 @@ bool MidiConnection::startSoundCloneUpload (const juce::File& cloFile, int globa
     soundCloneUploadChunkIndex = 0;
     midiOutput->sendMessageNow (soundCloneUpload.prepareMessage);
     soundCloneUploadPhase = SoundCloneUploadPhase::WaitingAfterPrepare;
-    soundCloneUploadNextActionMs = juce::Time::getMillisecondCounterHiRes () + 200.0;
+    soundCloneUploadNextActionMs = juce::Time::getMillisecondCounterHiRes () + 100.0;
     soundCloneUploadStatusText = "Sound Clone upload: preparing slot " + juce::String (globalSlot + 1);
     lastMessageText = soundCloneUploadStatusText;
     return true;
@@ -318,7 +318,7 @@ void MidiConnection::processSoundCloneUpload ()
 
             ++soundCloneUploadChunkIndex;
             soundCloneUploadPhase = SoundCloneUploadPhase::SendingChunks;
-            soundCloneUploadNextActionMs = now + 30.0;
+            soundCloneUploadNextActionMs = now + 5.0;
             soundCloneUploadStatusText =
                 "Sound Clone upload: block " + juce::String (soundCloneUploadChunkIndex) + "/" +
                 juce::String (static_cast<int> (soundCloneUpload.chunks.size ()));
@@ -336,7 +336,7 @@ void MidiConnection::processSoundCloneUpload ()
     {
         midiOutput->sendMessageNow (soundCloneUpload.commitMessage);
         soundCloneUploadPhase = SoundCloneUploadPhase::WaitingAfterCommit;
-        soundCloneUploadNextActionMs = now + 100.0;
+        soundCloneUploadNextActionMs = now + 50.0;
         soundCloneUploadStatusText = "Sound Clone upload: commit sent";
         lastMessageText = soundCloneUploadStatusText;
         return;
