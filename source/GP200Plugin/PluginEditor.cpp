@@ -1628,7 +1628,7 @@ void AudioPluginAudioProcessorEditor::timerCallback ()
 
     if (presetRestoreInProgress)
     {
-        constexpr int restoreStepsPerTimerTick = 4;
+        constexpr int restoreStepsPerTimerTick = 16;
 
         for (int i = 0; i < restoreStepsPerTimerTick && presetRestoreInProgress; ++i)
             processFullPresetRestoreStep ();
