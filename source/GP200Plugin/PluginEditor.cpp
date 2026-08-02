@@ -865,6 +865,7 @@ addAndMakeVisible (userIRSlotBox);
     addAndMakeVisible (presetNameEditor);
     addAndMakeVisible (tunerButton);
     addAndMakeVisible (allBlocksOffButton);
+    addAndMakeVisible (autoCabButton);
 	addAndMakeVisible (toneMatchButton);
 	
 	addChildComponent(tunerDisplay);
@@ -929,6 +930,7 @@ tapTempoButton.setColour (
 );
 
 setupButton (allBlocksOffButton);
+setupButton (autoCabButton);
 setupButton (toneMatchButton);
 
     presetSlotButton.setTooltip ("Click the slot number to show all GP-200 presets");
@@ -1078,6 +1080,34 @@ storePresetButton.setColour (
     tunerButton.onClick = [this] { toggleTuner (); };
 
     allBlocksOffButton.onClick = [this] { toggleAllBlocksOff (); };
+
+    autoCabButton.setClickingTogglesState (true);
+    autoCabButton.setToggleState (true, juce::dontSendNotification);
+    autoCabButton.setTooltip ("Automatically match the CAB model when the AMP model changes");
+    autoCabButton.onClick = [this]
+    {
+        const bool shouldBeEnabled = autoCabButton.getToggleState ();
+
+        if (!midiConnection.isConnected ())
+        {
+            effectsStatusText = "AUTO CAB will be applied when the GP-200 connects";
+            repaint ();
+            return;
+        }
+
+        if (!midiConnection.sendAutoCabMatch (shouldBeEnabled))
+        {
+            autoCabButton.setToggleState (!shouldBeEnabled, juce::dontSendNotification);
+            effectsStatusText = midiConnection.getLastMessageText ();
+        }
+        else
+        {
+            autoCabCommandSentForCurrentConnection = true;
+            effectsStatusText = shouldBeEnabled ? "AUTO CAB enabled" : "AUTO CAB disabled: CAB remains fixed when AMP changes";
+        }
+
+        repaint ();
+    };
 	
 	toneMatchButton.onClick =
     [this]
@@ -1516,6 +1546,7 @@ tapTempoButton.setBounds (882, 150, 46, 24);
 
     tunerButton.setBounds (30, 191, 130, 28);
 allBlocksOffButton.setBounds (170, 191, 120, 28);
+autoCabButton.setBounds (300, 191, 108, 28);
 toneMatchButton.setBounds (708, 191, 110, 28);
 soundCloneButton.setBounds (828, 191, 110, 28);
 
@@ -1558,7 +1589,20 @@ void AudioPluginAudioProcessorEditor::timerCallback ()
         lastConnectionIndicatorState = connectedNow;
         effectBlocksSignature.clear ();
         effectBlocksDataSignature.clear ();
+
+        if (!connectedNow)
+            autoCabCommandSentForCurrentConnection = false;
+
         repaint ();
+    }
+
+    // AUTO CAB is enabled by default. Apply the visible button state once for
+    // every new MIDI connection so the hardware global setting and the editor
+    // cannot start out of sync.
+    if (connectedNow && !autoCabCommandSentForCurrentConnection)
+    {
+        if (midiConnection.sendAutoCabMatch (autoCabButton.getToggleState ()))
+            autoCabCommandSentForCurrentConnection = true;
     }
 	
 	  // La conexión MIDI puede estar abierta antes de que el GP-200

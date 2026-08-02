@@ -74,6 +74,7 @@ class MidiConnection final : private juce::MidiInputCallback
 
     bool sendEffectOnOff (int blockIndex, bool shouldBeOn);
     bool sendEffectChange (int blockIndex, juce::uint32 effectId);
+    bool sendAutoCabMatch (bool shouldBeEnabled);
     bool sendParamChange (int blockIndex, int paramIndex, juce::uint32 effectId, float value);
     bool sendReorderEffects (const RoutingOrder& routingOrder, int fxLoopSend, int fxLoopReturn);
     bool storeCurrentPresetToGP200 ();
@@ -136,6 +137,7 @@ class MidiConnection final : private juce::MidiInputCallback
     static std::vector<juce::uint8> buildLiveReadRequest (int slot);
     static std::vector<juce::uint8> buildPresetChange (int slot);
     static std::vector<juce::uint8> buildEffectChange (int blockIndex, juce::uint32 effectId);
+    static std::vector<juce::uint8> buildAutoCabMatch (bool shouldBeEnabled);
     static std::vector<juce::uint8>
     buildParamChange (int blockIndex, int paramIndex, juce::uint32 effectId, float value);
     static std::vector<juce::uint8> buildPatchSetting (int target, int value);

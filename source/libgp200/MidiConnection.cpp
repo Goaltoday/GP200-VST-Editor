@@ -849,6 +849,25 @@ bool MidiConnection::sendEffectChange (int blockIndex, juce::uint32 effectId)
     return true;
 }
 
+bool MidiConnection::sendAutoCabMatch (bool shouldBeEnabled)
+{
+    const juce::ScopedLock lock (stateLock);
+
+    if (midiOutput == nullptr)
+    {
+        lastMessageText = "Cannot change AUTO CAB: MIDI output not open";
+        return false;
+    }
+
+    const auto bytes = buildAutoCabMatch (shouldBeEnabled);
+    const auto message = juce::MidiMessage::createSysExMessage (
+        bytes.data () + 1, static_cast<int> (bytes.size () - 2));
+
+    midiOutput->sendMessageNow (message);
+    lastMessageText = shouldBeEnabled ? "AUTO CAB enabled" : "AUTO CAB disabled";
+    return true;
+}
+
 bool MidiConnection::sendParamChange (int blockIndex, int paramIndex, juce::uint32 effectId, float value)
 {
     const juce::ScopedLock lock (stateLock);
@@ -1619,6 +1638,15 @@ std::vector<juce::uint8> MidiConnection::buildPresetChange (int slot)
 
     return {0xF0, 0x21, 0x25, 0x7E, 0x47, 0x50, 0x2D, 0x32, 0x12, 0x08, 0x00, 0x00, 0x00, 0x00, 0x08,
             0x01, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, sh,   sl,   0x00, 0x00, 0xF7};
+}
+
+std::vector<juce::uint8> MidiConnection::buildAutoCabMatch (bool shouldBeEnabled)
+{
+    return {0xF0, 0x21, 0x25, 0x7E, 0x47, 0x50, 0x2D, 0x32,
+            0x12, 0x08, 0x00, 0x00, 0x00, 0x00, 0x08, 0x01,
+            0x00, 0x00, 0x04, 0x00, 0x00, 0x02, 0x04, 0x00,
+            0x00, 0x00, static_cast<juce::uint8> (shouldBeEnabled ? 0x01 : 0x00),
+            0x00, 0x00, 0xF7};
 }
 
 std::vector<juce::uint8> MidiConnection::buildEffectChange (int blockIndex, juce::uint32 effectId)

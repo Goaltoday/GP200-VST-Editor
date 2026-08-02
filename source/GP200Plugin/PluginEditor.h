@@ -186,6 +186,8 @@ juce::TextButton storePresetButton{"Store to GP-200"};
 juce::TextButton importPrstButton{"Import PRST"};
 juce::TextButton exportPrstButton{"Export PRST"};
 juce::TextButton allBlocksOffButton{"FX OFF"};
+    juce::TextButton autoCabButton{"AUTO CAB"};
+    bool autoCabCommandSentForCurrentConnection{false};
 std::unique_ptr<juce::FileChooser> prstFileChooser;
 std::unique_ptr<juce::FileChooser> exportPrstFileChooser;
     juce::TextButton importIRButton{"Import IR"};
