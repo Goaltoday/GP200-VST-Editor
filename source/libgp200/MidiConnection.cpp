@@ -2,7 +2,7 @@
     GP200 VST
 
     Portions adapted from phash/gp200editor and its contributors.
-    Those portions are licensed under GPL-3.0-or-later.
+    Those portions are licensed u  nder GPL-3.0-or-later.
 
   
     SPDX-License-Identifier: GPL-3.0-or-later
@@ -430,11 +430,14 @@ void MidiConnection::processPendingLivePresetRefresh ()
     if (nowMs < liveRefreshDueMs)
         return;
 
-    // Do not start another seven-chunk read while one is still in progress.
-    // If changes arrive during that read, liveRefreshPending remains set and
-    // the final state will be requested as soon as the current read finishes.
-    if (presetDumpSlot >= 0)
+    // Do not overlap a live seven-chunk read with either another preset read
+    // or an already-in-flight preset-name scan request. Both protocols reply
+    // with 0x12/0x18 messages and must remain strictly serialized.
+    if (presetDumpSlot >= 0
+        || presetNameScanner.hasPendingRequest ())
+    {
         return;
+    }
 
     liveRefreshPending = false;
     sendLiveReadRequestForSlot (currentSlot);
@@ -1394,7 +1397,8 @@ void MidiConnection::processPresetNameScan ()
                       || soundCloneUploadPhase != SoundCloneUploadPhase::Idle
                       || presetNameRequestPending
                       || livePresetReadPending
-                      || liveRefreshPending;
+                      || liveRefreshPending
+                      || presetDumpSlot >= 0;
 
     if (busy)
         return;
@@ -1407,8 +1411,19 @@ void MidiConnection::processPresetNameScan ()
 bool MidiConnection::sendNextPresetNameScanRequestUnlocked ()
 {
     const auto nowMs = juce::Time::getMillisecondCounterHiRes ();
-    if (midiOutput == nullptr || !presetNameScanner.shouldSendNextRequest (nowMs))
+
+    const bool presetTrafficBusy =
+        presetNameRequestPending
+        || livePresetReadPending
+        || liveRefreshPending
+        || presetDumpSlot >= 0;
+
+    if (midiOutput == nullptr
+        || presetTrafficBusy
+        || !presetNameScanner.shouldSendNextRequest (nowMs))
+    {
         return false;
+    }
 
     const auto bytes = presetNameScanner.beginNextRequest (nowMs);
     if (bytes.size () < 3)
@@ -2154,12 +2169,15 @@ void MidiConnection::parseGP200SysEx (const juce::uint8* data, int size)
     // cannot be mistaken for the currently loaded preset.
     if (command == 0x12 && subCommand == 0x18
         && presetNameScanner.hasPendingRequest ()
-        && presetNameScanner.handleSysEx (data, size, juce::Time::getMillisecondCounterHiRes ()))
+        && presetNameScanner.handleSysEx (
+            data,
+            size,
+            juce::Time::getMillisecondCounterHiRes ()))
     {
-        // Continue immediately after a valid reply. This remains entirely in
-        // the MIDI layer and avoids limiting the scan to the editor's 20 Hz
-        // UI timer. There is still never more than one request in flight.
-        sendNextPresetNameScanRequestUnlocked ();
+        // Do not chain another scan request from inside the MIDI callback.
+        // A CAB/effect notification may already have scheduled a high-priority
+        // live preset refresh. processPresetNameScan() will resume the scan
+        // later, once the live read and all other preset traffic have settled.
         return;
     }
 

@@ -2,7 +2,7 @@
     GP200 VST
 
     Portions adapted from phash/gp200editor and its contributors.
-    Those portions are licensed under GPL-3.0-or-later.
+    Those portions are licensed un der GPL-3.0-or-later.
 
   
     SPDX-License-Identifier: GPL-3.0-or-later
@@ -3670,16 +3670,24 @@ void AudioPluginAudioProcessorEditor::rebuildEffectBlocks (const gp200::GP200Pre
 
             syncUserIRSlotBoxFromCabEffectId(effectId);
 
-            juce::MessageManager::callAsync (
-                [this]
-                {
-                    // Keep the existing component tree visible. The incoming
-                    // live revisions will be staged and committed once, rather
-                    // than rebuilding through every intermediate effect state.
-                    effectBlocksDataSignature.clear ();
-                    updateEffectBlocksUI ();
-                    repaint ();
-                });
+            if (offline)
+            {
+                // Offline mode has no hardware confirmation, so refresh the
+                // locally generated default parameters immediately.
+                juce::MessageManager::callAsync (
+                    [this]
+                    {
+                        effectBlocksDataSignature.clear ();
+                        updateEffectBlocksUI ();
+                        repaint ();
+                    });
+            }
+            else
+            {
+                // Connected mode: keep the current parameter controls visible
+                // until the GP-200 sends the confirmed live preset state.
+                repaint ();
+            }
         };
 
         block->onParameterChangeRequested =
