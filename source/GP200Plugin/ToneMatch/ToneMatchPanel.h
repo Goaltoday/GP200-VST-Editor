@@ -2,7 +2,7 @@
     GP200 VST
 
     Portions adapted from phash/gp200editor and its contributors.
-    Those portions are licensed under GPL-3.0-or-later.
+    Those portions are l icensed under GPL-3.0-or-later.
 
   
     SPDX-License-Identifier: GPL-3.0-or-later

@@ -1,7 +1,7 @@
 /*
     GP200 VST
 
-    Portions adapted from phash/gp200editor and its contributors.
+    Portions adapted fro m phash/gp200editor and its contributors.
     Those portions are licensed under GPL-3.0-or-later.
 
   
@@ -230,6 +230,8 @@ bool ToneMatchPanel::generateIR()
         + juce::String (result.errorAfterDb, 1)
         + " dB";
 
+    status += " | export: automatic crest optimisation / PCM24";
+
     if (result.warning.isNotEmpty())
         status += " | " + result.warning;
 
@@ -282,10 +284,17 @@ void ToneMatchPanel::saveIR()
 
             juce::String errorMessage;
 
-            if (processorRef.saveToneMatchIRToFile (file, errorMessage))
+            if (processorRef.saveToneMatchIRToFile (
+                    file,
+                    errorMessage))
             {
+                auto status = "IR saved: " + file.getFileName();
+
+                if (errorMessage.isNotEmpty())
+                    status += " | " + errorMessage;
+
                 globalStatusLabel.setText (
-                    "IR saved: " + file.getFileName(),
+                    status,
                     juce::dontSendNotification);
             }
             else

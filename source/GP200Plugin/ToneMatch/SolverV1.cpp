@@ -13,7 +13,7 @@ namespace
 {
 constexpr double minimumMagnitude = 1.0e-12;
 constexpr double ln10Over20 = 0.11512925464970229;
-constexpr double outputGainDb = 12.0;
+constexpr double outputGainDb = 0.0;
 
 int nextPowerOfTwoOrder (int requiredSize)
 {
@@ -260,8 +260,8 @@ ToneMatchResult SolverV1::solve (
     }
 	
 	
-	// Ganancia global de salida para aproximar el nivel práctico
-// de una IR comercial. No cambia la forma tonal de la curva RAW.
+	// No fixed output gain is applied. Export headroom is handled later
+// by the automatic crest optimisation and PCM24 normalization.
 const auto outputGain =
     static_cast<float> (
         std::pow (10.0, outputGainDb / 20.0));
@@ -340,9 +340,8 @@ result.achievedCorrectionDb.push_back (achievedDb);
 const auto confidence = result.confidence[index];
 const auto raw = result.rawCorrectionDb[index];
 
-// La IR final incluye +12 dB de ganancia práctica de salida.
-// Para calcular el error tonal, eliminamos ese desplazamiento
-// global y comparamos únicamente la forma del filtro.
+// Remove only the configured global solver offset from the
+// diagnostic comparison. It is currently 0 dB.
 const auto achievedForErrorDb =
     achievedDb - outputGainDb;
 
@@ -374,7 +373,7 @@ const auto residual =
     if (peak > 1.0f)
     {
         result.warning =
-            "Generated IR peak is above 0 dBFS; export as 32-bit float";
+            "Generated IR peak is above 0 dBFS; automatic crest optimisation will prepare the PCM24 export";
     }
 
     result.success = true;

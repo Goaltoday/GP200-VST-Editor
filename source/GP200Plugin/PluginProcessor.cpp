@@ -2,7 +2,7 @@
     GP200 VST
 
     Portions adapted from phash/gp200editor and its contributors.
-    Those portions are licensed under GPL-3.0-or-later.
+    Those portio ns are licensed under GPL-3.0-or-later.
 
   
     SPDX-License-Identifier: GPL-3.0-or-later
@@ -64,6 +64,212 @@ gp200::GP200Preset makeDefaultOfflinePreset()
 
 constexpr juce::uint32 offlineSnapshotMagic = 0x4f503247u;
 constexpr int offlineSnapshotVersion = 2;
+
+constexpr int crestOptimisationFftOrder = 12;
+constexpr int crestOptimisationFftSize = 1 << crestOptimisationFftOrder;
+constexpr double crestMaximumRmsErrorDb = 0.15;
+constexpr double crestMaximumPointErrorDb = 0.75;
+
+void applyFirstOrderAllPass (
+    const juce::AudioBuffer<float>& input,
+    juce::AudioBuffer<float>& output,
+    float coefficient)
+{
+    const auto sampleCount = input.getNumSamples();
+    output.setSize (1, sampleCount, false, false, true);
+
+    const auto* source = input.getReadPointer (0);
+    auto* destination = output.getWritePointer (0);
+
+    float previousInput = 0.0f;
+    float previousOutput = 0.0f;
+
+    for (int sample = 0; sample < sampleCount; ++sample)
+    {
+        const auto currentInput = source[sample];
+        const auto currentOutput =
+            coefficient * currentInput
+            + previousInput
+            - coefficient * previousOutput;
+
+        destination[sample] = currentOutput;
+        previousInput = currentInput;
+        previousOutput = currentOutput;
+    }
+}
+
+struct SpectrumDifference
+{
+    double rmsDb{0.0};
+    double maximumDb{0.0};
+};
+
+SpectrumDifference measureSpectrumDifference (
+    const juce::AudioBuffer<float>& reference,
+    const juce::AudioBuffer<float>& candidate,
+    double sampleRate)
+{
+    juce::dsp::FFT fft (crestOptimisationFftOrder);
+
+    std::vector<std::complex<float>> referenceInput (
+        static_cast<std::size_t> (crestOptimisationFftSize));
+    std::vector<std::complex<float>> candidateInput (
+        static_cast<std::size_t> (crestOptimisationFftSize));
+    std::vector<std::complex<float>> referenceSpectrum (
+        static_cast<std::size_t> (crestOptimisationFftSize));
+    std::vector<std::complex<float>> candidateSpectrum (
+        static_cast<std::size_t> (crestOptimisationFftSize));
+
+    const auto sampleCount = juce::jmin (
+        reference.getNumSamples(),
+        candidate.getNumSamples());
+
+    const auto* referenceSamples = reference.getReadPointer (0);
+    const auto* candidateSamples = candidate.getReadPointer (0);
+
+    for (int sample = 0; sample < sampleCount; ++sample)
+    {
+        referenceInput[static_cast<std::size_t> (sample)] =
+            { referenceSamples[sample], 0.0f };
+        candidateInput[static_cast<std::size_t> (sample)] =
+            { candidateSamples[sample], 0.0f };
+    }
+
+    fft.perform (referenceInput.data(), referenceSpectrum.data(), false);
+    fft.perform (candidateInput.data(), candidateSpectrum.data(), false);
+
+    constexpr double minimumMagnitude = 1.0e-12;
+    double squaredErrorSum = 0.0;
+    double maximumError = 0.0;
+    int measuredBins = 0;
+
+    for (int bin = 1; bin <= crestOptimisationFftSize / 2; ++bin)
+    {
+        const auto frequency =
+            static_cast<double> (bin) * sampleRate
+            / static_cast<double> (crestOptimisationFftSize);
+
+        if (frequency < 20.0 || frequency > 20000.0)
+            continue;
+
+        const auto referenceMagnitude = std::max (
+            static_cast<double> (std::abs (
+                referenceSpectrum[static_cast<std::size_t> (bin)])),
+            minimumMagnitude);
+
+        const auto candidateMagnitude = std::max (
+            static_cast<double> (std::abs (
+                candidateSpectrum[static_cast<std::size_t> (bin)])),
+            minimumMagnitude);
+
+        const auto errorDb =
+            20.0 * std::log10 (candidateMagnitude / referenceMagnitude);
+
+        squaredErrorSum += errorDb * errorDb;
+        maximumError = std::max (maximumError, std::abs (errorDb));
+        ++measuredBins;
+    }
+
+    SpectrumDifference result;
+
+    if (measuredBins > 0)
+    {
+        result.rmsDb = std::sqrt (
+            squaredErrorSum / static_cast<double> (measuredBins));
+        result.maximumDb = maximumError;
+    }
+
+    return result;
+}
+
+bool optimiseImpulseCrest (
+    juce::AudioBuffer<float>& impulse,
+    double sampleRate,
+    juce::String& statusMessage)
+{
+    if (impulse.getNumChannels() < 1 || impulse.getNumSamples() <= 0)
+    {
+        statusMessage = "Crest optimisation failed: empty IR";
+        return false;
+    }
+
+    const juce::AudioBuffer<float> reference (impulse);
+    juce::AudioBuffer<float> best (reference);
+    auto bestPeak = best.getMagnitude (0, best.getNumSamples());
+
+    static constexpr std::array<float, 16> coefficients {
+        -0.90f, -0.85f, -0.80f, -0.70f,
+        -0.60f, -0.50f, -0.40f, -0.25f,
+         0.25f,  0.40f,  0.50f,  0.60f,
+         0.70f,  0.80f,  0.85f,  0.90f
+    };
+
+    int acceptedStages = 0;
+
+    for (int stage = 0; stage < 6; ++stage)
+    {
+        bool improved = false;
+        juce::AudioBuffer<float> stageBest (best);
+        auto stageBestPeak = bestPeak;
+
+        for (const auto coefficient : coefficients)
+        {
+            juce::AudioBuffer<float> candidate;
+            applyFirstOrderAllPass (best, candidate, coefficient);
+
+            const auto candidatePeak = candidate.getMagnitude (
+                0, candidate.getNumSamples());
+
+            if (candidatePeak >= stageBestPeak * 0.9995f)
+                continue;
+
+            const auto difference = measureSpectrumDifference (
+                reference, candidate, sampleRate);
+
+            if (difference.rmsDb <= crestMaximumRmsErrorDb
+                && difference.maximumDb <= crestMaximumPointErrorDb)
+            {
+                stageBest = std::move (candidate);
+                stageBestPeak = candidatePeak;
+                improved = true;
+            }
+        }
+
+        if (!improved)
+            break;
+
+        best = std::move (stageBest);
+        bestPeak = stageBestPeak;
+        ++acceptedStages;
+    }
+
+    if (acceptedStages == 0 || bestPeak <= 0.0f)
+    {
+        statusMessage = "Crest optimisation found no safe improvement";
+        return false;
+    }
+
+    const auto originalPeak = reference.getMagnitude (
+        0, reference.getNumSamples());
+
+    const auto gainImprovementDb =
+        juce::Decibels::gainToDecibels (
+            originalPeak / bestPeak, 0.0f);
+
+    const auto finalDifference = measureSpectrumDifference (
+        reference, best, sampleRate);
+
+    impulse = std::move (best);
+
+    statusMessage =
+        "Crest optimisation: +"
+        + juce::String (gainImprovementDb, 1)
+        + " dB headroom, spectral error "
+        + juce::String (finalDifference.rmsDb, 2)
+        + " dB RMS";
+
+    return true;
+}
 
 juce::MemoryBlock serialiseOfflineState (const gp200::GP200Preset& preset,
                                          int patchVolume,
@@ -1094,6 +1300,24 @@ bool AudioPluginAudioProcessor::saveToneMatchIRToFile (
         return false;
     }
 
+    // Crest optimisation is always applied before PCM24 export.
+    // It changes phase distribution only, accepts only spectrally safe
+    // improvements, and then uses the available PCM headroom.
+    juce::AudioBuffer<float> exportBuffer (result.impulseResponse);
+    juce::String optimisationStatus;
+
+    optimiseImpulseCrest (
+        exportBuffer,
+        result.impulseResponseSampleRate,
+        optimisationStatus);
+
+    const auto peak = exportBuffer.getMagnitude (
+        0,
+        exportBuffer.getNumSamples());
+
+    if (peak > 0.0f)
+        exportBuffer.applyGain (1.0f / peak);
+
     file.deleteFile();
 
     auto outputStream = file.createOutputStream();
@@ -1111,7 +1335,7 @@ bool AudioPluginAudioProcessor::saveToneMatchIRToFile (
             outputStream.release(),
             result.impulseResponseSampleRate,
             1,
-            32,
+            24,
             {},
             0));
 
@@ -1122,14 +1346,15 @@ bool AudioPluginAudioProcessor::saveToneMatchIRToFile (
     }
 
     if (!writer->writeFromAudioSampleBuffer (
-            result.impulseResponse,
+            exportBuffer,
             0,
-            result.impulseResponse.getNumSamples()))
+            exportBuffer.getNumSamples()))
     {
         errorMessage = "Could not write the IR audio data";
         return false;
     }
 
+    errorMessage = optimisationStatus;
     return true;
 }
 
