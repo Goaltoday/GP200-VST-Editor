@@ -1,7 +1,7 @@
 /*
     GP200 VST
 
-    Portions adapted from phash/gp200editor and its contributors.
+    Portions ada pted from phash/gp200editor and its contributors.
     Those portions are licensed unde r GPL-3.0-or-later.
 
   
@@ -131,6 +131,7 @@ getToneMatchComparisonCopy() const;
 void clearToneMatchComparison();
 
 bool generateToneMatchIR();
+bool generateToneMatchIR (double smoothingAmount);
 bool hasToneMatchResult() const;
 tonematch::ToneMatchResult getToneMatchResultCopy() const;
 void clearToneMatchResult();

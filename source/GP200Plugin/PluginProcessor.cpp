@@ -1,7 +1,7 @@
 /*
     GP200 VST
 
-    Portions adapted from phash/gp200editor and its contributors.
+    Portions adapted from phash/gp20 0editor and its contributors.
     Those portio ns are licensed under GPL-3.0-or-later.
 
   
@@ -1241,6 +1241,12 @@ void AudioPluginAudioProcessor::
 
 bool AudioPluginAudioProcessor::generateToneMatchIR()
 {
+    return generateToneMatchIR (0.0);
+}
+
+bool AudioPluginAudioProcessor::generateToneMatchIR (
+    double smoothingAmount)
+{
     tonematch::ToneMatchComparisonResult comparisonCopy;
 
     {
@@ -1253,6 +1259,10 @@ bool AudioPluginAudioProcessor::generateToneMatchIR()
 
     tonematch::SolverV1 solver;
     tonematch::ToneMatchOptions options;
+    options.smoothingAmount = juce::jlimit (
+        0.0,
+        1.0,
+        smoothingAmount);
 
     auto result = solver.solve (
         comparisonCopy,

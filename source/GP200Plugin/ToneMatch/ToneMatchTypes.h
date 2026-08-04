@@ -84,17 +84,14 @@ struct ToneMatchOptions
     double outputSampleRate{44100.0};
     int outputLengthSamples{1024};
 
-    double matchAmount{0.80};
+    // 0.0 reproduces the original source_latest_16 behaviour exactly:
+    // the solver uses the RAW TARGET - SOURCE curve without smoothing.
+    // 1.0 applies the maximum gentle stabilization configured below.
+    double smoothingAmount{0.0};
 
-    double maximumBoostDb{9.0};
-    double maximumCutDb{-15.0};
-
-    double minimumFrequencyHz{40.0};
-    double correctionFadeOutStartHz{18000.0};
-    double maximumFrequencyHz{22000.0};
-
-    // SolverV1 comenzará con suavizado natural de 1/6 de octava.
-    double smoothingFractionOfOctave{1.0 / 6.0};
+    // CAB Match maps Smooth to:
+    // 0% RAW, 25% 1/24, 50% 1/12, 75% 1/6, 100% 1/3 octave.
+    // It ignores confidence and never pulls the response toward 0 dB.
 };
 
 struct ToneMatchResult

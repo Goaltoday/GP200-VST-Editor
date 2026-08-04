@@ -29,6 +29,149 @@ int nextPowerOfTwoOrder (int requiredSize)
     return order;
 }
 
+double smoothstep01 (double value) noexcept
+{
+    const auto x = juce::jlimit (0.0, 1.0, value);
+    return x * x * (3.0 - 2.0 * x);
+}
+
+double getCabSmoothingWidthOctaves (double smoothingAmount)
+{
+    const auto amount = juce::jlimit (
+        0.0,
+        1.0,
+        smoothingAmount);
+
+    if (amount <= 0.0)
+        return 0.0;
+
+    struct MappingPoint
+    {
+        double amount;
+        double widthOctaves;
+    };
+
+    static constexpr MappingPoint points[]
+    {
+        { 0.00, 0.0 },
+        { 0.25, 1.0 / 24.0 },
+        { 0.50, 1.0 / 12.0 },
+        { 0.75, 1.0 / 6.0 },
+        { 1.00, 1.0 / 3.0 }
+    };
+
+    for (std::size_t index = 1;
+         index < std::size (points);
+         ++index)
+    {
+        const auto& lower = points[index - 1];
+        const auto& upper = points[index];
+
+        if (amount <= upper.amount)
+        {
+            const auto fraction =
+                (amount - lower.amount)
+                / (upper.amount - lower.amount);
+
+            return lower.widthOctaves
+                + fraction
+                    * (upper.widthOctaves
+                       - lower.widthOctaves);
+        }
+    }
+
+    return points[std::size (points) - 1].widthOctaves;
+}
+
+struct SmoothedPoint
+{
+    double correctionDb{0.0};
+    double confidence{0.0};
+};
+
+SmoothedPoint smoothPoint (
+    const std::vector<double>& frequencyHz,
+    const std::vector<double>& correctionDb,
+    const std::vector<double>& confidence,
+    std::size_t centreIndex,
+    double smoothingFractionOfOctave)
+{
+    SmoothedPoint result;
+
+    if (centreIndex >= frequencyHz.size()
+        || correctionDb.size() != frequencyHz.size()
+        || confidence.size() != frequencyHz.size())
+    {
+        return result;
+    }
+
+    const auto centreFrequency = frequencyHz[centreIndex];
+
+    if (centreFrequency <= 0.0)
+        return result;
+
+    // Convert FWHM in octaves to Gaussian sigma.
+    const auto sigmaOctaves =
+        smoothingFractionOfOctave / 2.354820045;
+
+    const auto safeSigma = std::max (sigmaOctaves, 1.0e-6);
+    const auto maximumDistanceOctaves = safeSigma * 3.0;
+
+    double weightedCorrection = 0.0;
+    double correctionWeightSum = 0.0;
+    double weightedConfidence = 0.0;
+    double kernelWeightSum = 0.0;
+
+    for (std::size_t index = 0;
+         index < frequencyHz.size();
+         ++index)
+    {
+        if (frequencyHz[index] <= 0.0)
+            continue;
+
+        const auto octaveDistance =
+            std::log2 (frequencyHz[index] / centreFrequency);
+
+        if (std::abs (octaveDistance) > maximumDistanceOctaves)
+            continue;
+
+        const auto kernel = std::exp (
+            -0.5
+            * octaveDistance
+            * octaveDistance
+            / (safeSigma * safeSigma));
+
+        const auto localConfidence = juce::jlimit (
+            0.0,
+            1.0,
+            confidence[index]);
+
+        const auto correctionWeight = kernel * localConfidence;
+
+        weightedCorrection += correctionDb[index] * correctionWeight;
+        correctionWeightSum += correctionWeight;
+
+        weightedConfidence += localConfidence * kernel;
+        kernelWeightSum += kernel;
+    }
+
+    if (correctionWeightSum > 1.0e-12)
+    {
+        result.correctionDb =
+            weightedCorrection / correctionWeightSum;
+    }
+
+    if (kernelWeightSum > 1.0e-12)
+    {
+        result.confidence = juce::jlimit (
+            0.0,
+            1.0,
+            weightedConfidence / kernelWeightSum);
+    }
+
+    return result;
+}
+
 }
 
 juce::String SolverV1::getName() const
@@ -57,30 +200,10 @@ bool SolverV1::validateOptions (
         return false;
     }
 
-    if (options.matchAmount < 0.0 || options.matchAmount > 1.0)
+    if (options.smoothingAmount < 0.0
+        || options.smoothingAmount > 1.0)
     {
-        errorMessage = "Match amount must be between 0 and 1";
-        return false;
-    }
-
-    if (options.maximumCutDb >= options.maximumBoostDb)
-    {
-        errorMessage = "Invalid correction limits";
-        return false;
-    }
-
-    if (options.minimumFrequencyHz <= 0.0
-        || options.correctionFadeOutStartHz <= options.minimumFrequencyHz
-        || options.maximumFrequencyHz <= options.correctionFadeOutStartHz)
-    {
-        errorMessage = "Invalid correction frequency range";
-        return false;
-    }
-
-    if (options.smoothingFractionOfOctave <= 0.0
-        || options.smoothingFractionOfOctave > 2.0)
-    {
-        errorMessage = "Invalid smoothing fraction";
+        errorMessage = "Smooth amount must be between 0 and 1";
         return false;
     }
 
@@ -157,12 +280,66 @@ ToneMatchResult SolverV1::solve (
         return result;
     }
 
-    // La comparación ya contiene la única curva RAW canónica.
-    // El solver no vuelve a calcular TARGET - SOURCE.
+    // La comparación contiene la curva RAW canónica TARGET - SOURCE.
+    // Se conserva intacta para diagnóstico. La curva aplicada a la IR se
+    // suaviza y se reduce hacia 0 dB donde SOURCE o TARGET tienen poca
+    // energía, alta variación o, por tanto, baja confianza conjunta.
     result.frequencyHz = comparison.frequencyHz;
     result.rawCorrectionDb = comparison.rawCorrectionDb;
-    result.smoothedCorrectionDb = comparison.rawCorrectionDb;
     result.confidence = comparison.confidence;
+    result.smoothedCorrectionDb.reserve (
+        result.frequencyHz.size());
+
+    const auto smoothingAmount = juce::jlimit (
+        0.0,
+        1.0,
+        options.smoothingAmount);
+
+    const std::vector<double> unitConfidence (
+        result.frequencyHz.size(),
+        1.0);
+
+    for (std::size_t index = 0;
+         index < result.frequencyHz.size();
+         ++index)
+    {
+        const auto rawCorrection =
+            result.rawCorrectionDb[index];
+
+        // At 0%, the solver reproduces the original RAW curve exactly.
+        if (smoothingAmount <= 0.0)
+        {
+            result.smoothedCorrectionDb.push_back (
+                rawCorrection);
+            continue;
+        }
+
+        double appliedCorrection = rawCorrection;
+
+        // Smooth always uses the CAB Match philosophy:
+        // apply fractional-octave smoothing directly to the complete RAW
+        // response. Broad slopes and cabinet roll-offs are preserved, while
+        // narrow peaks and notches are progressively reduced.
+        const auto smoothingWidthOctaves =
+            getCabSmoothingWidthOctaves (
+                smoothingAmount);
+
+        if (smoothingWidthOctaves > 0.0)
+        {
+            const auto smoothed = smoothPoint (
+                result.frequencyHz,
+                result.rawCorrectionDb,
+                unitConfidence,
+                index,
+                smoothingWidthOctaves);
+
+            appliedCorrection =
+                smoothed.correctionDb;
+        }
+
+        result.smoothedCorrectionDb.push_back (
+            appliedCorrection);
+    }
 
     const auto fftOrder = nextPowerOfTwoOrder (
         options.outputLengthSamples * 2);
@@ -191,9 +368,8 @@ ToneMatchResult SolverV1::solve (
             * options.outputSampleRate
             / static_cast<double> (fftSize);
 
-        // Conserva la curva RAW también en los extremos:
-        // por debajo del primer punto usa el primer valor y por encima
-        // del último punto mantiene el último valor, sin volver a 0 dB.
+        // Interpola la curva ya procesada. Los extremos quedan protegidos
+        // por minimumFrequencyHz y por el fade progresivo de alta frecuencia.
         const auto correctionDb = interpolate (
             result.frequencyHz,
             result.smoothedCorrectionDb,
@@ -339,6 +515,7 @@ result.achievedCorrectionDb.push_back (achievedDb);
 
 const auto confidence = result.confidence[index];
 const auto raw = result.rawCorrectionDb[index];
+const auto applied = result.smoothedCorrectionDb[index];
 
 // Remove only the configured global solver offset from the
 // diagnostic comparison. It is currently 0 dB.
@@ -346,7 +523,7 @@ const auto achievedForErrorDb =
     achievedDb - outputGainDb;
 
 const auto residual =
-    raw - achievedForErrorDb;
+    applied - achievedForErrorDb;
 
         weightedErrorBefore += raw * raw * confidence;
         weightedErrorAfter += residual * residual * confidence;

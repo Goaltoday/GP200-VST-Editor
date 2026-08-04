@@ -2,7 +2,7 @@
     GP200 VST
 
     Portions adapted fro m phash/gp200editor and its contributors.
-    Those portions are licensed under GPL-3.0-or-later.
+    Those portions are licensed under  GPL-3.0-or-later.
 
   
     SPDX-License-Identifier: GPL-3.0-or-later
@@ -37,6 +37,8 @@ ToneMatchPanel::ToneMatchPanel (
     addAndMakeVisible (targetDetailsLabel);
     addAndMakeVisible (globalStatusLabel);
     addAndMakeVisible (matchCurveComponent);
+    addAndMakeVisible (smoothLabel);
+    addAndMakeVisible (smoothSlider);
 
     auto setupButton = [] (juce::TextButton& button)
     {
@@ -69,6 +71,51 @@ ToneMatchPanel::ToneMatchPanel (
     targetStatusLabel.setJustificationType (juce::Justification::centredLeft);
     targetDetailsLabel.setJustificationType (juce::Justification::centredLeft);
     globalStatusLabel.setJustificationType (juce::Justification::centred);
+
+    smoothLabel.setText ("Smooth", juce::dontSendNotification);
+    smoothLabel.setColour (juce::Label::textColourId, mutedTextColour);
+    smoothLabel.setJustificationType (juce::Justification::centredLeft);
+    smoothLabel.setFont (gp200ui::medium (13.5f));
+
+    smoothSlider.setSliderStyle (juce::Slider::LinearHorizontal);
+    smoothSlider.setTextBoxStyle (
+        juce::Slider::TextBoxRight,
+        false,
+        58,
+        22);
+    smoothSlider.setRange (0.0, 100.0, 1.0);
+    smoothSlider.setValue (50.0, juce::dontSendNotification);
+    smoothSlider.setNumDecimalPlacesToDisplay (0);
+    smoothSlider.setTextValueSuffix (" %");
+    smoothSlider.setColour (
+        juce::Slider::backgroundColourId,
+        panelColour.brighter (0.20f));
+    smoothSlider.setColour (
+        juce::Slider::trackColourId,
+        outlineColour);
+    smoothSlider.setColour (
+        juce::Slider::thumbColourId,
+        outlineColour);
+    smoothSlider.setColour (
+        juce::Slider::textBoxTextColourId,
+        textColour);
+    smoothSlider.setColour (
+        juce::Slider::textBoxBackgroundColourId,
+        panelColour);
+    smoothSlider.setColour (
+        juce::Slider::textBoxOutlineColourId,
+        juce::Colours::transparentBlack);
+
+    smoothSlider.onDragEnd = [this]
+    {
+        refreshAppliedCurvePreview();
+    };
+
+    smoothSlider.onValueChange = [this]
+    {
+        if (!smoothSlider.isMouseButtonDown())
+            refreshAppliedCurvePreview();
+    };
 
     // Keep the secondary Tone Match text readable with Space Grotesk.
     // These labels do not use the button LookAndFeel, so set their sizes
@@ -176,6 +223,7 @@ void ToneMatchPanel::analyseCaptures()
 
     const auto comparison = processorRef.getToneMatchComparisonCopy();
     matchCurveComponent.setComparison (comparison);
+    refreshAppliedCurvePreview();
 
     const auto minimumText = juce::String (
         comparison.minimumCorrectionDb,
@@ -197,6 +245,27 @@ void ToneMatchPanel::analyseCaptures()
     repaint();
 }
 
+void ToneMatchPanel::refreshAppliedCurvePreview()
+{
+    if (!processorRef.hasToneMatchComparison())
+    {
+        matchCurveComponent.clearAppliedCurve();
+        return;
+    }
+
+    if (!processorRef.generateToneMatchIR (
+            smoothSlider.getValue() / 100.0))
+    {
+        matchCurveComponent.clearAppliedCurve();
+        return;
+    }
+
+    matchCurveComponent.setResult (
+        processorRef.getToneMatchResultCopy());
+
+    repaint();
+}
+
 bool ToneMatchPanel::generateIR()
 {
     generateIRButton.setEnabled (false);
@@ -204,7 +273,8 @@ bool ToneMatchPanel::generateIR()
         "Generating 44.1 kHz / 1024 sample IR...",
         juce::dontSendNotification);
 
-    if (!processorRef.generateToneMatchIR())
+    if (!processorRef.generateToneMatchIR (
+            smoothSlider.getValue() / 100.0))
     {
         globalStatusLabel.setText (
             "IR generation failed",
@@ -214,6 +284,8 @@ bool ToneMatchPanel::generateIR()
     }
 
     const auto result = processorRef.getToneMatchResultCopy();
+    matchCurveComponent.setResult (result);
+
     const auto peak = result.impulseResponse.getMagnitude (
         0,
         result.impulseResponse.getNumSamples());
@@ -228,9 +300,10 @@ bool ToneMatchPanel::generateIR()
         + juce::String (result.errorBeforeDb, 1)
         + " -> "
         + juce::String (result.errorAfterDb, 1)
-        + " dB";
-
-    status += " | export: automatic crest optimisation / PCM24";
+        + " dB | Smooth "
+        + juce::String (
+            static_cast<int> (smoothSlider.getValue()))
+        + "% | crest / PCM24";
 
     if (result.warning.isNotEmpty())
         status += " | " + result.warning;
@@ -430,18 +503,32 @@ void ToneMatchPanel::resized()
 
     globalStatusLabel.setBounds (
         20,
-        256,
+        252,
         getWidth() - 40,
         24);
 
-    const int graphTop = 288;
+    const auto controlRowY = 278;
+
+    smoothLabel.setBounds (
+        30,
+        controlRowY,
+        64,
+        24);
+
+    smoothSlider.setBounds (
+        94,
+        controlRowY,
+        getWidth() - 124,
+        24);
+
+    const int graphTop = 308;
     const int graphBottom = getHeight() - 72;
 
     matchCurveComponent.setBounds (
         20,
         graphTop,
         getWidth() - 40,
-        juce::jmax (120, graphBottom - graphTop));
+        juce::jmax (140, graphBottom - graphTop));
 
     constexpr int analyseWidth = 140;
     constexpr int generateWidth = 190;
