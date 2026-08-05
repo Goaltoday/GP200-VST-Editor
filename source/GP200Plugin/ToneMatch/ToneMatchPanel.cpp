@@ -2,7 +2,7 @@
     GP200 VST
 
     Portions adapted fro m phash/gp200editor and its contributors.
-    Those portions are licensed under  GPL-3.0-or-later.
+    Those portions are licensed under GPL-3.0-or-later.
 
   
     SPDX-License-Identifier: GPL-3.0-or-later
@@ -501,13 +501,9 @@ void ToneMatchPanel::resized()
         clearWidth,
         30);
 
-    globalStatusLabel.setBounds (
-        20,
-        252,
-        getWidth() - 40,
-        24);
-
-    const auto controlRowY = 278;
+    // Keep Smooth close to the TARGET capture block and use the recovered
+    // vertical space for a larger comparison graph.
+    const auto controlRowY = 252;
 
     smoothLabel.setBounds (
         30,
@@ -521,14 +517,20 @@ void ToneMatchPanel::resized()
         getWidth() - 124,
         24);
 
-    const int graphTop = 308;
-    const int graphBottom = getHeight() - 72;
+    globalStatusLabel.setBounds (
+        20,
+        278,
+        getWidth() - 40,
+        20);
+
+    const int graphTop = 300;
+    const int graphBottom = getHeight() - 52;
 
     matchCurveComponent.setBounds (
         20,
         graphTop,
         getWidth() - 40,
-        juce::jmax (140, graphBottom - graphTop));
+        juce::jmax (160, graphBottom - graphTop));
 
     constexpr int analyseWidth = 140;
     constexpr int generateWidth = 190;
@@ -537,7 +539,7 @@ void ToneMatchPanel::resized()
 
     const auto totalWidth = analyseWidth + generateWidth + closeWidth + 2 * gap;
     const auto startX = (getWidth() - totalWidth) / 2;
-    const auto buttonY = getHeight() - 58;
+    const auto buttonY = getHeight() - 44;
 
     analyseButton.setBounds (startX, buttonY, analyseWidth, 36);
     generateIRButton.setBounds (startX + analyseWidth + gap, buttonY, generateWidth, 36);
