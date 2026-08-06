@@ -47,6 +47,14 @@ struct ToneCaptureData
     }
 };
 
+struct ToneCaptureSummary
+{
+    bool valid{false};
+    double durationSeconds{0.0};
+    double peakDb{-100.0};
+    bool wasClipped{false};
+};
+
 struct ToneAnalysisProfile
 {
     double captureSampleRate{0.0};

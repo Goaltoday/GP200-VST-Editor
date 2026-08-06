@@ -655,12 +655,12 @@ void ToneMatchPanel::updateControls()
 
 void ToneMatchPanel::updateCaptureLabels()
 {
-    const auto sourceCapture = processorRef.getToneMatchCaptureCopy (
+    const auto sourceCapture = processorRef.getToneMatchCaptureSummary (
         tonematch::CaptureRole::source);
-    const auto targetCapture = processorRef.getToneMatchCaptureCopy (
+    const auto targetCapture = processorRef.getToneMatchCaptureSummary (
         tonematch::CaptureRole::target);
 
-    if (sourceCapture.isValid())
+    if (sourceCapture.valid)
     {
         sourceStatusLabel.setText ("Ready", juce::dontSendNotification);
         sourceStatusLabel.setColour (juce::Label::textColourId, readyColour);
@@ -682,7 +682,7 @@ void ToneMatchPanel::updateCaptureLabels()
             juce::dontSendNotification);
     }
 
-    if (targetCapture.isValid())
+    if (targetCapture.valid)
     {
         targetStatusLabel.setText ("Ready", juce::dontSendNotification);
         targetStatusLabel.setColour (juce::Label::textColourId, readyColour);

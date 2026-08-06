@@ -81,7 +81,7 @@ juce::String getSelectedCompareSnapshotLabel () const;
     bool applyBlockEnabledStates (const BlockEnabledStates& states);
     void updateAllBlocksOffButtonText ();
 
-    void syncPatchVolumeSliderFromPresetData (const juce::MemoryBlock& presetData,
+    void syncPatchSettingsFromPresetData (const juce::MemoryBlock& presetData,
                                               const juce::String& presetDataSignature);
 
     void openPresetSlotMenu ();
@@ -161,8 +161,6 @@ juce::String getSelectedCompareSnapshotLabel () const;
 double lastInitialPresetRequestMs{0.0};
     bool openPresetMenuWhenScanFinishes{false};
     std::uint64_t lastPresetNameScanRevision{0};
-    bool automaticPresetNameScanArmed{false};
-    double automaticPresetNameScanDueMs{0.0};
 
     std::vector<PresetRestoreStep> presetRestoreSteps;
     int presetRestoreStepIndex{0};
@@ -187,7 +185,6 @@ juce::TextButton importPrstButton{"Import PRST"};
 juce::TextButton exportPrstButton{"Export PRST"};
 juce::TextButton allBlocksOffButton{"FX OFF"};
     juce::TextButton autoCabButton{"AUTO CAB"};
-    bool autoCabCommandSentForCurrentConnection{false};
 std::unique_ptr<juce::FileChooser> prstFileChooser;
 std::unique_ptr<juce::FileChooser> exportPrstFileChooser;
     juce::TextButton importIRButton{"Import IR"};

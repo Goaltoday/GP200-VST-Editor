@@ -1090,7 +1090,10 @@ storePresetButton.setColour (
 
         if (!midiConnection.isConnected ())
         {
-            effectsStatusText = "AUTO CAB will be applied when the GP-200 connects";
+            // AUTO CAB is now strictly manual: never defer a click and send it
+            // automatically on a later connection.
+            autoCabButton.setToggleState (!shouldBeEnabled, juce::dontSendNotification);
+            effectsStatusText = "Cannot change AUTO CAB: GP-200 is not connected";
             repaint ();
             return;
         }
@@ -1102,7 +1105,6 @@ storePresetButton.setColour (
         }
         else
         {
-            autoCabCommandSentForCurrentConnection = true;
             effectsStatusText = shouldBeEnabled ? "AUTO CAB enabled" : "AUTO CAB disabled: CAB remains fixed when AMP changes";
         }
 
@@ -1590,26 +1592,14 @@ void AudioPluginAudioProcessorEditor::timerCallback ()
         effectBlocksSignature.clear ();
         effectBlocksDataSignature.clear ();
 
-        if (!connectedNow)
-            autoCabCommandSentForCurrentConnection = false;
-
         repaint ();
     }
 
-    // AUTO CAB is enabled by default. Apply the visible button state once for
-    // every new MIDI connection so the hardware global setting and the editor
-    // cannot start out of sync.
-    if (connectedNow && !autoCabCommandSentForCurrentConnection)
-    {
-        if (midiConnection.sendAutoCabMatch (autoCabButton.getToggleState ()))
-            autoCabCommandSentForCurrentConnection = true;
-    }
-	
-	  // La conexión MIDI puede estar abierta antes de que el GP-200
-    // haya respondido a la primera petición. Reintentamos solamente
-    // mientras todavía no exista ningún preset vivo recibido.
+    // The connection may already contain a DAW snapshot or data from an
+    // earlier editor session. Retry until a complete preset has actually
+    // been received live from the GP-200 during this refresh.
     if (midiConnection.isConnected()
-        && midiConnection.getCurrentPresetDumpSize() == 0
+        && !midiConnection.hasLiveCurrentPresetData()
         && nowMs - lastInitialPresetRequestMs >= 200.0)
     {
         lastInitialPresetRequestMs = nowMs;
@@ -1644,38 +1634,9 @@ void AudioPluginAudioProcessorEditor::timerCallback ()
         tapTempoButton.repaint();
     }
 
-    // Start or resume the low-priority name scan only after the normal GP-200
-    // synchronisation has settled. The scanner itself still sends one request
-    // at a time and pauses while higher-priority MIDI operations are active.
-    if (!midiConnection.isConnected ())
-    {
-        automaticPresetNameScanArmed = false;
-        automaticPresetNameScanDueMs = 0.0;
-    }
-    else if (!midiConnection.hasCompletePresetNameCache ()
-             && !midiConnection.isPresetNameScanRunning ())
-    {
-        const bool presetIsReady = midiConnection.getCurrentSlot () >= 0
-                                   && midiConnection.getCurrentPresetDumpSize () > 0;
-
-        if (presetIsReady)
-        {
-            if (!automaticPresetNameScanArmed)
-            {
-                automaticPresetNameScanArmed = true;
-                automaticPresetNameScanDueMs = nowMs + 900.0;
-            }
-            else if (nowMs >= automaticPresetNameScanDueMs)
-            {
-                automaticPresetNameScanArmed = false;
-                midiConnection.startPresetNameScan (midiConnection.getCurrentSlot ());
-            }
-        }
-    }
-    else
-    {
-        automaticPresetNameScanArmed = false;
-    }
+    // Preset-name scanning is intentionally user initiated. It starts only
+    // when the slot-number button opens the preset browser, so startup/live
+    // preset synchronisation cannot be affected by background name traffic.
 
     midiConnection.processPresetNameScan ();
 
@@ -3210,7 +3171,7 @@ void AudioPluginAudioProcessorEditor::updateAllBlocksOffButtonText ()
                                   allBlocksAreTemporarilyOff ? textColour : panelOutlineColour);
 }
 
-void AudioPluginAudioProcessorEditor::syncPatchVolumeSliderFromPresetData (
+void AudioPluginAudioProcessorEditor::syncPatchSettingsFromPresetData (
     const juce::MemoryBlock& presetData, const juce::String& presetDataSignature)
 {
     if (presetDataSignature == patchVolumeSourceSignature)
@@ -3226,24 +3187,48 @@ void AudioPluginAudioProcessorEditor::syncPatchVolumeSliderFromPresetData (
     if (data == nullptr)
         return;
 
+    const auto nowMs = juce::Time::getMillisecondCounterHiRes ();
     const auto patchVolume = juce::jlimit (
         0, 100, static_cast<int> (data[gp200::patchVolumeOffset]));
-
-    const auto nowMs = juce::Time::getMillisecondCounterHiRes ();
 
     // MIDI echo/live-dump updates can lag behind the user's slider movement.
     // Do not paint an older value during that round trip. Release the guard as
     // soon as the dump confirms the locally sent value, or after the timeout.
+    bool updateVolume = true;
     if (patchVolumeLocalEditUntilMs > nowMs)
     {
         if (patchVolume == pendingPatchVolumeValue)
             patchVolumeLocalEditUntilMs = 0.0;
         else
-            return;
+            updateVolume = false;
     }
 
-    patchVolumeSlider.setValue (static_cast<double> (patchVolume),
-                                juce::dontSendNotification);
+    if (updateVolume)
+    {
+        patchVolumeSlider.setValue (static_cast<double> (patchVolume),
+                                    juce::dontSendNotification);
+    }
+
+    if (presetData.getSize () > gp200::patchTempoOffset)
+    {
+        const auto patchTempo = juce::jlimit (
+            40, 250, static_cast<int> (data[gp200::patchTempoOffset]));
+
+        bool updateTempo = true;
+        if (patchTempoLocalEditUntilMs > nowMs)
+        {
+            if (patchTempo == pendingPatchTempoValue)
+                patchTempoLocalEditUntilMs = 0.0;
+            else
+                updateTempo = false;
+        }
+
+        if (updateTempo)
+        {
+            tempoSlider.setValue (static_cast<double> (patchTempo),
+                                  juce::dontSendNotification);
+        }
+    }
 }
 
 //==============================================================================
@@ -3422,7 +3407,7 @@ void AudioPluginAudioProcessorEditor::updateEffectBlocksUI ()
     }
 
     if (midiConnection.isConnected ())
-        syncPatchVolumeSliderFromPresetData (
+        syncPatchSettingsFromPresetData (
             presetDataForDisplay,
             patchVolumeSignature);
 

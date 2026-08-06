@@ -439,11 +439,10 @@ void AudioPluginAudioProcessor::ensureGP200Connection()
         midiConnection.requestAssignmentNamesFromGP200();
     }
 
-    // Solo solicita el preset cuando todavía no existe uno en memoria.
-    // Al reabrir la ventana, los cambios locales se conservan porque el
-    // dump ya existe y no se reemplaza.
-    if (midiConnection.getCurrentPresetDumpSize() == 0)
-        midiConnection.requestCurrentPresetFromGP200();
+    // Opening the editor must always refresh the physical state of the
+    // GP-200. A non-empty dump may only be a DAW snapshot or data captured
+    // during an earlier editor session, so its size cannot prove freshness.
+    midiConnection.requestCurrentPresetFromGP200();
 }
 
 //==============================================================================
@@ -1082,6 +1081,24 @@ bool AudioPluginAudioProcessor::hasToneMatchCapture (
     return role == tonematch::CaptureRole::source
         ? sourceToneCapture.isValid()
         : targetToneCapture.isValid();
+}
+
+tonematch::ToneCaptureSummary
+AudioPluginAudioProcessor::getToneMatchCaptureSummary (
+    tonematch::CaptureRole role) const
+{
+    const juce::ScopedLock lock (toneMatchDataLock);
+
+    const auto& capture = role == tonematch::CaptureRole::source
+        ? sourceToneCapture
+        : targetToneCapture;
+
+    return {
+        capture.isValid(),
+        capture.durationSeconds,
+        capture.peakDb,
+        capture.wasClipped
+    };
 }
 
 tonematch::ToneCaptureData

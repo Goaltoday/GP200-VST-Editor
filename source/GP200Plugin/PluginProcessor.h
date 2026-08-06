@@ -111,6 +111,8 @@ double getToneMatchCapturedDurationSeconds() const noexcept;
 float getToneMatchCapturePeakLinear() const noexcept;
 
 bool hasToneMatchCapture (tonematch::CaptureRole role) const;
+tonematch::ToneCaptureSummary getToneMatchCaptureSummary (
+    tonematch::CaptureRole role) const;
 tonematch::ToneCaptureData getToneMatchCaptureCopy (
     tonematch::CaptureRole role) const;
 void storeToneMatchCapture (tonematch::ToneCaptureData capture);

@@ -95,6 +95,7 @@ class MidiConnection final : private juce::MidiInputCallback
 
     juce::String getCurrentPresetDumpStatusText () const;
     int getCurrentPresetDumpSize () const;
+    bool hasLiveCurrentPresetData () const;
     juce::MemoryBlock getCurrentPresetDumpDataCopy () const;
 
     std::uint64_t getPresetRevision () const;
@@ -176,6 +177,9 @@ class MidiConnection final : private juce::MidiInputCallback
 
     bool presetNameRequestPending{false};
     bool livePresetReadPending{false};
+    bool currentStateRequestPending{false};
+    bool currentStateRequestQueued{false};
+    double currentStateRequestSentMs{0.0};
     bool liveRefreshPending{false};
     double liveRefreshDueMs{0.0};
     int lastRequestedNameSlot{-1};
@@ -183,6 +187,7 @@ class MidiConnection final : private juce::MidiInputCallback
     int presetDumpSlot{-1};
     std::vector<std::vector<juce::uint8>> presetReadChunks;
     juce::MemoryBlock currentPresetDecodedData;
+    bool currentPresetDataIsLive{false};
     juce::String currentPresetDumpStatusText{"Current full preset data: not captured"};
 
     std::vector<AssignmentNameQuery> pendingAssignmentNameQueries;
