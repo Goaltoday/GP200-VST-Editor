@@ -35,6 +35,7 @@ class MidiConnection final : private juce::MidiInputCallback
 
     bool requestCurrentPresetFromGP200 ();
     bool requestAssignmentNamesFromGP200 ();
+    void processStartupHandshake ();
     void processPendingLivePresetRefresh ();
 
     juce::String getAssignmentNamesStatusText () const;
@@ -120,6 +121,21 @@ class MidiConnection final : private juce::MidiInputCallback
     void handleIncomingSysEx (const juce::MidiMessage& message);
     void parseGP200SysEx (const juce::uint8* data, int size);
 
+    enum class StartupHandshakePhase
+    {
+        Idle,
+        WaitingForIdentity,
+        WaitingBeforeStateDump,
+        WaitingForStateDump,
+        WaitingForCurrentPreset,
+        Ready
+    };
+
+    bool sendIdentityQueryUnlocked ();
+    bool sendEnterEditorModeUnlocked ();
+    bool sendStateDumpRequestUnlocked ();
+    void collectStateDumpChunk (const juce::uint8* data, int size);
+
     bool sendNextAssignmentNameQuery ();
     bool sendAssignmentNameQuery (int section, int page, int block);
     void handleAssignmentNameResponse (const juce::uint8* data, int size);
@@ -144,6 +160,8 @@ class MidiConnection final : private juce::MidiInputCallback
     static std::vector<juce::uint8> buildPatchSetting (int target, int value);
     static std::vector<juce::uint8>
     buildReorderEffects (const RoutingOrder& routingOrder, int fxLoopSend, int fxLoopReturn);
+    static std::vector<juce::uint8> buildIdentityQuery ();
+    static std::vector<juce::uint8> buildEnterEditorMode ();
     static std::vector<juce::uint8> buildStateDumpRequest ();
     static std::vector<juce::uint8> buildAssignmentNameQuery (int section, int page, int block);
     static std::vector<juce::uint8> buildStorePresetCommit (int slot, const juce::String& presetName);
@@ -174,6 +192,12 @@ class MidiConnection final : private juce::MidiInputCallback
 
     int currentSlot{-1};
     juce::String currentPresetName{"unknown"};
+
+    StartupHandshakePhase startupHandshakePhase{StartupHandshakePhase::Idle};
+    double startupHandshakeNextActionMs{0.0};
+    double startupHandshakePhaseStartedMs{0.0};
+    std::vector<std::vector<juce::uint8>> stateDumpChunks;
+    bool startupAssignmentNamesRequested{false};
 
     bool presetNameRequestPending{false};
     bool livePresetReadPending{false};

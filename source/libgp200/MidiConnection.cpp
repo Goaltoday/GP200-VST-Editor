@@ -84,6 +84,12 @@ void MidiConnection::disconnect ()
     currentSlot = -1;
     currentPresetName = "unknown";
 
+    startupHandshakePhase = StartupHandshakePhase::Idle;
+    startupHandshakeNextActionMs = 0.0;
+    startupHandshakePhaseStartedMs = 0.0;
+    stateDumpChunks.clear ();
+    startupAssignmentNamesRequested = false;
+
     presetNameRequestPending = false;
     livePresetReadPending = false;
     currentStateRequestPending = false;
@@ -409,54 +415,208 @@ bool MidiConnection::requestCurrentPresetFromGP200 ()
         return false;
     }
 
-    const auto nowMs = juce::Time::getMillisecondCounterHiRes ();
-    constexpr double stateRequestTimeoutMs = 1200.0;
+    // On the first synchronisation after opening the MIDI ports, mirror the
+    // handshake observed in the official GP-200 editor:
+    // Identity -> Enter Editor Mode -> 100 ms -> five-chunk State Dump.
+    // Once that initial handshake has completed, later editor re-openings only
+    // need a fresh State Dump/current-preset read; Editor Mode is not resent.
+    if (startupHandshakePhase == StartupHandshakePhase::Idle)
+        return sendIdentityQueryUnlocked ();
 
-    // The preset-name scanner and the live preset reader both receive
-    // 0x12/0x18 replies. Never start the startup transaction while a scanner
-    // request is still in flight, otherwise the first live preset chunks can
-    // be consumed by the scanner. Queue the startup request and temporarily
-    // pause the scan; the editor timer will retry as soon as that one pending
-    // scanner reply has been received or timed out.
-    if (presetNameScanner.hasPendingRequest ())
-    {
-        currentStateRequestQueued = true;
-        lastMessageText = "Current preset query queued until preset-name scan reply completes";
+    if (startupHandshakePhase == StartupHandshakePhase::Ready)
+        return sendStateDumpRequestUnlocked ();
+
+    // A startup/current-state transaction is already in progress. The editor
+    // timer intentionally calls this method repeatedly until live data arrives;
+    // do not overlap transactions.
+    return false;
+}
+
+bool MidiConnection::sendIdentityQueryUnlocked ()
+{
+    if (midiOutput == nullptr)
         return false;
-    }
 
-    // The editor timer may ask again while the first state reply or the
-    // subsequent seven-chunk preset read is still in flight. Do not overlap
-    // those transactions: duplicate 0x4E replies used to reset the chunk
-    // collector and could leave the startup UI showing stale slot data.
-    if (presetDumpSlot >= 0 || livePresetReadPending)
-        return false;
-
-    if (currentStateRequestPending
-        && nowMs - currentStateRequestSentMs < stateRequestTimeoutMs)
-    {
-        return false;
-    }
-
-    currentStateRequestQueued = false;
-
-    const auto bytes = buildStateDumpRequest ();
-
-    auto message =
-        juce::MidiMessage::createSysExMessage (bytes.data () + 1, static_cast<int> (bytes.size () - 2));
-
+    const auto bytes = buildIdentityQuery ();
+    const auto message = juce::MidiMessage::createSysExMessage (
+        bytes.data () + 1, static_cast<int> (bytes.size () - 2));
     midiOutput->sendMessageNow (message);
 
-    // A new state query means any data currently held may be a DAW snapshot
-    // or a result from an earlier editor session. It must not be considered
-    // current until the complete seven-chunk live read has finished.
+    startupHandshakePhase = StartupHandshakePhase::WaitingForIdentity;
+    startupHandshakePhaseStartedMs = juce::Time::getMillisecondCounterHiRes ();
     currentPresetDataIsLive = false;
     currentStateRequestPending = true;
-    currentStateRequestSentMs = nowMs;
-    lastMessageText = "Requested current preset from GP-200";
-    currentPresetDumpStatusText = "Current full preset data: waiting for current slot";
-
+    currentStateRequestSentMs = startupHandshakePhaseStartedMs;
+    currentPresetDumpStatusText = "Current full preset data: identifying GP-200";
+    lastMessageText = "GP-200 startup: identity query sent";
     return true;
+}
+
+bool MidiConnection::sendEnterEditorModeUnlocked ()
+{
+    if (midiOutput == nullptr)
+        return false;
+
+    const auto bytes = buildEnterEditorMode ();
+    const auto message = juce::MidiMessage::createSysExMessage (
+        bytes.data () + 1, static_cast<int> (bytes.size () - 2));
+    midiOutput->sendMessageNow (message);
+
+    const auto nowMs = juce::Time::getMillisecondCounterHiRes ();
+    startupHandshakePhase = StartupHandshakePhase::WaitingBeforeStateDump;
+    startupHandshakePhaseStartedMs = nowMs;
+    startupHandshakeNextActionMs = nowMs + 100.0;
+    currentPresetDumpStatusText = "Current full preset data: entering editor mode";
+    lastMessageText = "GP-200 startup: editor mode requested";
+    return true;
+}
+
+bool MidiConnection::sendStateDumpRequestUnlocked ()
+{
+    if (midiOutput == nullptr)
+        return false;
+
+    // Preset-name reads and live preset reads both use 0x12/0x18. Do not start
+    // a new current-state transaction while either one is in flight.
+    if (presetNameScanner.hasPendingRequest () || presetDumpSlot >= 0 || livePresetReadPending)
+    {
+        currentStateRequestQueued = true;
+        return false;
+    }
+
+    const auto bytes = buildStateDumpRequest ();
+    const auto message = juce::MidiMessage::createSysExMessage (
+        bytes.data () + 1, static_cast<int> (bytes.size () - 2));
+    midiOutput->sendMessageNow (message);
+
+    stateDumpChunks.clear ();
+    currentPresetDataIsLive = false;
+    currentStateRequestQueued = false;
+    currentStateRequestPending = true;
+    currentStateRequestSentMs = juce::Time::getMillisecondCounterHiRes ();
+    startupHandshakePhase = StartupHandshakePhase::WaitingForStateDump;
+    startupHandshakePhaseStartedMs = currentStateRequestSentMs;
+    currentPresetDumpStatusText = "Current full preset data: receiving state dump 0/5 chunks";
+    lastMessageText = "Requested five-chunk current state from GP-200";
+    return true;
+}
+
+void MidiConnection::processStartupHandshake ()
+{
+    const juce::ScopedLock lock (stateLock);
+
+    if (midiOutput == nullptr)
+        return;
+
+    const auto nowMs = juce::Time::getMillisecondCounterHiRes ();
+    constexpr double startupTimeoutMs = 1200.0;
+
+    if (startupHandshakePhase == StartupHandshakePhase::WaitingBeforeStateDump
+        && nowMs >= startupHandshakeNextActionMs)
+    {
+        sendStateDumpRequestUnlocked ();
+        return;
+    }
+
+    // Keep the existing retry behaviour, but retry the correct handshake phase
+    // rather than starting overlapping state/preset transactions.
+    if (startupHandshakePhase == StartupHandshakePhase::WaitingForIdentity
+        && nowMs - startupHandshakePhaseStartedMs >= startupTimeoutMs)
+    {
+        sendIdentityQueryUnlocked ();
+        return;
+    }
+
+    if (startupHandshakePhase == StartupHandshakePhase::WaitingForStateDump
+        && nowMs - startupHandshakePhaseStartedMs >= startupTimeoutMs)
+    {
+        sendStateDumpRequestUnlocked ();
+        return;
+    }
+
+    // Auxiliary User IR / SnapTone names are deliberately postponed until the
+    // seven-chunk active preset has completed. This keeps startup traffic in the
+    // same order as the official editor without changing how those names are
+    // queried or refreshed later.
+    if (startupHandshakePhase == StartupHandshakePhase::Ready
+        && !startupAssignmentNamesRequested)
+    {
+        startupAssignmentNamesRequested = true;
+        requestAssignmentNamesFromGP200 ();
+    }
+}
+
+void MidiConnection::collectStateDumpChunk (const juce::uint8* data, int size)
+{
+    if (startupHandshakePhase != StartupHandshakePhase::WaitingForStateDump)
+        return;
+
+    const int offset = getChunkOffset (data, size);
+    constexpr std::array<int, 5> expectedOffsets { 0, 185, 370, 555, 740 };
+
+    if (std::find (expectedOffsets.begin (), expectedOffsets.end (), offset) == expectedOffsets.end ())
+        return;
+
+    for (const auto& existing : stateDumpChunks)
+    {
+        if (getChunkOffset (existing.data (), static_cast<int> (existing.size ())) == offset)
+            return;
+    }
+
+    stateDumpChunks.emplace_back (data, data + size);
+    currentPresetDumpStatusText = "Current full preset data: receiving state dump "
+        + juce::String (static_cast<int> (stateDumpChunks.size ())) + "/5 chunks";
+
+    if (stateDumpChunks.size () < expectedOffsets.size ())
+        return;
+
+    const auto assembled = assemblePresetReadChunks (stateDumpChunks);
+    stateDumpChunks.clear ();
+
+    if (assembled.getSize () < 10)
+        return;
+
+    const auto* decoded = static_cast<const juce::uint8*> (assembled.getData ());
+    const int slot = static_cast<int> (decoded[8])
+                   | (static_cast<int> (decoded[9]) << 8);
+
+    if (slot < 0 || slot >= 256)
+        return;
+
+    currentStateRequestPending = false;
+    currentStateRequestQueued = false;
+    currentSlot = slot;
+
+    juce::String name;
+    if (assembled.getSize () >= 44)
+    {
+        std::vector<juce::uint8> decodedVector (decoded, decoded + assembled.getSize ());
+        name = extractPresetNameFromDecodedPresetData (decodedVector);
+    }
+
+    if (name.isNotEmpty ())
+    {
+        currentPresetName = name;
+        presetNameScanner.setCachedName (currentSlot, name);
+    }
+    else
+    {
+        currentPresetName = "requesting...";
+    }
+
+    // The state dump establishes the active slot. The existing seven-chunk
+    // live read remains the source of the complete editable preset snapshot.
+    presetNameRequestPending = true;
+    livePresetReadPending = true;
+    lastRequestedNameSlot = -1;
+    startupHandshakePhase = StartupHandshakePhase::WaitingForCurrentPreset;
+    startupHandshakePhaseStartedMs = juce::Time::getMillisecondCounterHiRes ();
+
+    if (presetDumpSlot != slot)
+        resetPresetDumpCaptureForSlot (slot);
+
+    lastMessageText = "Current GP-200 slot from complete state dump: "
+        + juce::String (slot) + " / " + currentPresetName;
 }
 
 void MidiConnection::processPendingLivePresetRefresh ()
@@ -1649,6 +1809,9 @@ void MidiConnection::collectPresetReadChunk (const juce::uint8* data, int size)
                                       " bytes";
 
         presetDumpSlot = -1;
+
+        if (startupHandshakePhase == StartupHandshakePhase::WaitingForCurrentPreset)
+            startupHandshakePhase = StartupHandshakePhase::Ready;
     }
 }
 
@@ -1658,6 +1821,18 @@ int MidiConnection::getChunkOffset (const juce::uint8* data, int size)
         return -1;
 
     return data[11] | (data[12] << 7);
+}
+
+std::vector<juce::uint8> MidiConnection::buildIdentityQuery ()
+{
+    return {0xF0, 0x21, 0x25, 0x7E, 0x47, 0x50, 0x2D, 0x32, 0x11, 0x04, 0x00,
+            0x00, 0x00, 0x00, 0x01, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xF7};
+}
+
+std::vector<juce::uint8> MidiConnection::buildEnterEditorMode ()
+{
+    return {0xF0, 0x21, 0x25, 0x7E, 0x47, 0x50, 0x2D, 0x32, 0x11, 0x12, 0x00,
+            0x00, 0x00, 0xF7};
 }
 
 std::vector<juce::uint8> MidiConnection::buildStateDumpRequest ()
@@ -2173,6 +2348,17 @@ void MidiConnection::parseGP200SysEx (const juce::uint8* data, int size)
         return;
     }
 
+    // During the first connection handshake, the first 0x12/0x08 response is
+    // the answer to the official editor's identity query. Consume it before
+    // the generic 0x12/0x08 notification parser so it can never be mistaken
+    // for a preset change or a global-setting echo.
+    if (command == 0x12 && subCommand == 0x08
+        && startupHandshakePhase == StartupHandshakePhase::WaitingForIdentity)
+    {
+        sendEnterEditorModeUnlocked ();
+        return;
+    }
+
     // GP-200 spontaneous notifications.
     //
     // data[14] == 0x08 identifies a real preset-slot change.
@@ -2317,62 +2503,15 @@ void MidiConnection::parseGP200SysEx (const juce::uint8* data, int size)
         return;
     }
 
-    // Response to current-state query.
-    // This tells us what preset is currently active, then we trigger a full
-    // read request for that slot via requestPresetNameForCurrentSlotIfNeeded().
+    // Response to the current-state query. The official GP-200 editor sends
+    // five 0x12/0x4E chunks (offsets 0,185,370,555,740) and only treats the
+    // state as complete after all five have arrived.
     if (command == 0x12 && subCommand == 0x4E && size >= 28)
     {
-        const int offset = data[11] | (data[12] << 7);
-
-        if (offset != 0)
-            return;
-
-        const auto decoded = nibbleDecode (data + 13, size - 14);
-
-        // The 0x12/0x4E current-state response does not use the same raw
-        // nibble positions as the spontaneous 0x12/0x08 preset-change
-        // notification. In the decoded state payload, bytes 8 and 9 contain
-        // the active zero-based preset slot (little-endian).
-        const int slot = decoded.size () >= 10
-                           ? static_cast<int> (decoded[8])
-                               | (static_cast<int> (decoded[9]) << 8)
-                           : -1;
-
-        if (decoded.size () >= 44 && slot >= 0 && slot < 256)
-        {
-                currentStateRequestPending = false;
-                currentStateRequestQueued = false;
-                currentSlot = slot;
-
-                const auto name = extractPresetNameFromDecodedPresetData (decoded);
-
-                if (name.isNotEmpty ())
-                    currentPresetName = name;
-
-                if (name.isNotEmpty () && currentSlot >= 0)
-                    presetNameScanner.setCachedName (currentSlot, name);
-                else
-                    currentPresetName = "requesting...";
-
-                // Even if the state dump gives us the name, request the full
-                // 7-chunk preset read so we can capture all preset bytes.
-                presetNameRequestPending = true;
-                lastRequestedNameSlot = -1;
-
-                // A delayed duplicate state reply for the same slot must not
-                // discard chunks that are already being collected.
-                if (presetDumpSlot != slot)
-                {
-                    livePresetReadPending = true;
-                    resetPresetDumpCaptureForSlot (slot);
-                }
-
-                lastMessageText =
-                    "Current GP-200 preset received: " + juce::String (slot) + " / " + currentPresetName;
-        }
-
+        collectStateDumpChunk (data, size);
         return;
     }
+
 }
 
 void MidiConnection::handleAssignmentNameResponse (const juce::uint8* data, int size)

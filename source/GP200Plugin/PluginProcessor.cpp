@@ -435,8 +435,6 @@ void AudioPluginAudioProcessor::ensureGP200Connection()
     {
         if (!midiConnection.connectToGP200())
             return;
-
-        midiConnection.requestAssignmentNamesFromGP200();
     }
 
     // Opening the editor must always refresh the physical state of the

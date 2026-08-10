@@ -1595,6 +1595,10 @@ void AudioPluginAudioProcessorEditor::timerCallback ()
         repaint ();
     }
 
+    // Advance the non-blocking startup handshake (Identity -> Editor Mode ->
+    // 100 ms -> five-chunk State Dump -> active preset read).
+    midiConnection.processStartupHandshake ();
+
     // The connection may already contain a DAW snapshot or data from an
     // earlier editor session. Retry until a complete preset has actually
     // been received live from the GP-200 during this refresh.
