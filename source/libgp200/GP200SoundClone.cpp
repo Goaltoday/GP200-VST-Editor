@@ -26,8 +26,8 @@ constexpr std::uint32_t largeBlockBCount = 0x800;
 
 constexpr std::size_t declaredOffset = 0x04;
 constexpr std::size_t crcOffset = 0x08;
-constexpr std::size_t blockACountOffset = 0x0c;
-constexpr std::size_t blockBCountOffset = 0x10;
+constexpr std::size_t blockACountOffset = 0x80;
+constexpr std::size_t blockBCountOffset = 0x84;
 constexpr std::size_t payloadOffset = 0x14;
 constexpr std::size_t crcDataOffset = 0x0c;
 
