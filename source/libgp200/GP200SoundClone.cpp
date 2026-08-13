@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <vector>
 
 namespace gp200
 {
@@ -12,6 +13,143 @@ constexpr int modelBytes = 8192;
 constexpr int wrapperBytes = 28;
 constexpr int blobBytes = wrapperBytes + modelBytes;
 constexpr int chunkBytes = 183;
+
+// Sound Clone container layout confirmed for the GP-200/Valeton files used here.
+constexpr std::size_t physicalContainerBytes = 0x2288;
+constexpr std::size_t gp200DeclaredBytes = 0x1288;
+constexpr std::uint32_t largeDeclaredBytes = 0x2288;
+constexpr std::uint32_t gp200PayloadBytes = 0x1200;
+constexpr std::uint32_t largePayloadBytes = 0x2200;
+constexpr std::uint32_t blockACount = 0x80;
+constexpr std::uint32_t gp200BlockBCount = 0x400;
+constexpr std::uint32_t largeBlockBCount = 0x800;
+
+constexpr std::size_t declaredOffset = 0x04;
+constexpr std::size_t crcOffset = 0x08;
+constexpr std::size_t blockACountOffset = 0x0c;
+constexpr std::size_t blockBCountOffset = 0x10;
+constexpr std::size_t payloadOffset = 0x14;
+constexpr std::size_t crcDataOffset = 0x0c;
+
+std::uint32_t readLe32 (const juce::uint8* data)
+{
+    return static_cast<std::uint32_t> (data[0])
+         | (static_cast<std::uint32_t> (data[1]) << 8)
+         | (static_cast<std::uint32_t> (data[2]) << 16)
+         | (static_cast<std::uint32_t> (data[3]) << 24);
+}
+
+void writeLe32 (juce::uint8* data, std::uint32_t value)
+{
+    data[0] = static_cast<juce::uint8> (value & 0xff);
+    data[1] = static_cast<juce::uint8> ((value >> 8) & 0xff);
+    data[2] = static_cast<juce::uint8> ((value >> 16) & 0xff);
+    data[3] = static_cast<juce::uint8> ((value >> 24) & 0xff);
+}
+
+std::uint16_t crc16Modbus (const juce::uint8* data, std::size_t size)
+{
+    std::uint16_t crc = 0xffff;
+
+    for (std::size_t i = 0; i < size; ++i)
+    {
+        crc ^= static_cast<std::uint16_t> (data[i]);
+
+        for (int bit = 0; bit < 8; ++bit)
+            crc = (crc & 1u) != 0u
+                ? static_cast<std::uint16_t> ((crc >> 1) ^ 0xa001u)
+                : static_cast<std::uint16_t> (crc >> 1);
+    }
+
+    return crc;
+}
+
+void updateInternalCrc (std::array<juce::uint8, physicalContainerBytes>& container)
+{
+    const auto declared = readLe32 (container.data () + declaredOffset);
+    const auto crc = crc16Modbus (container.data () + crcDataOffset,
+                                  static_cast<std::size_t> (declared) - crcDataOffset);
+
+    // Stored little-endian in the VTSI header.
+    container[crcOffset] = static_cast<juce::uint8> (crc & 0xff);
+    container[crcOffset + 1] = static_cast<juce::uint8> ((crc >> 8) & 0xff);
+}
+
+juce::Result prepareSoundCloneModelForGP200 (
+    const juce::File& sourceFile,
+    std::array<juce::uint8, physicalContainerBytes>& prepared)
+{
+    juce::FileInputStream input (sourceFile);
+    if (!input.openedOk ())
+        return juce::Result::fail ("The Sound Clone file cannot be opened.");
+
+    if (input.getTotalLength () < static_cast<juce::int64> (physicalContainerBytes))
+        return juce::Result::fail (
+            "The Sound Clone file is too small. At least 0x2288 (8840) bytes are required.");
+
+    const auto bytesRead = input.read (prepared.data (),
+                                       static_cast<int> (physicalContainerBytes));
+    if (bytesRead != static_cast<int> (physicalContainerBytes))
+        return juce::Result::fail ("The Sound Clone model data could not be read completely.");
+
+    const bool isVtsi = prepared[0] == 'V' && prepared[1] == 'T'
+                     && prepared[2] == 'S' && prepared[3] == 'I';
+    const bool isHtsi = prepared[0] == 'H' && prepared[1] == 'T'
+                     && prepared[2] == 'S' && prepared[3] == 'I';
+
+    if (!isVtsi && !isHtsi)
+        return juce::Result::fail (
+            "Unsupported Sound Clone format (expected VTSI or HTSI header).");
+
+    const auto declared = readLe32 (prepared.data () + declaredOffset);
+    const auto blockA = readLe32 (prepared.data () + blockACountOffset);
+    const auto blockB = readLe32 (prepared.data () + blockBCountOffset);
+    const auto payload = readLe32 (prepared.data () + payloadOffset);
+
+    const bool isGp2001024 = declared == gp200DeclaredBytes
+                          && payload == gp200PayloadBytes
+                          && blockA == blockACount
+                          && blockB == gp200BlockBCount;
+
+    const bool isLarge2048 = declared == largeDeclaredBytes
+                          && payload == largePayloadBytes
+                          && blockA == blockACount
+                          && blockB == largeBlockBCount;
+
+    if (isVtsi && isGp2001024)
+    {
+        // Already in the native GP-200 representation. Do not alter it.
+        return juce::Result::ok ();
+    }
+
+    if (!isLarge2048)
+    {
+        return juce::Result::fail (
+            "Unsupported Sound Clone structure. Expected 128+1024 GP-200 VTSI "
+            "or 128+2048 VTSI/HTSI model data.");
+    }
+
+    // The confirmed Valeton 2048 -> 1024 conversion keeps the complete
+    // 128-float Block A and the first 1024 floats of Block B. Since both
+    // blocks start inside the common prefix, truncating the declared model at
+    // 0x1288 preserves exactly those bytes. The physical file remains 0x2288.
+    prepared[0] = 'V';
+    prepared[1] = 'T';
+    prepared[2] = 'S';
+    prepared[3] = 'I';
+
+    writeLe32 (prepared.data () + declaredOffset,
+               static_cast<std::uint32_t> (gp200DeclaredBytes));
+    writeLe32 (prepared.data () + payloadOffset, gp200PayloadBytes);
+    writeLe32 (prepared.data () + blockBCountOffset, gp200BlockBCount);
+
+    std::fill (prepared.begin () + static_cast<std::ptrdiff_t> (gp200DeclaredBytes),
+               prepared.end (),
+               static_cast<juce::uint8> (0));
+
+    updateInternalCrc (prepared);
+    return juce::Result::ok ();
+}
 
 juce::MidiMessage makeSysEx (const std::vector<juce::uint8>& full)
 {
@@ -58,66 +196,20 @@ juce::Result GP200SoundClone::buildUpload (const juce::File& cloFile,
                                             GP200SoundCloneUpload& result)
 {
     if (!cloFile.existsAsFile ())
-        return juce::Result::fail ("The selected CLO file does not exist.");
-
-    const bool isValetonClo = cloFile.hasFileExtension ("clo");
-    const bool isHotoneTone = cloFile.hasFileExtension ("tone");
-
-    if (!isValetonClo && !isHotoneTone)
-        return juce::Result::fail ("Select a Valeton .clo or Hotone .tone file.");
+        return juce::Result::fail ("The selected Sound Clone file does not exist.");
 
     if (!juce::isPositiveAndBelow (globalSlot, 10))
         return juce::Result::fail ("The Sound Clone destination must be AMP 1-5 or DIST 1-5.");
 
-    juce::FileInputStream input (cloFile);
-    if (!input.openedOk ())
-        return juce::Result::fail ("The CLO file cannot be opened.");
+    std::array<juce::uint8, physicalContainerBytes> preparedContainer{};
+    const auto preparationResult = prepareSoundCloneModelForGP200 (cloFile, preparedContainer);
+    if (preparationResult.failed ())
+        return preparationResult;
 
-    if (input.getTotalLength () < modelBytes)
-        return juce::Result::fail ("The CLO file is too small. At least 8192 bytes are required.");
-
+    // Keep the existing GP-200 transfer contract unchanged: the upload uses
+    // exactly the first 8192 bytes of the prepared 0x2288-byte container.
     std::array<juce::uint8, modelBytes> model{};
-    const auto bytesRead = input.read (model.data (), modelBytes);
-    if (bytesRead != modelBytes)
-        return juce::Result::fail ("The CLO model data could not be read completely.");
-
-    const bool hasValetonSignature =
-        model[0] == 'V' && model[1] == 'T' && model[2] == 'S' && model[3] == 'I';
-
-    const bool hasHotoneSignature =
-        model[0] == 'H' && model[1] == 'T' && model[2] == 'S' && model[3] == 'I';
-
-    if (isValetonClo)
-    {
-        if (!hasValetonSignature)
-            return juce::Result::fail (
-                "This is not a GP-200/Valeton CLO file (expected VTSI header).");
-    }
-    else
-    {
-        if (!hasHotoneSignature)
-            return juce::Result::fail (
-                "This is not a supported Hotone TONE file (expected HTSI header).");
-
-        // Experimental Hotone -> Valeton conversion derived from tested files:
-        // HTSI -> VTSI, declared container size 0x2288 -> 0x1288,
-        // and declared payload size 0x2200 -> 0x1200.
-        // The remaining model bytes are preserved exactly as supplied.
-        model[0] = 'V';
-        model[1] = 'T';
-        model[2] = 'S';
-        model[3] = 'I';
-
-        model[4] = 0x88;
-        model[5] = 0x12;
-        model[6] = 0x00;
-        model[7] = 0x00;
-
-        model[20] = 0x00;
-        model[21] = 0x12;
-        model[22] = 0x00;
-        model[23] = 0x00;
-    }
+    std::copy_n (preparedContainer.begin (), modelBytes, model.begin ());
 
     std::array<juce::uint8, blobBytes> blob{};
     blob[0] = 0x13;
