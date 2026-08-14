@@ -1601,6 +1601,13 @@ void MidiConnection::adoptCurrentPresetSnapshot (int slot,
     livePresetReadPending = false;
     liveRefreshPending = false;
     liveRefreshDueMs = 0.0;
+
+    // Recall from DAW has just established the authoritative current state.
+    // Discard any startup/current-state request that may still be queued or
+    // pending so it cannot overwrite the freshly restored snapshot.
+    currentStateRequestQueued = false;
+    currentStateRequestPending = false;
+
     lastRequestedNameSlot = currentSlot;
     presetDumpSlot = -1;
     presetReadChunks.clear ();
