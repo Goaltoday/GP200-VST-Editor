@@ -579,6 +579,20 @@ void MidiConnection::processStartupHandshake ()
         return;
     }
 
+    // A current-state request can be queued while the preset-name scanner has
+    // one 0x12/0x18 reply in flight. Once that single scanner reply has
+    // completed, service the queued state request before allowing the scanner
+    // to send its next slot. Without this hand-off, currentStateRequestQueued
+    // and processPresetNameScan() can block each other indefinitely.
+    if (currentStateRequestQueued
+        && !presetNameScanner.hasPendingRequest ()
+        && presetDumpSlot < 0
+        && !livePresetReadPending)
+    {
+        sendStateDumpRequestUnlocked ();
+        return;
+    }
+
     // Auxiliary User IR / SnapTone names are deliberately postponed until the
     // seven-chunk active preset has completed. This keeps startup traffic in the
     // same order as the official editor without changing how those names are
@@ -1853,6 +1867,11 @@ void MidiConnection::collectPresetReadChunk (const juce::uint8* data, int size)
                                       juce::String (static_cast<int> (currentPresetDecodedData.getSize ())) +
                                       " bytes";
 
+        // A completed seven-chunk preset read owns the 0x12/0x18 transaction
+        // until this point. Release every flag associated with that read so a
+        // paused preset-name scan can continue on the next timer tick.
+        presetNameRequestPending = false;
+        livePresetReadPending = false;
         presetDumpSlot = -1;
 
         if (startupHandshakePhase == StartupHandshakePhase::WaitingForCurrentPreset)
