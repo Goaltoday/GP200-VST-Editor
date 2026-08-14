@@ -120,6 +120,8 @@ class MidiConnection final : private juce::MidiInputCallback
 
     void handleIncomingSysEx (const juce::MidiMessage& message);
     void parseGP200SysEx (const juce::uint8* data, int size);
+    bool handleSoundCloneUploadAck (const juce::uint8* data, int size);
+    void completeSoundCloneUpload ();
 
     enum class StartupHandshakePhase
     {
@@ -232,7 +234,7 @@ class MidiConnection final : private juce::MidiInputCallback
     double irUploadNextActionMs{0.0};
     juce::String irUploadStatusText{"IR upload: idle"};
 
-    enum class SoundCloneUploadPhase { Idle, WaitingAfterPrepare, SendingChunks, WaitingBeforeCommit, WaitingAfterCommit };
+    enum class SoundCloneUploadPhase { Idle, WaitingAfterPrepare, SendingChunks, WaitingForAck };
     GP200SoundCloneUpload soundCloneUpload;
     SoundCloneUploadPhase soundCloneUploadPhase{SoundCloneUploadPhase::Idle};
     int soundCloneUploadChunkIndex{0};

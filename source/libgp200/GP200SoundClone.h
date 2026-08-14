@@ -9,7 +9,6 @@ struct GP200SoundCloneUpload
 {
     std::vector<juce::MidiMessage> chunks;
     juce::MidiMessage prepareMessage;
-    juce::MidiMessage commitMessage;
     juce::String displayName;
     int globalSlot{-1};
 };
