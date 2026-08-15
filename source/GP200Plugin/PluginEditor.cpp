@@ -2329,6 +2329,7 @@ void AudioPluginAudioProcessorEditor::importPrstFile (
     }
 
     presetRestoreStepIndex = 0;
+    midiConnection.beginPresetRestoreTransaction ();
     presetRestoreInProgress = true;
 
     startTimerHz (restoreTimerHz);
@@ -2475,6 +2476,7 @@ const auto snapshotLabel =
     }
 
     presetRestoreStepIndex = 0;
+    midiConnection.beginPresetRestoreTransaction ();
     presetRestoreInProgress = true;
     startTimerHz (restoreTimerHz);
 
@@ -2681,6 +2683,7 @@ void AudioPluginAudioProcessorEditor::processFullPresetRestoreStep ()
     if (!sent)
     {
         presetRestoreInProgress = false;
+        midiConnection.endPresetRestoreTransaction ();
         startTimerHz (idleTimerHz);
         effectsStatusText = "Recall Preset failed: " + midiConnection.getLastMessageText ();
         return;
@@ -2703,6 +2706,7 @@ void AudioPluginAudioProcessorEditor::finishFullPresetRestore ()
 
     midiConnection.adoptCurrentPresetSnapshot (
         presetRestoreSlot, presetRestoreName, presetRestoreSnapshotData);
+    midiConnection.endPresetRestoreTransaction ();
 
     presetRestoreSteps.clear ();
     presetRestoreStepIndex = 0;

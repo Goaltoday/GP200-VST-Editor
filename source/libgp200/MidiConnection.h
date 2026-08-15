@@ -108,6 +108,11 @@ class MidiConnection final : private juce::MidiInputCallback
 
     bool requestPresetNameForCurrentSlotIfNeeded ();
 
+    // Suspend automatic preset/state reads while Recall from DAW or PRST import
+    // is actively rebuilding the GP-200 edit buffer.
+    void beginPresetRestoreTransaction ();
+    void endPresetRestoreTransaction ();
+
   private:
     struct AssignmentNameQuery
     {
@@ -207,6 +212,7 @@ class MidiConnection final : private juce::MidiInputCallback
     bool currentStateRequestQueued{false};
     double currentStateRequestSentMs{0.0};
     bool liveRefreshPending{false};
+    bool presetRestoreTransactionActive{false};
     double liveRefreshDueMs{0.0};
     int lastRequestedNameSlot{-1};
 
