@@ -90,6 +90,8 @@ TunerResult getTunerResult() const noexcept;
 
     int getSavedGP200PresetSnapshotSlot (int snapshotIndex) const;
 juce::String getSavedGP200PresetSnapshotName (int snapshotIndex) const;
+juce::String getSavedGP200PresetSnapshotDisplayName (int snapshotIndex) const;
+void setSavedGP200PresetSnapshotDisplayName (int snapshotIndex, const juce::String& displayName);
 juce::String getSavedGP200PresetSnapshotSlotText (int snapshotIndex) const;
 
 int getSavedGP200PresetDataSize (int snapshotIndex) const;
@@ -160,6 +162,7 @@ bool saveToneMatchIRToFile (
     {
         int slot{-1};
         juce::String name{"unknown"};
+        juce::String displayName;
         juce::MemoryBlock data;
         std::uint64_t revision{0};
     };

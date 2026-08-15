@@ -850,6 +850,7 @@ AudioPluginAudioProcessorEditor::AudioPluginAudioProcessorEditor (
 
     addAndMakeVisible (compareAButton);
 addAndMakeVisible (compareBButton);
+addAndMakeVisible (snapshotNameEditor);
 addAndMakeVisible (savePresetButton);
 addAndMakeVisible (recallPresetButton);
 addAndMakeVisible (storePresetButton);
@@ -1170,6 +1171,29 @@ compareBButton.onClick = [this]
     selectCompareSnapshot (CompareSnapshot::B);
 };
 
+snapshotNameEditor.setEditable (false, true, false);
+snapshotNameEditor.setJustificationType (juce::Justification::centredLeft);
+snapshotNameEditor.setColour (juce::Label::backgroundColourId, juce::Colours::transparentBlack);
+snapshotNameEditor.setColour (juce::Label::outlineColourId, juce::Colours::transparentBlack);
+snapshotNameEditor.setColour (juce::Label::textColourId, textColour);
+snapshotNameEditor.setColour (juce::Label::textWhenEditingColourId, textColour);
+snapshotNameEditor.setColour (juce::Label::backgroundWhenEditingColourId, panelColour.brighter (0.05f));
+snapshotNameEditor.setFont (gp200ui::semibold (15.25f));
+snapshotNameEditor.setTooltip ("Double-click to rename the selected DAW snapshot");
+snapshotNameEditor.onTextChange = [this]
+{
+    const auto snapshotIndex = getSelectedCompareSnapshotIndex ();
+    if (!processorRef.hasSavedGP200PresetData (snapshotIndex))
+        return;
+
+    processorRef.setSavedGP200PresetSnapshotDisplayName (
+        snapshotIndex,
+        snapshotNameEditor.getText ());
+
+    effectsStatusText = "Renamed DAW snapshot " + getSelectedCompareSnapshotLabel ();
+    repaint ();
+};
+
     savePresetButton.onClick = [this] { saveCurrentPresetToProject (); };
 
     recallPresetButton.onClick = [this] { recallSavedPresetToGP200 (); };
@@ -1351,22 +1375,8 @@ void AudioPluginAudioProcessorEditor::paint (juce::Graphics& g)
     juce::Justification::centredLeft
 );
 
-    g.setFont (gp200ui::semibold (15.25f));
-    g.setColour (textColour);
-
-    auto savedPresetText = getSavedPresetCompactText();
-
-    if (savedPresetText.isEmpty())
-        savedPresetText = "unknown";
-
-    g.drawText (
-    savedPresetText,
-    currentPresetBox.getX() + 154,
-    currentPresetBox.getY() + 88,
-    currentPresetBox.getWidth() - 170,
-    24,
-    juce::Justification::centredLeft
-);
+    // The selected snapshot name is rendered by snapshotNameEditor so it can
+    // be renamed directly without changing the stored preset data.
 
     // ============================================================
     // DAW / GP-200 action buttons
@@ -1475,6 +1485,7 @@ void AudioPluginAudioProcessorEditor::resized ()
 
     compareAButton.setBounds (96, 142, 30, 24);
     compareBButton.setBounds (132, 142, 30, 24);
+    snapshotNameEditor.setBounds (170, 140, 232, 28);
 
     presetNameEditor.setBounds (192, 70, 116, 42);
 
@@ -1781,6 +1792,32 @@ void AudioPluginAudioProcessorEditor::updateCompareSnapshotButtons ()
 
     updateButton (compareAButton, selectedA);
     updateButton (compareBButton, selectedB);
+    updateSnapshotNameEditor ();
+}
+
+void AudioPluginAudioProcessorEditor::updateSnapshotNameEditor ()
+{
+    if (snapshotNameEditor.isBeingEdited ())
+        return;
+
+    const auto snapshotIndex = getSelectedCompareSnapshotIndex ();
+
+    if (!processorRef.hasSavedGP200PresetData (snapshotIndex))
+    {
+        snapshotNameEditor.setText ("empty", juce::dontSendNotification);
+        snapshotNameEditor.setEnabled (false);
+        return;
+    }
+
+    snapshotNameEditor.setEnabled (true);
+
+    auto displayName =
+        processorRef.getSavedGP200PresetSnapshotDisplayName (snapshotIndex).trim ();
+
+    if (displayName.isEmpty ())
+        displayName = "Snapshot " + getSelectedCompareSnapshotLabel ();
+
+    snapshotNameEditor.setText (displayName, juce::dontSendNotification);
 }
 
 int AudioPluginAudioProcessorEditor::
@@ -1827,6 +1864,7 @@ void AudioPluginAudioProcessorEditor::saveCurrentPresetToProject ()
         effectsStatusText = "Saved offline preset snapshot " +
                             getSelectedCompareSnapshotLabel () +
                             " to DAW";
+        updateSnapshotNameEditor ();
         updateEffectBlocksUI ();
         repaint ();
         return;
@@ -1855,6 +1893,7 @@ void AudioPluginAudioProcessorEditor::saveCurrentPresetToProject ()
     effectsStatusText = "Saved full preset snapshot " +
                         getSelectedCompareSnapshotLabel () +
                         " to DAW";
+    updateSnapshotNameEditor ();
     updateEffectBlocksUI ();
     repaint ();
 }

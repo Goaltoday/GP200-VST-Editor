@@ -59,6 +59,7 @@ class AudioPluginAudioProcessorEditor final : public juce::AudioProcessorEditor,
 void updateCompareSnapshotButtons ();
 int getSelectedCompareSnapshotIndex () const;
 juce::String getSelectedCompareSnapshotLabel () const;
+void updateSnapshotNameEditor ();
 
     void startFullPresetRestoreFromSnapshot ();
     void buildFullPresetRestoreSteps (const gp200::GP200Preset& preset, const juce::MemoryBlock& presetData);
@@ -178,6 +179,7 @@ double lastInitialPresetRequestMs{0.0};
     juce::TextButton nextBankButton{"BANK +"};
 	juce::TextButton compareAButton{"A"};
 juce::TextButton compareBButton{"B"};
+juce::Label snapshotNameEditor;
 juce::TextButton savePresetButton{"Save to DAW"};
 juce::TextButton recallPresetButton{"Recall from DAW"};
 juce::TextButton storePresetButton{"Store to GP-200"};

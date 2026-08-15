@@ -653,6 +653,13 @@ void AudioPluginAudioProcessor::setGP200PresetSnapshotState (
     else
         snapshot.name = "unknown";
 
+    // A newly saved snapshot starts with a useful independent display name.
+    // The original preset name remains in snapshot.name for legacy behaviour,
+    // while displayName is what the A/B UI shows and allows the user to edit.
+    snapshot.displayName = isUsefulPresetName (presetName)
+                               ? presetName.trim ()
+                               : juce::String (snapshotIndex == 0 ? "Snapshot A" : "Snapshot B");
+
     snapshot.data = presetData;
     ++snapshot.revision;
 }
@@ -703,6 +710,40 @@ juce::String AudioPluginAudioProcessor::getSavedGP200PresetSnapshotName (
 
     return savedGP200PresetSnapshots[
         static_cast<std::size_t> (snapshotIndex)].name;
+}
+
+juce::String AudioPluginAudioProcessor::getSavedGP200PresetSnapshotDisplayName (
+    int snapshotIndex) const
+{
+    if (!isValidSnapshotIndex (snapshotIndex))
+        return {};
+
+    const juce::ScopedLock lock (stateLock);
+
+    const auto& snapshot =
+        savedGP200PresetSnapshots[static_cast<std::size_t> (snapshotIndex)];
+
+    const auto customName = snapshot.displayName.trim ();
+    if (customName.isNotEmpty ())
+        return customName;
+
+    return isUsefulPresetName (snapshot.name) ? snapshot.name.trim () : juce::String {};
+}
+
+void AudioPluginAudioProcessor::setSavedGP200PresetSnapshotDisplayName (
+    int snapshotIndex,
+    const juce::String& displayName)
+{
+    if (!isValidSnapshotIndex (snapshotIndex))
+        return;
+
+    const juce::ScopedLock lock (stateLock);
+
+    auto& snapshot =
+        savedGP200PresetSnapshots[static_cast<std::size_t> (snapshotIndex)];
+
+    snapshot.displayName = displayName.trim ().substring (0, 64);
+    ++snapshot.revision;
 }
 
 juce::String AudioPluginAudioProcessor::getSavedGP200PresetSnapshotSlotText (
@@ -817,7 +858,7 @@ void AudioPluginAudioProcessor::getStateInformation (
     {
         const juce::ScopedLock lock (stateLock);
 
-        xml->setAttribute ("version", 6);
+        xml->setAttribute ("version", 7);
 
         xml->setAttribute ("slotReferenceSlot", savedGP200Slot);
         xml->setAttribute ("slotReferenceName",
@@ -828,12 +869,14 @@ void AudioPluginAudioProcessor::getStateInformation (
 
         xml->setAttribute ("snapshotASlot", snapshotA.slot);
         xml->setAttribute ("snapshotAName", snapshotA.name);
+        xml->setAttribute ("snapshotADisplayName", snapshotA.displayName);
         xml->setAttribute (
             "snapshotADataBase64",
             snapshotA.data.toBase64Encoding ());
 
         xml->setAttribute ("snapshotBSlot", snapshotB.slot);
         xml->setAttribute ("snapshotBName", snapshotB.name);
+        xml->setAttribute ("snapshotBDisplayName", snapshotB.displayName);
         xml->setAttribute (
             "snapshotBDataBase64",
             snapshotB.data.toBase64Encoding ());
@@ -879,6 +922,7 @@ void AudioPluginAudioProcessor::setStateInformation (
     {
         snapshot.slot = -1;
         snapshot.name = "unknown";
+        snapshot.displayName.clear ();
         snapshot.data.setSize (0);
         ++snapshot.revision;
     }
@@ -933,6 +977,11 @@ void AudioPluginAudioProcessor::setStateInformation (
                 "snapshotAName",
                 "unknown");
 
+        snapshotA.displayName =
+            xml->getStringAttribute (
+                "snapshotADisplayName",
+                snapshotA.name);
+
         const auto snapshotADataBase64 =
             xml->getStringAttribute (
                 "snapshotADataBase64",
@@ -951,6 +1000,11 @@ void AudioPluginAudioProcessor::setStateInformation (
             xml->getStringAttribute (
                 "snapshotBName",
                 "unknown");
+
+        snapshotB.displayName =
+            xml->getStringAttribute (
+                "snapshotBDisplayName",
+                snapshotB.name);
 
         const auto snapshotBDataBase64 =
             xml->getStringAttribute (
@@ -978,6 +1032,7 @@ void AudioPluginAudioProcessor::setStateInformation (
         xml->getStringAttribute (
             "gp200PresetName",
             "unknown"));
+    snapshotA.displayName = snapshotA.name;
 
     auto oldPresetDataBase64 =
         xml->getStringAttribute (
