@@ -51,6 +51,7 @@ class AudioPluginAudioProcessorEditor final : public juce::AudioProcessorEditor,
     void exportCurrentPresetToPrst (const juce::File& file);
     void openIRFileChooser ();
     void importIRFile (const juce::File& file);
+    void refreshUserIRSlotItems ();
     void openSoundCloneWindow ();
     void importSoundCloneFile (const juce::File& file, int globalSlot);
 	void syncUserIRSlotBoxFromCabEffectId(juce::uint32 effectId);
@@ -190,7 +191,9 @@ juce::TextButton allBlocksOffButton{"FX OFF"};
 std::unique_ptr<juce::FileChooser> prstFileChooser;
 std::unique_ptr<juce::FileChooser> exportPrstFileChooser;
     juce::TextButton importIRButton{"Import IR"};
+    juce::TextButton renameIRButton{"Rename"};
     juce::ComboBox userIRSlotBox;
+    std::uint64_t lastUserIRNamesRevision{0};
     std::unique_ptr<juce::FileChooser> irFileChooser;
     juce::TextButton soundCloneButton{"Sound Clone"};
 

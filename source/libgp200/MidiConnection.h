@@ -42,6 +42,7 @@ class MidiConnection final : private juce::MidiInputCallback
     juce::String getUserIRDisplayName (int zeroBasedIndex) const;
     juce::String getSnapToneDisplayName (int zeroBasedIndex) const;
     bool renameSnapToneOnGP200 (int zeroBasedIndex, const juce::String& newName);
+    bool renameUserIROnGP200 (int zeroBasedIndex, const juce::String& newName);
 
     bool sendPresetChange (int slot);
 
@@ -173,6 +174,7 @@ class MidiConnection final : private juce::MidiInputCallback
     static std::vector<juce::uint8> buildStateDumpRequest ();
     static std::vector<juce::uint8> buildAssignmentNameQuery (int section, int page, int block);
     static std::vector<juce::uint8> buildRenameSnapTone (int globalSlot, const juce::String& newName);
+    static std::vector<juce::uint8> buildRenameUserIR (int zeroBasedIndex, const juce::String& newName);
     static std::vector<juce::uint8> buildStorePresetCommit (int slot, const juce::String& presetName);
 
     static std::vector<juce::uint8> nibbleEncode (const juce::uint8* data, int size);

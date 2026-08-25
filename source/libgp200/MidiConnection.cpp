@@ -843,6 +843,58 @@ bool MidiConnection::renameSnapToneOnGP200 (int zeroBasedIndex, const juce::Stri
     return true;
 }
 
+bool MidiConnection::renameUserIROnGP200 (int zeroBasedIndex, const juce::String& newName)
+{
+    const juce::ScopedLock lock (stateLock);
+
+    if (midiOutput == nullptr)
+    {
+        lastMessageText = "Cannot rename User IR: MIDI output not open";
+        return false;
+    }
+
+    if (zeroBasedIndex < 0 || zeroBasedIndex >= static_cast<int> (userIRNames.size ()))
+    {
+        lastMessageText = "Cannot rename User IR: invalid slot";
+        return false;
+    }
+
+    if (irUploadPhase != IRUploadPhase::Idle ||
+        soundCloneUploadPhase != SoundCloneUploadPhase::Idle ||
+        presetRestoreTransactionActive)
+    {
+        lastMessageText = "Cannot rename User IR: another transfer is in progress";
+        return false;
+    }
+
+    auto safeName = newName.trim ().substring (0, 16);
+    if (safeName.isEmpty ())
+    {
+        lastMessageText = "Cannot rename User IR: name is empty";
+        return false;
+    }
+
+    for (int i = 0; i < safeName.length (); ++i)
+    {
+        const auto c = safeName[i];
+        if (c < 32 || c > 126)
+            safeName = safeName.replaceSection (i, 1, " ");
+    }
+
+    const auto bytes = buildRenameUserIR (zeroBasedIndex, safeName);
+    auto message = juce::MidiMessage::createSysExMessage (bytes.data () + 1,
+                                                           static_cast<int> (bytes.size () - 2));
+    midiOutput->sendMessageNow (message);
+
+    // No dedicated rename ACK has been identified in the supplied official-editor capture.
+    // Update the local cache immediately; the normal assignment-name refresh can verify it later.
+    userIRNames[static_cast<std::size_t> (zeroBasedIndex)] = safeName;
+    ++assignmentNamesRevision;
+
+    lastMessageText = "Renamed User IR " + juce::String (zeroBasedIndex + 1) + " to: " + safeName;
+    return true;
+}
+
 bool MidiConnection::sendNextAssignmentNameQuery ()
 {
     if (pendingAssignmentNameQueries.empty ())
@@ -2395,6 +2447,36 @@ std::vector<juce::uint8> MidiConnection::buildRenameSnapTone (int globalSlot, co
     decoded[1] = 0x10;
     decoded[2] = 0x14;
     decoded[4] = static_cast<juce::uint8> (globalSlot & 0xFF);
+
+    const auto safeName = newName.trim ().substring (0, 16);
+    for (int i = 0; i < safeName.length () && i < 16; ++i)
+    {
+        const auto c = safeName[i];
+        decoded[8 + i] = static_cast<juce::uint8> (c >= 32 && c <= 126 ? c : ' ');
+    }
+
+    const auto nibbles = nibbleEncode (decoded, 24);
+
+    std::vector<juce::uint8> message;
+    message.reserve (62);
+    message.insert (message.end (), { 0xF0, 0x21, 0x25, 0x7E, 0x47, 0x50, 0x2D, 0x32,
+                                     0x12, 0x18, 0x00, 0x00, 0x00 });
+    message.insert (message.end (), nibbles.begin (), nibbles.end ());
+    message.push_back (0xF7);
+
+    return message;
+}
+
+std::vector<juce::uint8> MidiConnection::buildRenameUserIR (int zeroBasedIndex, const juce::String& newName)
+{
+    juce::uint8 decoded[24]{};
+
+    // Structure confirmed from the supplied official-editor capture:
+    // User IR 1 -> slot 0, User IR 20 -> slot 19.
+    decoded[0] = 0x0C;
+    decoded[1] = 0x10;
+    decoded[2] = 0x14;
+    decoded[4] = static_cast<juce::uint8> (zeroBasedIndex & 0xFF);
 
     const auto safeName = newName.trim ().substring (0, 16);
     for (int i = 0; i < safeName.length () && i < 16; ++i)

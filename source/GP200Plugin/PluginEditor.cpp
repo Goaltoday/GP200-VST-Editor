@@ -232,6 +232,64 @@ bool deserialiseOfflineSnapshot (const juce::MemoryBlock& data,
 }
 
 
+class UserIRRenamePopup final : public juce::Component
+{
+public:
+    using RenameCallback = std::function<void (const juce::String&)>;
+
+    UserIRRenamePopup (const juce::String& currentName, RenameCallback callback)
+        : onRename (std::move (callback))
+    {
+        addAndMakeVisible (nameEditor);
+        addAndMakeVisible (renameButton);
+
+        nameEditor.setTextToShowWhenEmpty ("New User IR name", mutedTextColour.withAlpha (0.65f));
+        nameEditor.setText (currentName, juce::dontSendNotification);
+        nameEditor.setSelectAllWhenFocused (true);
+        nameEditor.setInputRestrictions (16);
+        nameEditor.setColour (juce::TextEditor::backgroundColourId, panelColour);
+        nameEditor.setColour (juce::TextEditor::textColourId, textColour);
+        nameEditor.setColour (juce::TextEditor::outlineColourId, panelOutlineColour);
+        nameEditor.setColour (juce::TextEditor::focusedOutlineColourId, panelOutlineColour.brighter (0.2f));
+
+        renameButton.setButtonText ("Rename");
+        renameButton.setColour (juce::TextButton::buttonColourId, panelColour);
+        renameButton.setColour (juce::TextButton::buttonOnColourId, panelColour.brighter (0.2f));
+        renameButton.setColour (juce::TextButton::textColourOffId, panelOutlineColour);
+        renameButton.setColour (juce::TextButton::textColourOnId, panelOutlineColour.brighter (0.15f));
+
+        nameEditor.onReturnKey = [this] { commit (); };
+        renameButton.onClick = [this] { commit (); };
+        setSize (300, 42);
+    }
+
+    void resized () override
+    {
+        auto area = getLocalBounds ().reduced (6);
+        renameButton.setBounds (area.removeFromRight (82));
+        area.removeFromRight (6);
+        nameEditor.setBounds (area);
+    }
+
+private:
+    void commit ()
+    {
+        const auto name = nameEditor.getText ().trim ().substring (0, 16);
+        if (name.isEmpty ())
+            return;
+
+        if (onRename)
+            onRename (name);
+
+        if (auto* callout = findParentComponentOfClass<juce::CallOutBox> ())
+            callout->dismiss ();
+    }
+
+    juce::TextEditor nameEditor;
+    juce::TextButton renameButton;
+    RenameCallback onRename;
+};
+
 class SoundCloneImportComponent final : public juce::Component,
                                               private juce::ListBoxModel,
                                               private juce::Timer
@@ -935,6 +993,7 @@ addAndMakeVisible (storePresetButton);
 addAndMakeVisible (importPrstButton);
 addAndMakeVisible (exportPrstButton);
 addAndMakeVisible (importIRButton);
+addAndMakeVisible (renameIRButton);
 addAndMakeVisible (soundCloneButton);
 addAndMakeVisible (userIRSlotBox);
     addAndMakeVisible (patchVolumeSlider);
@@ -1288,12 +1347,69 @@ snapshotNameEditor.onTextChange = [this]
         openExportPrstFileChooser ();
     };
 
-    for (int i = 0; i < gp200::userIRCount; ++i)
-        userIRSlotBox.addItem ("User IR " + juce::String (i + 1), i + 1);
+    refreshUserIRSlotItems ();
     userIRSlotBox.setSelectedId (1, juce::dontSendNotification);
     userIRSlotBox.setColour (juce::ComboBox::backgroundColourId, panelColour);
     userIRSlotBox.setColour (juce::ComboBox::textColourId, panelOutlineColour);
     userIRSlotBox.setColour (juce::ComboBox::outlineColourId, panelOutlineColour);
+
+    renameIRButton.setColour (juce::TextButton::buttonColourId, panelColour);
+    renameIRButton.setColour (juce::TextButton::buttonOnColourId, panelColour.brighter (0.2f));
+    renameIRButton.setColour (juce::TextButton::textColourOffId, panelOutlineColour);
+    renameIRButton.setColour (juce::TextButton::textColourOnId, panelOutlineColour.brighter (0.15f));
+    renameIRButton.onClick = [this]
+    {
+        if (!midiConnection.isConnected ())
+        {
+            effectsStatusText = "User IR rename requires a connected GP-200";
+            repaint ();
+            return;
+        }
+
+        if (midiConnection.isIRUploadInProgress () || midiConnection.isSoundCloneUploadInProgress ())
+        {
+            effectsStatusText = "User IR rename unavailable while a transfer is active";
+            repaint ();
+            return;
+        }
+
+        const auto selectedId = userIRSlotBox.getSelectedId ();
+        if (selectedId <= 0)
+            return;
+
+        auto currentName = midiConnection.getUserIRDisplayName (selectedId - 1).trim ();
+        const auto separator = currentName.indexOf (" - ");
+        if (separator >= 0)
+            currentName = currentName.substring (separator + 3).trim ();
+        else if (currentName.startsWithIgnoreCase ("User IR "))
+            currentName.clear ();
+
+        auto content = std::make_unique<UserIRRenamePopup> (
+            currentName,
+            [safeThis = juce::Component::SafePointer<AudioPluginAudioProcessorEditor> (this), selectedId]
+            (const juce::String& newName)
+            {
+                if (safeThis == nullptr)
+                    return;
+
+                if (!safeThis->midiConnection.renameUserIROnGP200 (selectedId - 1, newName))
+                {
+                    safeThis->effectsStatusText = safeThis->midiConnection.getLastMessageText ();
+                    safeThis->repaint ();
+                    return;
+                }
+
+                safeThis->refreshUserIRSlotItems ();
+
+                safeThis->effectsStatusText = "User IR renamed to: " + newName.trim ().substring (0, 16);
+                safeThis->repaint ();
+            });
+
+        juce::CallOutBox::launchAsynchronously (
+            std::move (content),
+            userIRSlotBox.getScreenBounds (),
+            nullptr);
+    };
 
     importIRButton.onClick = [this] { openIRFileChooser (); };
     soundCloneButton.onClick = [this] { openSoundCloneWindow (); };
@@ -1619,8 +1735,9 @@ exportPrstButton.setBounds (
     buttonWidth,
     buttonHeight - prstButtonHeight - prstButtonGap);
 
-    userIRSlotBox.setBounds (418, 191, 130, 28);
-    importIRButton.setBounds (558, 191, 140, 28);
+    userIRSlotBox.setBounds (418, 191, 102, 28);
+    renameIRButton.setBounds (526, 191, 74, 28);
+    importIRButton.setBounds (606, 191, 92, 28);
 
     // ============================================================
     // Patch settings
@@ -1703,11 +1820,19 @@ void AudioPluginAudioProcessorEditor::timerCallback ()
     midiConnection.processSoundCloneUpload ();
     midiConnection.processPendingLivePresetRefresh ();
 
+    const auto userIRNamesRevision = midiConnection.getAssignmentNamesRevision ();
+    if (userIRNamesRevision != lastUserIRNamesRevision)
+    {
+        lastUserIRNamesRevision = userIRNamesRevision;
+        refreshUserIRSlotItems ();
+    }
+
     const bool transferInProgress =
         midiConnection.isIRUploadInProgress () ||
         midiConnection.isSoundCloneUploadInProgress ();
 
     importIRButton.setEnabled (!transferInProgress);
+    renameIRButton.setEnabled (!transferInProgress);
     soundCloneButton.setEnabled (!transferInProgress);
 
     if (midiConnection.isSoundCloneUploadInProgress ())
@@ -2254,6 +2379,27 @@ void AudioPluginAudioProcessorEditor::importSoundCloneFile (
         " -> " + destination;
 
     repaint ();
+}
+
+void AudioPluginAudioProcessorEditor::refreshUserIRSlotItems ()
+{
+    auto selectedId = userIRSlotBox.getSelectedId ();
+    if (selectedId <= 0)
+        selectedId = 1;
+
+    userIRSlotBox.clear (juce::dontSendNotification);
+
+    for (int i = 0; i < gp200::userIRCount; ++i)
+    {
+        auto itemText = midiConnection.getUserIRDisplayName (i);
+        if (itemText.isEmpty ())
+            itemText = "User IR " + juce::String (i + 1);
+
+        userIRSlotBox.addItem (itemText, i + 1);
+    }
+
+    userIRSlotBox.setSelectedId (juce::jlimit (1, static_cast<int> (gp200::userIRCount), selectedId),
+                                 juce::dontSendNotification);
 }
 
 void AudioPluginAudioProcessorEditor::syncUserIRSlotBoxFromCabEffectId(
@@ -2973,6 +3119,7 @@ void AudioPluginAudioProcessorEditor::handleTapTempo ()
         midiConnection.isSoundCloneUploadInProgress ();
 
     importIRButton.setEnabled (!transferInProgress);
+    renameIRButton.setEnabled (!transferInProgress);
     soundCloneButton.setEnabled (!transferInProgress);
 
     // Immediate visual feedback, including the first tap.
@@ -3112,6 +3259,7 @@ void AudioPluginAudioProcessorEditor::toggleTuner()
     // Ocultamos completamente los controles de IR mientras está activo.
     const bool showIRControls = !tunerIsOn;
     userIRSlotBox.setVisible(showIRControls);
+    renameIRButton.setVisible(showIRControls);
     importIRButton.setVisible(showIRControls);
     toneMatchButton.setVisible(showIRControls);
 
