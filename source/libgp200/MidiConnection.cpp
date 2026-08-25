@@ -789,6 +789,60 @@ juce::String MidiConnection::getSnapToneDisplayName (int zeroBasedIndex) const
     return fallback + " - " + name;
 }
 
+bool MidiConnection::renameSnapToneOnGP200 (int zeroBasedIndex, const juce::String& newName)
+{
+    const juce::ScopedLock lock (stateLock);
+
+    if (midiOutput == nullptr)
+    {
+        lastMessageText = "Cannot rename SnapTone: MIDI output not open";
+        return false;
+    }
+
+    if (zeroBasedIndex < 0 || zeroBasedIndex >= static_cast<int> (snapToneNames.size ()))
+    {
+        lastMessageText = "Cannot rename SnapTone: invalid slot";
+        return false;
+    }
+
+    if (irUploadPhase != IRUploadPhase::Idle ||
+        soundCloneUploadPhase != SoundCloneUploadPhase::Idle ||
+        presetRestoreTransactionActive)
+    {
+        lastMessageText = "Cannot rename SnapTone: another transfer is in progress";
+        return false;
+    }
+
+    auto safeName = newName.trim ().substring (0, 16);
+    if (safeName.isEmpty ())
+    {
+        lastMessageText = "Cannot rename SnapTone: name is empty";
+        return false;
+    }
+
+    for (int i = 0; i < safeName.length (); ++i)
+    {
+        const auto c = safeName[i];
+        if (c < 32 || c > 126)
+            safeName = safeName.replaceSection (i, 1, " ");
+    }
+
+    const auto bytes = buildRenameSnapTone (zeroBasedIndex, safeName);
+    auto message = juce::MidiMessage::createSysExMessage (bytes.data () + 1,
+                                                           static_cast<int> (bytes.size () - 2));
+    midiOutput->sendMessageNow (message);
+
+    // No rename ACK has been identified in the supplied official-editor captures.
+    // Keep the UI responsive by updating the local cache immediately.
+    snapToneNames[static_cast<std::size_t> (zeroBasedIndex)] = safeName;
+    ++assignmentNamesRevision;
+
+    const auto blockType = zeroBasedIndex < 5 ? "AMP" : "DIST";
+    const auto localSlot = zeroBasedIndex < 5 ? zeroBasedIndex + 1 : zeroBasedIndex - 4;
+    lastMessageText = "Renamed SnapTone " + juce::String (localSlot) + " (" + blockType + ") to: " + safeName;
+    return true;
+}
+
 bool MidiConnection::sendNextAssignmentNameQuery ()
 {
     if (pendingAssignmentNameQueries.empty ())
@@ -2326,6 +2380,36 @@ std::vector<juce::uint8> MidiConnection::buildStorePresetCommit (int slot, const
 
     message.insert (message.end (), nibbles.begin (), nibbles.end ());
 
+    message.push_back (0xF7);
+
+    return message;
+}
+
+std::vector<juce::uint8> MidiConnection::buildRenameSnapTone (int globalSlot, const juce::String& newName)
+{
+    juce::uint8 decoded[24]{};
+
+    // Structure confirmed from official-editor captures:
+    // AMP 1 -> global slot 0, DIST 1 -> global slot 5.
+    decoded[0] = 0x15;
+    decoded[1] = 0x10;
+    decoded[2] = 0x14;
+    decoded[4] = static_cast<juce::uint8> (globalSlot & 0xFF);
+
+    const auto safeName = newName.trim ().substring (0, 16);
+    for (int i = 0; i < safeName.length () && i < 16; ++i)
+    {
+        const auto c = safeName[i];
+        decoded[8 + i] = static_cast<juce::uint8> (c >= 32 && c <= 126 ? c : ' ');
+    }
+
+    const auto nibbles = nibbleEncode (decoded, 24);
+
+    std::vector<juce::uint8> message;
+    message.reserve (62);
+    message.insert (message.end (), { 0xF0, 0x21, 0x25, 0x7E, 0x47, 0x50, 0x2D, 0x32,
+                                     0x12, 0x18, 0x00, 0x00, 0x00 });
+    message.insert (message.end (), nibbles.begin (), nibbles.end ());
     message.push_back (0xF7);
 
     return message;

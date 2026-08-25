@@ -241,15 +241,18 @@ public:
     using StatusCallback = std::function<juce::String ()>;
     using BusyCallback = std::function<bool ()>;
     using SnapToneNameCallback = std::function<juce::String (int)>;
+    using RenameCallback = std::function<bool (int, const juce::String&)>;
 
     SoundCloneImportComponent (ImportCallback callback,
                                StatusCallback statusCallback,
                                BusyCallback busyCallback,
-                               SnapToneNameCallback snapToneNameCallback)
+                               SnapToneNameCallback snapToneNameCallback,
+                               RenameCallback renameCallback)
         : onImport (std::move (callback)),
           getUploadStatus (std::move (statusCallback)),
           isUploadBusy (std::move (busyCallback)),
-          getSnapToneDisplayName (std::move (snapToneNameCallback))
+          getSnapToneDisplayName (std::move (snapToneNameCallback)),
+          onRename (std::move (renameCallback))
     {
         setLookAndFeel (&spaceGroteskLookAndFeel);
 
@@ -258,6 +261,8 @@ public:
         addAndMakeVisible (browseButton);
         addAndMakeVisible (fileList);
         addAndMakeVisible (destinationBox);
+        addAndMakeVisible (renameEditor);
+        addAndMakeVisible (renameButton);
         addAndMakeVisible (importButton);
         addAndMakeVisible (statusLabel);
 
@@ -327,6 +332,21 @@ public:
         destinationBox.setColour (juce::ComboBox::backgroundColourId, panelColour);
         destinationBox.setColour (juce::ComboBox::textColourId, panelOutlineColour);
         destinationBox.setColour (juce::ComboBox::outlineColourId, panelOutlineColour);
+        destinationBox.onChange = [this] { updateRenameEditorForSelectedSlot (); };
+
+        renameEditor.setTextToShowWhenEmpty ("New SnapTone name", mutedTextColour.withAlpha (0.65f));
+        renameEditor.setFont (gp200ui::regular (14.0f));
+        renameEditor.setColour (juce::TextEditor::backgroundColourId, panelColour);
+        renameEditor.setColour (juce::TextEditor::textColourId, textColour);
+        renameEditor.setColour (juce::TextEditor::outlineColourId, panelOutlineColour);
+        renameEditor.setColour (juce::TextEditor::focusedOutlineColourId, panelOutlineColour.brighter (0.2f));
+        renameEditor.setInputRestrictions (16);
+        renameEditor.onReturnKey = [this] { renameSelectedSnapTone (); };
+
+        renameButton.setButtonText ("Rename");
+        setupButtonColours (renameButton);
+        renameButton.onClick = [this] { renameSelectedSnapTone (); };
+        updateRenameEditorForSelectedSlot ();
 
         importButton.setButtonText ("Import selected clone");
         setupButtonColours (importButton);
@@ -370,7 +390,11 @@ public:
         area.removeFromTop (8);
         auto bottomRow = area.removeFromBottom (34);
         importButton.setBounds (bottomRow.removeFromRight (190));
-        bottomRow.removeFromRight (12);
+        bottomRow.removeFromRight (10);
+        renameButton.setBounds (bottomRow.removeFromRight (92));
+        bottomRow.removeFromRight (8);
+        renameEditor.setBounds (bottomRow.removeFromRight (180));
+        bottomRow.removeFromRight (8);
         destinationBox.setBounds (bottomRow);
         area.removeFromBottom (12);
         fileList.setBounds (area);
@@ -407,6 +431,55 @@ private:
         }
 
         destinationBox.setSelectedId (selectedId, juce::dontSendNotification);
+    }
+
+    void updateRenameEditorForSelectedSlot ()
+    {
+        const auto selectedId = destinationBox.getSelectedId ();
+        if (selectedId <= 0 || getSnapToneDisplayName == nullptr)
+            return;
+
+        auto displayName = getSnapToneDisplayName (selectedId - 1).trim ();
+        const auto separatorIndex = displayName.indexOf (" - ");
+        if (separatorIndex >= 0)
+            displayName = displayName.substring (separatorIndex + 3).trim ();
+        else if (displayName.startsWithIgnoreCase ("SnapTone "))
+            displayName.clear ();
+
+        renameEditor.setText (displayName, juce::dontSendNotification);
+    }
+
+    void renameSelectedSnapTone ()
+    {
+        if (isCurrentlyBusy ())
+        {
+            statusLabel.setColour (juce::Label::textColourId, statusOffColour);
+            statusLabel.setText ("Rename unavailable while a Sound Clone transfer is active.",
+                                 juce::dontSendNotification);
+            return;
+        }
+
+        const auto selectedId = destinationBox.getSelectedId ();
+        const auto newName = renameEditor.getText ().trim ().substring (0, 16);
+        if (selectedId <= 0 || newName.isEmpty () || onRename == nullptr)
+        {
+            statusLabel.setColour (juce::Label::textColourId, statusOffColour);
+            statusLabel.setText ("Enter a SnapTone name (maximum 16 characters).",
+                                 juce::dontSendNotification);
+            return;
+        }
+
+        if (!onRename (selectedId - 1, newName))
+        {
+            statusLabel.setColour (juce::Label::textColourId, statusOffColour);
+            statusLabel.setText ("SnapTone rename failed.", juce::dontSendNotification);
+            return;
+        }
+
+        refreshDestinationItems ();
+        updateRenameEditorForSelectedSlot ();
+        statusLabel.setColour (juce::Label::textColourId, statusOnColour);
+        statusLabel.setText ("SnapTone renamed to: " + newName, juce::dontSendNotification);
     }
 
     struct BrowserEntry
@@ -607,6 +680,7 @@ private:
         {
             uploadWasBusy = true;
             importButton.setEnabled (false);
+            renameButton.setEnabled (false);
             statusLabel.setColour (juce::Label::textColourId, panelOutlineColour);
             const auto status = getUploadStatus != nullptr ? getUploadStatus() : juce::String();
             statusLabel.setText (status.isNotEmpty() ? status : juce::String ("Importing Sound Clone..."),
@@ -628,6 +702,7 @@ private:
             juce::isPositiveAndBelow (selectedRow, static_cast<int> (entries.size ()))
             && !entries[static_cast<std::size_t> (selectedRow)].isDirectory;
         importButton.setEnabled (selectedFile);
+        renameButton.setEnabled (true);
     }
 
     gp200ui::SpaceGroteskLookAndFeel spaceGroteskLookAndFeel;
@@ -635,11 +710,14 @@ private:
     StatusCallback getUploadStatus;
     BusyCallback isUploadBusy;
     SnapToneNameCallback getSnapToneDisplayName;
+    RenameCallback onRename;
     juce::Label pathLabel;
     juce::TextEditor pathEditor;
     juce::TextButton browseButton;
     juce::ListBox fileList;
     juce::ComboBox destinationBox;
+    juce::TextEditor renameEditor;
+    juce::TextButton renameButton;
     juce::TextButton importButton;
     juce::Label statusLabel;
     std::vector<BrowserEntry> entries;
@@ -2137,6 +2215,12 @@ void AudioPluginAudioProcessorEditor::openSoundCloneWindow ()
             return safeThis != nullptr
                        ? safeThis->midiConnection.getSnapToneDisplayName (zeroBasedIndex)
                        : juce::String();
+        },
+        [safeThis = juce::Component::SafePointer<AudioPluginAudioProcessorEditor> (this)]
+        (int zeroBasedIndex, const juce::String& newName)
+        {
+            return safeThis != nullptr
+                       && safeThis->midiConnection.renameSnapToneOnGP200 (zeroBasedIndex, newName);
         }));
 
     options.launchAsync ();
