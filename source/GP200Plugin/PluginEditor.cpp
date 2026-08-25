@@ -290,6 +290,443 @@ private:
     RenameCallback onRename;
 };
 
+class UserIRImportComponent final : public juce::Component,
+                                     private juce::ListBoxModel,
+                                     private juce::Timer
+{
+public:
+    using ImportCallback = std::function<void (const juce::File&, int)>;
+    using StatusCallback = std::function<juce::String ()>;
+    using BusyCallback = std::function<bool ()>;
+    using UserIRNameCallback = std::function<juce::String (int)>;
+    using RenameCallback = std::function<bool (int, const juce::String&)>;
+
+    UserIRImportComponent (ImportCallback callback,
+                           StatusCallback statusCallback,
+                           BusyCallback busyCallback,
+                           UserIRNameCallback userIRNameCallback,
+                           RenameCallback renameCallback,
+                           int initialZeroBasedSlot)
+        : onImport (std::move (callback)),
+          getUploadStatus (std::move (statusCallback)),
+          isUploadBusy (std::move (busyCallback)),
+          getUserIRDisplayName (std::move (userIRNameCallback)),
+          onRename (std::move (renameCallback))
+    {
+        setLookAndFeel (&spaceGroteskLookAndFeel);
+
+        addAndMakeVisible (pathLabel);
+        addAndMakeVisible (pathEditor);
+        addAndMakeVisible (browseButton);
+        addAndMakeVisible (fileList);
+        addAndMakeVisible (destinationBox);
+        addAndMakeVisible (renameEditor);
+        addAndMakeVisible (renameButton);
+        addAndMakeVisible (importButton);
+        addAndMakeVisible (statusLabel);
+
+        juce::PropertiesFile::Options options;
+        options.applicationName = "GP200 VST";
+        options.filenameSuffix = "settings";
+        options.folderName = "GP200Studio";
+        options.osxLibrarySubFolder = "Application Support";
+        settings = std::make_unique<juce::PropertiesFile> (options);
+
+        pathLabel.setText ("IR folder", juce::dontSendNotification);
+        pathLabel.setColour (juce::Label::textColourId, mutedTextColour);
+
+        pathEditor.setTextToShowWhenEmpty (
+            "Choose or type a folder containing WAV impulse responses",
+            mutedTextColour.withAlpha (0.65f));
+        pathEditor.setFont (gp200ui::regular (14.75f));
+        pathEditor.setColour (juce::TextEditor::backgroundColourId, panelColour);
+        pathEditor.setColour (juce::TextEditor::textColourId, textColour);
+        pathEditor.setColour (juce::TextEditor::outlineColourId, panelOutlineColour);
+        pathEditor.setColour (juce::TextEditor::focusedOutlineColourId,
+                              panelOutlineColour.brighter (0.2f));
+        pathEditor.onReturnKey = [this] { setLibraryRootFromEditor (); };
+        pathEditor.onFocusLost = [this]
+        {
+            const auto typedFolder = juce::File (pathEditor.getText ().trim ());
+            if (typedFolder.isDirectory () && typedFolder != currentFolder)
+                setLibraryRoot (typedFolder);
+        };
+
+        browseButton.setButtonText ("Browse...");
+        setupButtonColours (browseButton);
+        browseButton.onClick = [this]
+        {
+            const auto startFolder = currentFolder.isDirectory ()
+                                         ? currentFolder
+                                         : juce::File::getSpecialLocation (
+                                               juce::File::userDocumentsDirectory);
+
+            folderChooser = std::make_unique<juce::FileChooser> (
+                "Choose a User IR folder", startFolder);
+
+            folderChooser->launchAsync (
+                juce::FileBrowserComponent::openMode |
+                    juce::FileBrowserComponent::canSelectDirectories,
+                [safeThis = juce::Component::SafePointer<UserIRImportComponent> (this)]
+                (const juce::FileChooser& chooser)
+                {
+                    if (safeThis == nullptr)
+                        return;
+                    const auto folder = chooser.getResult ();
+                    if (folder.isDirectory ())
+                        safeThis->setLibraryRoot (folder);
+                });
+        };
+
+        fileList.setModel (this);
+        fileList.setRowHeight (28);
+        fileList.setMultipleSelectionEnabled (false);
+        fileList.setColour (juce::ListBox::backgroundColourId, panelColour.darker (0.2f));
+        fileList.setColour (juce::ListBox::outlineColourId, panelOutlineColour);
+        fileList.setOutlineThickness (1);
+
+        refreshDestinationItems (initialZeroBasedSlot + 1);
+        destinationBox.setColour (juce::ComboBox::backgroundColourId, panelColour);
+        destinationBox.setColour (juce::ComboBox::textColourId, panelOutlineColour);
+        destinationBox.setColour (juce::ComboBox::outlineColourId, panelOutlineColour);
+        destinationBox.onChange = [this] { updateRenameEditorForSelectedSlot (); };
+
+        renameEditor.setTextToShowWhenEmpty ("New User IR name", mutedTextColour.withAlpha (0.65f));
+        renameEditor.setFont (gp200ui::regular (14.0f));
+        renameEditor.setColour (juce::TextEditor::backgroundColourId, panelColour);
+        renameEditor.setColour (juce::TextEditor::textColourId, textColour);
+        renameEditor.setColour (juce::TextEditor::outlineColourId, panelOutlineColour);
+        renameEditor.setColour (juce::TextEditor::focusedOutlineColourId, panelOutlineColour.brighter (0.2f));
+        renameEditor.setInputRestrictions (16);
+        renameEditor.onReturnKey = [this] { renameSelectedUserIR (); };
+
+        renameButton.setButtonText ("Rename");
+        setupButtonColours (renameButton);
+        renameButton.onClick = [this] { renameSelectedUserIR (); };
+        updateRenameEditorForSelectedSlot ();
+
+        importButton.setButtonText ("Import selected IR");
+        setupButtonColours (importButton);
+        importButton.setEnabled (false);
+        importButton.onClick = [this] { importSelectedFile (); };
+
+        statusLabel.setText ("Choose a folder to list its .wav files.", juce::dontSendNotification);
+        statusLabel.setColour (juce::Label::textColourId, mutedTextColour);
+        statusLabel.setJustificationType (juce::Justification::centredLeft);
+
+        const auto savedPath = settings != nullptr ? settings->getValue ("userIRFolder") : juce::String ();
+        if (savedPath.isNotEmpty ())
+            setLibraryRoot (juce::File (savedPath));
+
+        startTimerHz (10);
+        setSize (780, 420);
+    }
+
+    ~UserIRImportComponent () override
+    {
+        setLookAndFeel (nullptr);
+        stopTimer ();
+        fileList.setModel (nullptr);
+    }
+
+    void resized () override
+    {
+        auto area = getLocalBounds ().reduced (20);
+        auto pathRow = area.removeFromTop (32);
+        pathLabel.setBounds (pathRow.removeFromLeft (68));
+        pathRow.removeFromLeft (8);
+        browseButton.setBounds (pathRow.removeFromRight (100));
+        pathRow.removeFromRight (8);
+        pathEditor.setBounds (pathRow);
+        area.removeFromTop (12);
+        statusLabel.setBounds (area.removeFromTop (24));
+        area.removeFromTop (8);
+        auto bottomRow = area.removeFromBottom (34);
+        importButton.setBounds (bottomRow.removeFromRight (170));
+        bottomRow.removeFromRight (10);
+        renameButton.setBounds (bottomRow.removeFromRight (92));
+        bottomRow.removeFromRight (8);
+        renameEditor.setBounds (bottomRow.removeFromRight (180));
+        bottomRow.removeFromRight (8);
+        destinationBox.setBounds (bottomRow);
+        area.removeFromBottom (12);
+        fileList.setBounds (area);
+    }
+
+private:
+    struct BrowserEntry
+    {
+        juce::File file;
+        bool isParent{false};
+        bool isDirectory{false};
+    };
+
+    static void setupButtonColours (juce::TextButton& button)
+    {
+        button.setColour (juce::TextButton::buttonColourId, panelColour);
+        button.setColour (juce::TextButton::buttonOnColourId, panelColour.brighter (0.2f));
+        button.setColour (juce::TextButton::textColourOffId, panelOutlineColour);
+        button.setColour (juce::TextButton::textColourOnId, panelOutlineColour.brighter (0.15f));
+    }
+
+    static juce::String extractBareName (juce::String displayName)
+    {
+        displayName = displayName.trim ();
+        const auto separatorIndex = displayName.indexOf (" - ");
+        if (separatorIndex >= 0)
+            return displayName.substring (separatorIndex + 3).trim ();
+        if (displayName.startsWithIgnoreCase ("User IR "))
+            return {};
+        return displayName;
+    }
+
+    void refreshDestinationItems (int preferredId = 0)
+    {
+        auto selectedId = preferredId > 0 ? preferredId : destinationBox.getSelectedId ();
+        selectedId = juce::jlimit (1, static_cast<int> (gp200::userIRCount), selectedId <= 0 ? 1 : selectedId);
+
+        destinationBox.clear (juce::dontSendNotification);
+        for (int i = 0; i < gp200::userIRCount; ++i)
+        {
+            auto itemText = "User IR " + juce::String (i + 1);
+            if (getUserIRDisplayName)
+            {
+                const auto name = extractBareName (getUserIRDisplayName (i));
+                if (name.isNotEmpty ())
+                    itemText += " - " + name;
+            }
+            destinationBox.addItem (itemText, i + 1);
+        }
+        destinationBox.setSelectedId (selectedId, juce::dontSendNotification);
+    }
+
+    void updateRenameEditorForSelectedSlot ()
+    {
+        const auto selectedId = destinationBox.getSelectedId ();
+        if (selectedId <= 0 || getUserIRDisplayName == nullptr)
+            return;
+        renameEditor.setText (extractBareName (getUserIRDisplayName (selectedId - 1)),
+                              juce::dontSendNotification);
+    }
+
+    void renameSelectedUserIR ()
+    {
+        if (isCurrentlyBusy ())
+        {
+            statusLabel.setColour (juce::Label::textColourId, statusOffColour);
+            statusLabel.setText ("Rename unavailable while an IR transfer is active.", juce::dontSendNotification);
+            return;
+        }
+
+        const auto selectedId = destinationBox.getSelectedId ();
+        const auto newName = renameEditor.getText ().trim ().substring (0, 16);
+        if (selectedId <= 0 || newName.isEmpty () || onRename == nullptr)
+        {
+            statusLabel.setColour (juce::Label::textColourId, statusOffColour);
+            statusLabel.setText ("Enter a User IR name (maximum 16 characters).", juce::dontSendNotification);
+            return;
+        }
+
+        if (!onRename (selectedId - 1, newName))
+        {
+            statusLabel.setColour (juce::Label::textColourId, statusOffColour);
+            statusLabel.setText ("User IR rename failed.", juce::dontSendNotification);
+            return;
+        }
+
+        refreshDestinationItems (selectedId);
+        updateRenameEditorForSelectedSlot ();
+        statusLabel.setColour (juce::Label::textColourId, statusOnColour);
+        statusLabel.setText ("User IR renamed to: " + newName, juce::dontSendNotification);
+    }
+
+    int getNumRows () override { return static_cast<int> (entries.size ()); }
+
+    void paintListBoxItem (int rowNumber, juce::Graphics& g, int width, int height, bool rowIsSelected) override
+    {
+        if (!juce::isPositiveAndBelow (rowNumber, static_cast<int> (entries.size ())))
+            return;
+        const auto& entry = entries[static_cast<std::size_t> (rowNumber)];
+        if (rowIsSelected)
+            g.fillAll (panelOutlineColour.withAlpha (0.18f));
+        g.setColour (entry.isDirectory ? panelOutlineColour : (rowIsSelected ? panelOutlineColour : textColour));
+        g.setFont (gp200ui::regular (15.25f));
+        juce::String displayText;
+        if (entry.isParent) displayText = "[..] Parent folder";
+        else if (entry.isDirectory) displayText = "[Folder] " + entry.file.getFileName ();
+        else displayText = entry.file.getFileName ();
+        g.drawText (displayText, 10, 0, width - 20, height, juce::Justification::centredLeft, true);
+    }
+
+    void selectedRowsChanged (int lastRowSelected) override
+    {
+        const bool selectedFile = juce::isPositiveAndBelow (lastRowSelected, static_cast<int> (entries.size ()))
+                               && !entries[static_cast<std::size_t> (lastRowSelected)].isDirectory;
+        importButton.setEnabled (selectedFile && !isCurrentlyBusy ());
+    }
+
+    void listBoxItemDoubleClicked (int row, const juce::MouseEvent&) override
+    {
+        if (!juce::isPositiveAndBelow (row, static_cast<int> (entries.size ())))
+            return;
+        fileList.selectRow (row);
+        const auto entry = entries[static_cast<std::size_t> (row)];
+        if (entry.isDirectory) scanFolder (entry.file);
+        else importSelectedFile ();
+    }
+
+    void setLibraryRootFromEditor () { setLibraryRoot (juce::File (pathEditor.getText ().trim ())); }
+
+    void setLibraryRoot (const juce::File& folder)
+    {
+        if (!folder.isDirectory ())
+        {
+            statusLabel.setColour (juce::Label::textColourId, statusOffColour);
+            statusLabel.setText ("The selected path is not a valid folder.", juce::dontSendNotification);
+            return;
+        }
+        libraryRootFolder = folder;
+        if (settings != nullptr)
+        {
+            settings->setValue ("userIRFolder", libraryRootFolder.getFullPathName ());
+            settings->saveIfNeeded ();
+        }
+        scanFolder (libraryRootFolder);
+    }
+
+    bool canNavigateToParent () const
+    {
+        return libraryRootFolder.isDirectory () && currentFolder.isDirectory ()
+            && currentFolder != libraryRootFolder && currentFolder.isAChildOf (libraryRootFolder);
+    }
+
+    void scanFolder (const juce::File& folder)
+    {
+        entries.clear ();
+        fileList.deselectAllRows ();
+        importButton.setEnabled (false);
+        if (!folder.isDirectory ())
+        {
+            statusLabel.setColour (juce::Label::textColourId, statusOffColour);
+            statusLabel.setText ("The selected path is not a valid folder.", juce::dontSendNotification);
+            fileList.updateContent ();
+            fileList.repaint ();
+            return;
+        }
+
+        currentFolder = folder;
+        pathEditor.setText (currentFolder.getFullPathName (), juce::dontSendNotification);
+        statusLabel.setColour (juce::Label::textColourId, mutedTextColour);
+        int folderCount = 0;
+        int irCount = 0;
+        if (canNavigateToParent ())
+            entries.push_back ({ currentFolder.getParentDirectory (), true, true });
+
+        juce::Array<juce::File> childFolders;
+        currentFolder.findChildFiles (childFolders, juce::File::findDirectories, false);
+        std::sort (childFolders.begin (), childFolders.end (), [] (const juce::File& a, const juce::File& b)
+        { return a.getFileName ().compareNatural (b.getFileName (), true) < 0; });
+        for (const auto& childFolder : childFolders)
+        {
+            entries.push_back ({ childFolder, false, true });
+            ++folderCount;
+        }
+
+        juce::Array<juce::File> allFiles;
+        currentFolder.findChildFiles (allFiles, juce::File::findFiles, false);
+        std::vector<juce::File> irFiles;
+        for (const auto& file : allFiles)
+            if (file.hasFileExtension ("wav"))
+                irFiles.push_back (file);
+        std::sort (irFiles.begin (), irFiles.end (), [] (const juce::File& a, const juce::File& b)
+        { return a.getFileName ().compareNatural (b.getFileName (), true) < 0; });
+        for (const auto& file : irFiles)
+        {
+            entries.push_back ({ file, false, false });
+            ++irCount;
+        }
+
+        fileList.updateContent ();
+        fileList.repaint ();
+        statusLabel.setText (juce::String (folderCount) + (folderCount == 1 ? " folder, " : " folders, ")
+                           + juce::String (irCount) + (irCount == 1 ? " IR file." : " IR files."),
+                             juce::dontSendNotification);
+        if (!entries.empty ()) fileList.selectRow (0);
+    }
+
+    bool isCurrentlyBusy () const { return isUploadBusy != nullptr && isUploadBusy (); }
+
+    void importSelectedFile ()
+    {
+        const auto selectedRow = fileList.getSelectedRow ();
+        if (!juce::isPositiveAndBelow (selectedRow, static_cast<int> (entries.size ()))) return;
+        const auto& entry = entries[static_cast<std::size_t> (selectedRow)];
+        if (entry.isDirectory) return;
+        const auto selectedId = destinationBox.getSelectedId ();
+        if (selectedId <= 0 || onImport == nullptr) return;
+        activeImportFile = entry.file;
+        uploadWasBusy = true;
+        statusLabel.setColour (juce::Label::textColourId, panelOutlineColour);
+        statusLabel.setText ("Starting import: " + activeImportFile.getFileName (), juce::dontSendNotification);
+        importButton.setEnabled (false);
+        onImport (activeImportFile, selectedId - 1);
+    }
+
+    void timerCallback () override
+    {
+        const bool busy = isCurrentlyBusy ();
+        if (busy)
+        {
+            uploadWasBusy = true;
+            importButton.setEnabled (false);
+            renameButton.setEnabled (false);
+            statusLabel.setColour (juce::Label::textColourId, panelOutlineColour);
+            const auto status = getUploadStatus != nullptr ? getUploadStatus () : juce::String ();
+            statusLabel.setText (status.isNotEmpty () ? status : juce::String ("Importing User IR..."),
+                                 juce::dontSendNotification);
+            return;
+        }
+        if (uploadWasBusy)
+        {
+            uploadWasBusy = false;
+            statusLabel.setColour (juce::Label::textColourId, statusOnColour);
+            const auto status = getUploadStatus != nullptr ? getUploadStatus () : juce::String ();
+            statusLabel.setText (status.isNotEmpty () ? status : juce::String ("User IR import completed."),
+                                 juce::dontSendNotification);
+            refreshDestinationItems (destinationBox.getSelectedId ());
+            updateRenameEditorForSelectedSlot ();
+        }
+        const auto selectedRow = fileList.getSelectedRow ();
+        const bool selectedFile = juce::isPositiveAndBelow (selectedRow, static_cast<int> (entries.size ()))
+                               && !entries[static_cast<std::size_t> (selectedRow)].isDirectory;
+        importButton.setEnabled (selectedFile);
+        renameButton.setEnabled (true);
+    }
+
+    gp200ui::SpaceGroteskLookAndFeel spaceGroteskLookAndFeel;
+    ImportCallback onImport;
+    StatusCallback getUploadStatus;
+    BusyCallback isUploadBusy;
+    UserIRNameCallback getUserIRDisplayName;
+    RenameCallback onRename;
+    juce::Label pathLabel;
+    juce::TextEditor pathEditor;
+    juce::TextButton browseButton;
+    juce::ListBox fileList;
+    juce::ComboBox destinationBox;
+    juce::TextEditor renameEditor;
+    juce::TextButton renameButton;
+    juce::TextButton importButton;
+    juce::Label statusLabel;
+    std::vector<BrowserEntry> entries;
+    juce::File libraryRootFolder;
+    juce::File currentFolder;
+    juce::File activeImportFile;
+    bool uploadWasBusy{false};
+    std::unique_ptr<juce::FileChooser> folderChooser;
+    std::unique_ptr<juce::PropertiesFile> settings;
+};
+
 class SoundCloneImportComponent final : public juce::Component,
                                               private juce::ListBoxModel,
                                               private juce::Timer
@@ -993,9 +1430,7 @@ addAndMakeVisible (storePresetButton);
 addAndMakeVisible (importPrstButton);
 addAndMakeVisible (exportPrstButton);
 addAndMakeVisible (importIRButton);
-addAndMakeVisible (renameIRButton);
 addAndMakeVisible (soundCloneButton);
-addAndMakeVisible (userIRSlotBox);
     addAndMakeVisible (patchVolumeSlider);
     addAndMakeVisible (panSlider);
     addAndMakeVisible (tempoSlider);
@@ -1347,69 +1782,10 @@ snapshotNameEditor.onTextChange = [this]
         openExportPrstFileChooser ();
     };
 
+    // Keep the hidden User IR slot selection synchronized with the active CAB.
+    // The actual slot selector and rename controls now live inside the Import IR window.
     refreshUserIRSlotItems ();
     userIRSlotBox.setSelectedId (1, juce::dontSendNotification);
-    userIRSlotBox.setColour (juce::ComboBox::backgroundColourId, panelColour);
-    userIRSlotBox.setColour (juce::ComboBox::textColourId, panelOutlineColour);
-    userIRSlotBox.setColour (juce::ComboBox::outlineColourId, panelOutlineColour);
-
-    renameIRButton.setColour (juce::TextButton::buttonColourId, panelColour);
-    renameIRButton.setColour (juce::TextButton::buttonOnColourId, panelColour.brighter (0.2f));
-    renameIRButton.setColour (juce::TextButton::textColourOffId, panelOutlineColour);
-    renameIRButton.setColour (juce::TextButton::textColourOnId, panelOutlineColour.brighter (0.15f));
-    renameIRButton.onClick = [this]
-    {
-        if (!midiConnection.isConnected ())
-        {
-            effectsStatusText = "User IR rename requires a connected GP-200";
-            repaint ();
-            return;
-        }
-
-        if (midiConnection.isIRUploadInProgress () || midiConnection.isSoundCloneUploadInProgress ())
-        {
-            effectsStatusText = "User IR rename unavailable while a transfer is active";
-            repaint ();
-            return;
-        }
-
-        const auto selectedId = userIRSlotBox.getSelectedId ();
-        if (selectedId <= 0)
-            return;
-
-        auto currentName = midiConnection.getUserIRDisplayName (selectedId - 1).trim ();
-        const auto separator = currentName.indexOf (" - ");
-        if (separator >= 0)
-            currentName = currentName.substring (separator + 3).trim ();
-        else if (currentName.startsWithIgnoreCase ("User IR "))
-            currentName.clear ();
-
-        auto content = std::make_unique<UserIRRenamePopup> (
-            currentName,
-            [safeThis = juce::Component::SafePointer<AudioPluginAudioProcessorEditor> (this), selectedId]
-            (const juce::String& newName)
-            {
-                if (safeThis == nullptr)
-                    return;
-
-                if (!safeThis->midiConnection.renameUserIROnGP200 (selectedId - 1, newName))
-                {
-                    safeThis->effectsStatusText = safeThis->midiConnection.getLastMessageText ();
-                    safeThis->repaint ();
-                    return;
-                }
-
-                safeThis->refreshUserIRSlotItems ();
-
-                safeThis->effectsStatusText = "User IR renamed to: " + newName.trim ().substring (0, 16);
-                safeThis->repaint ();
-            });
-
-        juce::CallOutBox::launchAsynchronously (
-            std::move (content),
-            userIRSlotBox.getScreenBounds (),
-            nullptr);
-    };
 
     importIRButton.onClick = [this] { openIRFileChooser (); };
     soundCloneButton.onClick = [this] { openSoundCloneWindow (); };
@@ -1735,9 +2111,7 @@ exportPrstButton.setBounds (
     buttonWidth,
     buttonHeight - prstButtonHeight - prstButtonGap);
 
-    userIRSlotBox.setBounds (418, 191, 102, 28);
-    renameIRButton.setBounds (526, 191, 74, 28);
-    importIRButton.setBounds (606, 191, 92, 28);
+    importIRButton.setBounds (418, 191, 130, 28);
 
     // ============================================================
     // Patch settings
@@ -1832,7 +2206,6 @@ void AudioPluginAudioProcessorEditor::timerCallback ()
         midiConnection.isSoundCloneUploadInProgress ();
 
     importIRButton.setEnabled (!transferInProgress);
-    renameIRButton.setEnabled (!transferInProgress);
     soundCloneButton.setEnabled (!transferInProgress);
 
     if (midiConnection.isSoundCloneUploadInProgress ())
@@ -2215,42 +2588,72 @@ void AudioPluginAudioProcessorEditor::exportCurrentPresetToPrst (
 
 void AudioPluginAudioProcessorEditor::openIRFileChooser ()
 {
-    if (presetRestoreInProgress || midiConnection.isIRUploadInProgress ())
+    if (presetRestoreInProgress ||
+        midiConnection.isIRUploadInProgress () ||
+        midiConnection.isSoundCloneUploadInProgress ())
     {
         effectsStatusText = "Import IR unavailable: another transfer is in progress";
         repaint ();
         return;
     }
 
-    irFileChooser = std::make_unique<juce::FileChooser> (
-        "Import GP-200 User IR", juce::File{}, "*.wav");
+    auto initialSlot = userIRSlotBox.getSelectedId () - 1;
+    if (!juce::isPositiveAndBelow (initialSlot, static_cast<int> (gp200::userIRCount)))
+        initialSlot = 0;
 
-    irFileChooser->launchAsync (
-        juce::FileBrowserComponent::openMode |
-            juce::FileBrowserComponent::canSelectFiles,
-        [this](const juce::FileChooser& chooser)
-{
-    const auto file = chooser.getResult();
+    juce::DialogWindow::LaunchOptions options;
+    options.dialogTitle = "User IR";
+    options.dialogBackgroundColour = backgroundColour;
+    options.escapeKeyTriggersCloseButton = true;
+    options.useNativeTitleBar = true;
+    options.resizable = false;
+    options.content.setOwned (new UserIRImportComponent (
+        [safeThis = juce::Component::SafePointer<AudioPluginAudioProcessorEditor> (this)]
+        (const juce::File& file, int zeroBasedSlot)
+        {
+            if (safeThis == nullptr)
+                return;
+            safeThis->userIRSlotBox.setSelectedId (zeroBasedSlot + 1, juce::dontSendNotification);
+            safeThis->importIRFile (file);
+        },
+        [safeThis = juce::Component::SafePointer<AudioPluginAudioProcessorEditor> (this)]
+        {
+            return safeThis != nullptr ? safeThis->midiConnection.getIRUploadStatusText () : juce::String ();
+        },
+        [safeThis = juce::Component::SafePointer<AudioPluginAudioProcessorEditor> (this)]
+        {
+            return safeThis != nullptr &&
+                   (safeThis->midiConnection.isIRUploadInProgress () ||
+                    safeThis->midiConnection.isSoundCloneUploadInProgress ());
+        },
+        [safeThis = juce::Component::SafePointer<AudioPluginAudioProcessorEditor> (this)]
+        (int zeroBasedSlot)
+        {
+            return safeThis != nullptr ? safeThis->midiConnection.getUserIRDisplayName (zeroBasedSlot)
+                                       : juce::String ();
+        },
+        [safeThis = juce::Component::SafePointer<AudioPluginAudioProcessorEditor> (this)]
+        (int zeroBasedSlot, const juce::String& newName)
+        {
+            if (safeThis == nullptr)
+                return false;
+            const auto ok = safeThis->midiConnection.renameUserIROnGP200 (zeroBasedSlot, newName);
+            if (ok)
+            {
+                safeThis->userIRSlotBox.setSelectedId (zeroBasedSlot + 1, juce::dontSendNotification);
+                safeThis->refreshUserIRSlotItems ();
+                safeThis->effectsStatusText = "User IR renamed to: " + newName.trim ().substring (0, 16);
+            }
+            else
+            {
+                safeThis->effectsStatusText = safeThis->midiConnection.getLastMessageText ();
+            }
+            safeThis->repaint ();
+            return ok;
+        },
+        initialSlot));
 
-    if (!file.existsAsFile())
-        return;
-
-    if (!file.hasFileExtension("wav"))
-    {
-        effectsStatusText =
-            "Import IR failed: the selected file is not a WAV";
-
-        juce::AlertWindow::showMessageBoxAsync(
-            juce::MessageBoxIconType::WarningIcon,
-            "Invalid IR",
-            "Select a WAV file.");
-
-        repaint();
-        return;
-    }
-
-    importIRFile(file);
-});
+    options.launchAsync ();
 }
 
 void AudioPluginAudioProcessorEditor::importIRFile(
@@ -3119,7 +3522,6 @@ void AudioPluginAudioProcessorEditor::handleTapTempo ()
         midiConnection.isSoundCloneUploadInProgress ();
 
     importIRButton.setEnabled (!transferInProgress);
-    renameIRButton.setEnabled (!transferInProgress);
     soundCloneButton.setEnabled (!transferInProgress);
 
     // Immediate visual feedback, including the first tap.
@@ -3258,8 +3660,6 @@ void AudioPluginAudioProcessorEditor::toggleTuner()
     // El afinador ocupa toda la zona de utilidades de la derecha.
     // Ocultamos completamente los controles de IR mientras está activo.
     const bool showIRControls = !tunerIsOn;
-    userIRSlotBox.setVisible(showIRControls);
-    renameIRButton.setVisible(showIRControls);
     importIRButton.setVisible(showIRControls);
     toneMatchButton.setVisible(showIRControls);
 
