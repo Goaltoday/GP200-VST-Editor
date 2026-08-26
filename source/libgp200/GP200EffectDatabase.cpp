@@ -651,7 +651,7 @@ juce::String GP200EffectDatabase::getEffectDescription (juce::uint32 effectId)
     // User IR names are loaded dynamically from the hardware. This fallback
     // is used only while no assignment name is available.
     if (effectId >= 0x0A100000u && effectId <= 0x0A100013u)
-        return "User IR WAV (44.1 kHz / 1024 samples)";
+        return "User IR WAV (44.1 kHz / 2048 samples)";
 
     if (const auto* description =
             findByEffectId (std::begin (effectDescriptions), std::end (effectDescriptions), effectId))

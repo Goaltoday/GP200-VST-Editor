@@ -7,10 +7,16 @@ namespace gp200
 {
 namespace
 {
-constexpr int sampleCount = 1024;
-constexpr int blobSize = 4124;
+constexpr int sampleCount = 2048;
 constexpr int audioOffset = 28;
+constexpr int audioPayloadSize = sampleCount * 4;
+constexpr int blobSize = audioOffset + audioPayloadSize;
 constexpr int chunkSize = 183;
+
+// IR2048 firmware format: 28-byte header + 2048 x 32-bit PCM samples.
+// 0x201C is transported as a 14-bit MIDI-safe value: 0x1C, 0x40.
+static_assert (audioPayloadSize == 0x2000);
+static_assert (blobSize == 0x201c);
 
 juce::MidiMessage makeSysEx (const std::vector<juce::uint8>& full)
 {
@@ -119,7 +125,8 @@ if (std::abs(reader->sampleRate - 44100.0) > 0.5)
     reader->read (&buffer, 0, samplesToRead, 0, true, false);
 
     std::array<juce::uint8, blobSize> blob{};
-    blob[0]=0x0a; blob[1]=0x10; blob[2]=0x18; blob[3]=0x10;
+    blob[0]=0x0a; blob[1]=0x10; blob[2]=0x18;
+    blob[3]=static_cast<juce::uint8> ((audioPayloadSize >> 8) & 0xff);
     blob[4]=static_cast<juce::uint8> (zeroBasedUserIRSlot);
 
     const auto displayName =
@@ -154,7 +161,9 @@ if (std::abs(reader->sampleRate - 44100.0) > 0.5)
     {
         const auto amount = juce::jmin (chunkSize, blobSize-offset);
         std::vector<juce::uint8> full { 0xf0,0x21,0x25,0x7e,0x47,0x50,0x2d,0x32,
-                                       0x12,0x1c,0x20,
+                                       0x12,
+                                       static_cast<juce::uint8> (blobSize & 0x7f),
+                                       static_cast<juce::uint8> ((blobSize >> 7) & 0x7f),
                                        static_cast<juce::uint8> (offset & 0x7f),
                                        static_cast<juce::uint8> ((offset >> 7) & 0x7f) };
         auto encoded = nibbleEncode (blob.data () + offset, amount);
