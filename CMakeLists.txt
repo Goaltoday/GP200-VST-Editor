@@ -80,6 +80,8 @@ target_sources(GP200Plugin
         source/libgp200/GP200EffectDatabase.h
         source/libgp200/GP200EffectParamDatabase.cpp
         source/libgp200/GP200EffectParamDatabase.h
+        source/libgp200/GP200ModSync.cpp
+        source/libgp200/GP200ModSync.h
         source/libgp200/GP200IR.cpp
         source/libgp200/GP200IR.h
         source/libgp200/GP200SoundClone.cpp
@@ -171,6 +173,8 @@ source_group(
         source/libgp200/GP200EffectDatabase.h
         source/libgp200/GP200EffectParamDatabase.cpp
         source/libgp200/GP200EffectParamDatabase.h
+        source/libgp200/GP200ModSync.cpp
+        source/libgp200/GP200ModSync.h
         source/libgp200/GP200IR.cpp
         source/libgp200/GP200IR.h
         source/libgp200/GP200SoundClone.cpp

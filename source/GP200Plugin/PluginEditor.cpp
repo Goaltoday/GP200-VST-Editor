@@ -13,6 +13,7 @@
 #include "../libgp200/GP200Preset.h"
 #include "../libgp200/GP200EffectParamDatabase.h"
 #include "../libgp200/GP200EffectDatabase.h"
+#include "../libgp200/GP200ModSync.h"
 #include "../libgp200/GP200Constants.h"
 
 #include <cmath>
@@ -2165,6 +2166,15 @@ if (toneMatchPanel != nullptr)
 void AudioPluginAudioProcessorEditor::timerCallback ()
 {
     const auto nowMs = juce::Time::getMillisecondCounterHiRes();
+
+    const auto modSyncRevision = gp200::GP200ModSync::getRevision ();
+    if (modSyncRevision != lastModSyncRevision)
+    {
+        lastModSyncRevision = modSyncRevision;
+        effectBlocksSignature.clear ();
+        effectBlocksDataSignature.clear ();
+    }
+
     const bool connectedNow = midiConnection.isConnected ();
     if (connectedNow != lastConnectionIndicatorState)
     {

@@ -1,4 +1,5 @@
 #include "GP200EffectDatabase.h"
+#include "GP200ModSync.h"
 
 #include <algorithm>
 #include <iterator>
@@ -640,6 +641,10 @@ const GP200EffectInfo* GP200EffectDatabase::findEffect (juce::uint32 effectId)
 
 juce::String GP200EffectDatabase::getEffectName (juce::uint32 effectId)
 {
+    const auto modName = GP200ModSync::getDisplayName (effectId);
+    if (modName.isNotEmpty ())
+        return modName;
+
     if (const auto* effect = findEffect (effectId))
         return effect->name;
 
@@ -648,6 +653,10 @@ juce::String GP200EffectDatabase::getEffectName (juce::uint32 effectId)
 
 juce::String GP200EffectDatabase::getEffectDescription (juce::uint32 effectId)
 {
+    const auto modDescription = GP200ModSync::getDescription (effectId);
+    if (modDescription.isNotEmpty ())
+        return modDescription;
+
     // User IR names are loaded dynamically from the hardware. This fallback
     // is used only while no assignment name is available.
     if (effectId >= 0x0A100000u && effectId <= 0x0A100013u)

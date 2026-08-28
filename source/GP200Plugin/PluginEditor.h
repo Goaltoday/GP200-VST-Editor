@@ -193,6 +193,7 @@ std::unique_ptr<juce::FileChooser> exportPrstFileChooser;
     juce::TextButton importIRButton{"Import IR"};
     juce::ComboBox userIRSlotBox;
     std::uint64_t lastUserIRNamesRevision{0};
+    std::uint64_t lastModSyncRevision{0};
     std::unique_ptr<juce::FileChooser> irFileChooser;
     juce::TextButton soundCloneButton{"Sound Clone"};
 

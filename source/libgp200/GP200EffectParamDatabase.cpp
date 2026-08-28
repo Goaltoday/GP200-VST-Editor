@@ -1,4 +1,5 @@
 #include "GP200EffectParamDatabase.h"
+#include "GP200ModSync.h"
 
 #include <algorithm>
 #include <cmath>
@@ -1188,6 +1189,15 @@ juce::String formatFloatValue (float value)
 
 const GP200EffectParamSet* GP200EffectParamDatabase::findParamsForEffect (juce::uint32 effectId)
 {
+    if (GP200ModSync::isCustomCloAmp (effectId))
+    {
+        thread_local GP200EffectParamSet customCloSet;
+        customCloSet.effectId = effectId;
+        customCloSet.params = paramLayout_050;
+        customCloSet.count = 5;
+        return &customCloSet;
+    }
+
     const auto it = std::lower_bound (std::begin (paramSets),
                                       std::end (paramSets),
                                       effectId,

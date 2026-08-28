@@ -907,7 +907,7 @@ void EffectBlockComponent::rebuildEffectChoices ()
     {
         effectChoiceIds.push_back (info.effectId);
 
-        auto menuName = getEffectDisplayName (info.effectId, info.name).trim ();
+        auto menuName = getEffectDisplayName (info.effectId, gp200::GP200EffectDatabase::getEffectName (info.effectId)).trim ();
         auto menuDescription = gp200::GP200EffectDatabase::getEffectDescription (info.effectId).trim ();
 
         const auto separatorIndex = menuName.indexOf (" - ");
