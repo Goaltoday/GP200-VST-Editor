@@ -59,6 +59,8 @@ class MidiConnection final : private juce::MidiInputCallback
     void invalidatePresetNameCacheSlot (int slot);
 
     bool startIRUpload (const juce::File& wavFile, int zeroBasedUserIRSlot);
+    bool startFactoryCabUpload (const juce::File& wavFile, int zeroBasedFactoryCabIndex);
+    bool startFactoryAmpUpload (const juce::File& cloFile, int zeroBasedFactoryAmpIndex);
     void processIRUpload ();
     bool isIRUploadInProgress () const;
     juce::String getIRUploadStatusText () const;
@@ -243,6 +245,7 @@ class MidiConnection final : private juce::MidiInputCallback
     int irUploadChunkIndex{0};
     double irUploadNextActionMs{0.0};
     juce::String irUploadStatusText{"IR upload: idle"};
+    juce::String irUploadLabel{"User IR"};
 
     enum class SoundCloneUploadPhase { Idle, WaitingAfterPrepare, SendingChunks, WaitingForAck };
     GP200SoundCloneUpload soundCloneUpload;

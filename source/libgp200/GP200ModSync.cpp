@@ -89,6 +89,62 @@ void loadUnlocked (const juce::File& file)
     loadedOnce = true;
     ++revision;
 }
+
+void saveUnlocked ()
+{
+    auto* rootObject = new juce::DynamicObject ();
+    rootObject->setProperty ("schema", "gp200-mod-sync/v1");
+    rootObject->setProperty ("product", "GP-200");
+    rootObject->setProperty ("firmware", "V180");
+
+    auto* features = new juce::DynamicObject ();
+    features->setProperty ("user_ir_samples", 2048);
+    features->setProperty ("factory_cab_samples", 1024);
+    rootObject->setProperty ("features", juce::var (features));
+
+    juce::Array<juce::var> ampArray;
+    juce::Array<juce::var> cabArray;
+
+    for (const auto& [effectId, entry] : overrides)
+    {
+        auto* object = new juce::DynamicObject ();
+        object->setProperty ("effect_id", static_cast<juce::int64> (effectId));
+        object->setProperty ("display_name", entry.displayName);
+        object->setProperty ("source_file", entry.sourceFile);
+        if (entry.customCloAmp)
+            ampArray.add (juce::var (object));
+        else if (entry.isCab)
+            cabArray.add (juce::var (object));
+        else
+            delete object;
+    }
+
+    rootObject->setProperty ("factory_amp_overrides", juce::var (ampArray));
+    rootObject->setProperty ("factory_cab_overrides", juce::var (cabArray));
+
+    const auto file = GP200ModSync::getManifestFile ();
+    file.getParentDirectory ().createDirectory ();
+    file.replaceWithText (juce::JSON::toString (juce::var (rootObject), true) + "\n");
+    lastModificationMs = file.getLastModificationTime ().toMilliseconds ();
+    loadedOnce = true;
+    ++revision;
+}
+
+void recordOverrideUnlocked (juce::uint32 effectId,
+                             const juce::String& displayName,
+                             const juce::String& sourceFile,
+                             bool customCloAmp,
+                             bool isCab)
+{
+    OverrideEntry entry;
+    entry.displayName = displayName.trim ();
+    entry.sourceFile = sourceFile.trim ();
+    entry.customCloAmp = customCloAmp;
+    entry.isCab = isCab;
+    overrides[effectId] = std::move (entry);
+    saveUnlocked ();
+}
+
 } // namespace
 
 juce::File GP200ModSync::getManifestFile ()
@@ -170,4 +226,25 @@ juce::String GP200ModSync::getDescription (juce::uint32 effectId)
         return "Modified Factory CAB";
     return {};
 }
+
+void GP200ModSync::recordFactoryAmpOverride (juce::uint32 effectId,
+                                             const juce::String& displayName,
+                                             const juce::String& sourceFile)
+{
+    const juce::ScopedLock lock (syncLock);
+    if (!loadedOnce)
+        loadUnlocked (getManifestFile ());
+    recordOverrideUnlocked (effectId, displayName, sourceFile, true, false);
+}
+
+void GP200ModSync::recordFactoryCabOverride (juce::uint32 effectId,
+                                             const juce::String& displayName,
+                                             const juce::String& sourceFile)
+{
+    const juce::ScopedLock lock (syncLock);
+    if (!loadedOnce)
+        loadUnlocked (getManifestFile ());
+    recordOverrideUnlocked (effectId, displayName, sourceFile, false, true);
+}
+
 } // namespace gp200

@@ -173,4 +173,94 @@ if (std::abs(reader->sampleRate - 44100.0) > 0.5)
     }
     return juce::Result::ok ();
 }
+
+juce::Result GP200IR::buildFactoryCabUpload (const juce::File& wavFile,
+                                             int zeroBasedFactoryCabIndex,
+                                             GP200IRUpload& result)
+{
+    constexpr int factorySamples = 1024;
+    constexpr int factoryAudioBytes = factorySamples * 4;
+    constexpr int factoryBlobBytes = audioOffset + factoryAudioBytes;
+
+    if (!wavFile.existsAsFile ())
+        return juce::Result::fail ("The selected Factory CAB IR file does not exist.");
+    if (!wavFile.hasFileExtension ("wav"))
+        return juce::Result::fail ("The Factory CAB replacement must be a WAV file.");
+    if (!juce::isPositiveAndBelow (zeroBasedFactoryCabIndex, 70))
+        return juce::Result::fail ("The Factory CAB destination must be between 1 and 70.");
+
+    juce::AudioFormatManager formats;
+    formats.registerBasicFormats ();
+    std::unique_ptr<juce::AudioFormatReader> reader (formats.createReaderFor (wavFile));
+    if (reader == nullptr)
+        return juce::Result::fail ("The WAV file is damaged, unsupported or cannot be read.");
+    if (reader->lengthInSamples <= 0)
+        return juce::Result::fail ("The WAV file contains no audio samples.");
+    if (reader->numChannels != 1)
+        return juce::Result::fail ("Factory CAB IRs must be mono.");
+    if (std::abs (reader->sampleRate - 44100.0) > 0.5)
+        return juce::Result::fail ("Factory CAB IRs must use 44.1 kHz.");
+
+    juce::AudioBuffer<float> buffer (1, factorySamples);
+    buffer.clear ();
+    const auto samplesToRead = static_cast<int> (
+        juce::jmin<juce::int64> (factorySamples, reader->lengthInSamples));
+    reader->read (&buffer, 0, samplesToRead, 0, true, false);
+
+    std::array<juce::uint8, factoryBlobBytes> blob{};
+    blob[0] = 0x0a;
+    blob[1] = 0x10;
+    blob[2] = 0x18;
+    blob[3] = 0x10;
+    blob[6] = 0xfe; // little-endian 0xCAFE marker
+    blob[7] = 0xca;
+    blob[10] = static_cast<juce::uint8> (zeroBasedFactoryCabIndex);
+
+    const auto displayName = wavFile.getFileNameWithoutExtension ().substring (0, 12);
+    const auto* nameBytes = displayName.toRawUTF8 ();
+    for (int i = 0; i < 12 && nameBytes[i] != 0; ++i)
+        blob[12 + i] = static_cast<juce::uint8> (nameBytes[i]);
+
+    for (int i = 0; i < factorySamples; ++i)
+    {
+        const auto value = floatToPcm24 (buffer.getSample (0, i));
+        const auto o = audioOffset + i * 4;
+        blob[o + 0] = static_cast<juce::uint8> (value & 0xff);
+        blob[o + 1] = static_cast<juce::uint8> ((value >> 8) & 0xff);
+        blob[o + 2] = static_cast<juce::uint8> ((value >> 16) & 0xff);
+        blob[o + 3] = static_cast<juce::uint8> ((value >> 24) & 0xff);
+    }
+
+    std::uint16_t checksum = 0;
+    for (int i = audioOffset; i < factoryBlobBytes; ++i)
+        checksum = static_cast<std::uint16_t> (checksum + blob[i]);
+    blob[8] = static_cast<juce::uint8> (checksum & 0xff);
+    blob[9] = static_cast<juce::uint8> ((checksum >> 8) & 0xff);
+
+    result = {};
+    result.displayName = displayName;
+    // Slot 0 is only the stock staging/handshake destination. The 0xCAFE
+    // marker and blob[10] are consumed by the custom firmware before User IR.
+    result.prepareMessage = makeSysEx (makePrepare (0));
+    result.commitMessage = makeSysEx (makeCommit (0));
+
+    for (int offset = 0; offset < factoryBlobBytes; offset += chunkSize)
+    {
+        const auto amount = juce::jmin (chunkSize, factoryBlobBytes - offset);
+        std::vector<juce::uint8> full {
+            0xf0,0x21,0x25,0x7e,0x47,0x50,0x2d,0x32,0x12,
+            static_cast<juce::uint8> (factoryBlobBytes & 0x7f),
+            static_cast<juce::uint8> ((factoryBlobBytes >> 7) & 0x7f),
+            static_cast<juce::uint8> (offset & 0x7f),
+            static_cast<juce::uint8> ((offset >> 7) & 0x7f)
+        };
+        auto encoded = nibbleEncode (blob.data () + offset, amount);
+        full.insert (full.end (), encoded.begin (), encoded.end ());
+        full.push_back (0xf7);
+        result.chunks.push_back (makeSysEx (full));
+    }
+
+    return juce::Result::ok ();
+}
+
 } // namespace gp200

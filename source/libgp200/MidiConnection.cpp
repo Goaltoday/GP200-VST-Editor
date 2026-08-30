@@ -155,11 +155,88 @@ bool MidiConnection::startIRUpload (const juce::File& wavFile, int zeroBasedUser
     }
 
     irUpload = std::move (prepared);
+    irUploadLabel = "User IR " + juce::String (zeroBasedUserIRSlot + 1);
     irUploadChunkIndex = 0;
     midiOutput->sendMessageNow (irUpload.prepareMessage);
     irUploadPhase = IRUploadPhase::WaitingAfterPrepare;
     irUploadNextActionMs = juce::Time::getMillisecondCounterHiRes () + 200.0;
-    irUploadStatusText = "IR upload: preparing User IR " + juce::String (zeroBasedUserIRSlot + 1);
+    irUploadStatusText = irUploadLabel + ": preparing";
+    lastMessageText = irUploadStatusText;
+    return true;
+}
+
+bool MidiConnection::startFactoryCabUpload (const juce::File& wavFile,
+                                            int zeroBasedFactoryCabIndex)
+{
+    const juce::ScopedLock lock (stateLock);
+    if (midiOutput == nullptr)
+    {
+        irUploadStatusText = "Factory CAB upload failed: MIDI output not open";
+        lastMessageText = irUploadStatusText;
+        return false;
+    }
+    if (irUploadPhase != IRUploadPhase::Idle ||
+        soundCloneUploadPhase != SoundCloneUploadPhase::Idle)
+    {
+        irUploadStatusText = "Factory CAB upload unavailable: another transfer is in progress";
+        lastMessageText = irUploadStatusText;
+        return false;
+    }
+
+    GP200IRUpload prepared;
+    const auto result = GP200IR::buildFactoryCabUpload (wavFile, zeroBasedFactoryCabIndex, prepared);
+    if (result.failed ())
+    {
+        irUploadStatusText = "Factory CAB upload failed: " + result.getErrorMessage ();
+        lastMessageText = irUploadStatusText;
+        return false;
+    }
+
+    irUpload = std::move (prepared);
+    irUploadLabel = "Factory CAB " + juce::String (zeroBasedFactoryCabIndex + 1);
+    irUploadChunkIndex = 0;
+    midiOutput->sendMessageNow (irUpload.prepareMessage);
+    irUploadPhase = IRUploadPhase::WaitingAfterPrepare;
+    irUploadNextActionMs = juce::Time::getMillisecondCounterHiRes () + 200.0;
+    irUploadStatusText = irUploadLabel + ": preparing";
+    lastMessageText = irUploadStatusText;
+    return true;
+}
+
+bool MidiConnection::startFactoryAmpUpload (const juce::File& cloFile,
+                                            int zeroBasedFactoryAmpIndex)
+{
+    const juce::ScopedLock lock (stateLock);
+    if (midiOutput == nullptr)
+    {
+        irUploadStatusText = "Factory AMP upload failed: MIDI output not open";
+        lastMessageText = irUploadStatusText;
+        return false;
+    }
+    if (irUploadPhase != IRUploadPhase::Idle ||
+        soundCloneUploadPhase != SoundCloneUploadPhase::Idle)
+    {
+        irUploadStatusText = "Factory AMP upload unavailable: another transfer is in progress";
+        lastMessageText = irUploadStatusText;
+        return false;
+    }
+
+    GP200IRUpload prepared;
+    const auto result = GP200SoundClone::buildFactoryAmpUpload (cloFile, zeroBasedFactoryAmpIndex, prepared);
+    if (result.failed ())
+    {
+        irUploadStatusText = "Factory AMP upload failed: " + result.getErrorMessage ();
+        lastMessageText = irUploadStatusText;
+        return false;
+    }
+
+    irUpload = std::move (prepared);
+    irUploadLabel = "Factory AMP " + juce::String (zeroBasedFactoryAmpIndex + 1);
+    irUploadChunkIndex = 0;
+    midiOutput->sendMessageNow (irUpload.prepareMessage);
+    irUploadPhase = IRUploadPhase::WaitingAfterPrepare;
+    irUploadNextActionMs = juce::Time::getMillisecondCounterHiRes () + 200.0;
+    irUploadStatusText = irUploadLabel + ": preparing";
     lastMessageText = irUploadStatusText;
     return true;
 }
@@ -183,14 +260,14 @@ void MidiConnection::processIRUpload ()
             ++irUploadChunkIndex;
             irUploadPhase = IRUploadPhase::SendingChunks;
             irUploadNextActionMs = now + 30.0;
-            irUploadStatusText = "IR upload: block " + juce::String (irUploadChunkIndex) + "/" +
+            irUploadStatusText = irUploadLabel + ": block " + juce::String (irUploadChunkIndex) + "/" +
                                  juce::String (static_cast<int> (irUpload.chunks.size ()));
             lastMessageText = irUploadStatusText;
             return;
         }
         irUploadPhase = IRUploadPhase::WaitingBeforeCommit;
         irUploadNextActionMs = now + 300.0;
-        irUploadStatusText = "IR upload: waiting before commit";
+        irUploadStatusText = irUploadLabel + ": waiting before commit";
         return;
     }
 
@@ -199,7 +276,7 @@ void MidiConnection::processIRUpload ()
         midiOutput->sendMessageNow (irUpload.commitMessage);
         irUploadPhase = IRUploadPhase::WaitingAfterCommit;
         irUploadNextActionMs = now + 1000.0;
-        irUploadStatusText = "IR upload: commit sent";
+        irUploadStatusText = irUploadLabel + ": commit sent";
         lastMessageText = irUploadStatusText;
         return;
     }
@@ -209,8 +286,7 @@ void MidiConnection::processIRUpload ()
     const auto uploadedName = irUpload.displayName;
 
     irUploadPhase = IRUploadPhase::Idle;
-    irUploadStatusText =
-        "IR upload completed: " + uploadedName;
+    irUploadStatusText = irUploadLabel + " completed: " + uploadedName;
 
     lastMessageText = irUploadStatusText;
     irUpload = {};
@@ -249,7 +325,7 @@ void MidiConnection::processIRUpload ()
     assignmentNameRequestInProgress = false;
 
     assignmentNamesStatusText =
-        "Assignment names: refreshing after IR upload...";
+        "Assignment names: refreshing after staged upload...";
 
     sendNextAssignmentNameQuery();
 }

@@ -484,12 +484,13 @@ private:
     void refreshDestinationItems (int preferredId = 0)
     {
         auto selectedId = preferredId > 0 ? preferredId : destinationBox.getSelectedId ();
-        selectedId = juce::jlimit (1, static_cast<int> (gp200::userIRCount), selectedId <= 0 ? 1 : selectedId);
+        if (selectedId <= 0)
+            selectedId = 1;
 
         destinationBox.clear (juce::dontSendNotification);
         for (int i = 0; i < gp200::userIRCount; ++i)
         {
-            auto itemText = "User IR " + juce::String (i + 1);
+            auto itemText = "User IR " + juce::String (i + 1) + " (2048)";
             if (getUserIRDisplayName)
             {
                 const auto name = extractBareName (getUserIRDisplayName (i));
@@ -498,14 +499,31 @@ private:
             }
             destinationBox.addItem (itemText, i + 1);
         }
+
+        destinationBox.addSeparator ();
+        for (int i = 0; i < 70; ++i)
+        {
+            const auto effectId = 0x0A000000u + static_cast<juce::uint32> (i);
+            auto itemText = "Factory CAB " + juce::String (i + 1) + " (1024) - "
+                          + gp200::GP200EffectDatabase::getEffectName (effectId);
+            destinationBox.addItem (itemText, 1001 + i);
+        }
+
         destinationBox.setSelectedId (selectedId, juce::dontSendNotification);
     }
 
     void updateRenameEditorForSelectedSlot ()
     {
         const auto selectedId = destinationBox.getSelectedId ();
-        if (selectedId <= 0 || getUserIRDisplayName == nullptr)
+        const bool isUserIR = selectedId >= 1 && selectedId <= static_cast<int> (gp200::userIRCount);
+        renameEditor.setEnabled (isUserIR);
+        renameButton.setEnabled (isUserIR && !isCurrentlyBusy ());
+        if (!isUserIR || getUserIRDisplayName == nullptr)
+        {
+            renameEditor.setText ("Factory CAB name follows the plugin MOD_SYNC entry",
+                                  juce::dontSendNotification);
             return;
+        }
         renameEditor.setText (extractBareName (getUserIRDisplayName (selectedId - 1)),
                               juce::dontSendNotification);
     }
@@ -521,7 +539,13 @@ private:
 
         const auto selectedId = destinationBox.getSelectedId ();
         const auto newName = renameEditor.getText ().trim ().substring (0, 16);
-        if (selectedId <= 0 || newName.isEmpty () || onRename == nullptr)
+        if (selectedId < 1 || selectedId > static_cast<int> (gp200::userIRCount))
+        {
+            statusLabel.setColour (juce::Label::textColourId, mutedTextColour);
+            statusLabel.setText ("Factory CAB names are stored by the plugin MOD_SYNC manifest.", juce::dontSendNotification);
+            return;
+        }
+        if (newName.isEmpty () || onRename == nullptr)
         {
             statusLabel.setColour (juce::Label::textColourId, statusOffColour);
             statusLabel.setText ("Enter a User IR name (maximum 16 characters).", juce::dontSendNotification);
@@ -670,7 +694,9 @@ private:
         statusLabel.setColour (juce::Label::textColourId, panelOutlineColour);
         statusLabel.setText ("Starting import: " + activeImportFile.getFileName (), juce::dontSendNotification);
         importButton.setEnabled (false);
-        onImport (activeImportFile, selectedId - 1);
+        const auto destinationCode = selectedId >= 1001 ? 1000 + (selectedId - 1001)
+                                                         : selectedId - 1;
+        onImport (activeImportFile, destinationCode);
     }
 
     void timerCallback () override
@@ -701,7 +727,8 @@ private:
         const bool selectedFile = juce::isPositiveAndBelow (selectedRow, static_cast<int> (entries.size ()))
                                && !entries[static_cast<std::size_t> (selectedRow)].isDirectory;
         importButton.setEnabled (selectedFile);
-        renameButton.setEnabled (true);
+        const auto selectedId = destinationBox.getSelectedId ();
+        renameButton.setEnabled (selectedId >= 1 && selectedId <= static_cast<int> (gp200::userIRCount));
     }
 
     gp200ui::SpaceGroteskLookAndFeel spaceGroteskLookAndFeel;
@@ -899,7 +926,9 @@ public:
 private:
     void refreshDestinationItems ()
     {
-        const auto selectedId = juce::jlimit (1, 10, destinationBox.getSelectedId ());
+        auto selectedId = destinationBox.getSelectedId ();
+        if (selectedId <= 0)
+            selectedId = 1;
 
         destinationBox.clear (juce::dontSendNotification);
 
@@ -913,17 +942,27 @@ private:
             {
                 auto displayName = getSnapToneDisplayName (slot - 1).trim ();
                 const auto separatorIndex = displayName.indexOf (" - ");
-
                 if (separatorIndex >= 0)
                     displayName = displayName.substring (separatorIndex + 3).trim ();
                 else if (displayName.startsWithIgnoreCase ("SnapTone "))
                     displayName.clear ();
-
                 if (displayName.isNotEmpty ())
                     itemText += " - " + displayName;
             }
-
             destinationBox.addItem (itemText, slot);
+        }
+
+        destinationBox.addSeparator ();
+        const auto ampEffects = gp200::GP200EffectDatabase::getEffectsForModule ("AMP");
+        int factoryIndex = 0;
+        for (const auto& effect : ampEffects)
+        {
+            if ((effect.effectId & 0xFF000000u) == 0x0F000000u)
+                continue;
+            destinationBox.addItem ("Factory AMP " + juce::String (factoryIndex + 1) + " - "
+                                        + gp200::GP200EffectDatabase::getEffectName (effect.effectId),
+                                    1001 + factoryIndex);
+            ++factoryIndex;
         }
 
         destinationBox.setSelectedId (selectedId, juce::dontSendNotification);
@@ -932,8 +971,15 @@ private:
     void updateRenameEditorForSelectedSlot ()
     {
         const auto selectedId = destinationBox.getSelectedId ();
-        if (selectedId <= 0 || getSnapToneDisplayName == nullptr)
+        const bool isSnapTone = selectedId >= 1 && selectedId <= 10;
+        renameEditor.setEnabled (isSnapTone);
+        renameButton.setEnabled (isSnapTone && !isCurrentlyBusy ());
+        if (!isSnapTone || getSnapToneDisplayName == nullptr)
+        {
+            renameEditor.setText ("Factory AMP name follows the CLO filename / MOD_SYNC",
+                                  juce::dontSendNotification);
             return;
+        }
 
         auto displayName = getSnapToneDisplayName (selectedId - 1).trim ();
         const auto separatorIndex = displayName.indexOf (" - ");
@@ -941,7 +987,6 @@ private:
             displayName = displayName.substring (separatorIndex + 3).trim ();
         else if (displayName.startsWithIgnoreCase ("SnapTone "))
             displayName.clear ();
-
         renameEditor.setText (displayName, juce::dontSendNotification);
     }
 
@@ -957,7 +1002,13 @@ private:
 
         const auto selectedId = destinationBox.getSelectedId ();
         const auto newName = renameEditor.getText ().trim ().substring (0, 16);
-        if (selectedId <= 0 || newName.isEmpty () || onRename == nullptr)
+        if (selectedId < 1 || selectedId > 10)
+        {
+            statusLabel.setColour (juce::Label::textColourId, mutedTextColour);
+            statusLabel.setText ("Factory AMP names are derived from the CLO filename and saved in MOD_SYNC.", juce::dontSendNotification);
+            return;
+        }
+        if (newName.isEmpty () || onRename == nullptr)
         {
             statusLabel.setColour (juce::Label::textColourId, statusOffColour);
             statusLabel.setText ("Enter a SnapTone name (maximum 16 characters).",
@@ -1166,7 +1217,9 @@ private:
         statusLabel.setColour (juce::Label::textColourId, panelOutlineColour);
         statusLabel.setText ("Starting import: " + activeImportFile.getFileName (), juce::dontSendNotification);
         importButton.setEnabled (false);
-        onImport (activeImportFile, selectedId - 1);
+        const auto destinationCode = selectedId >= 1001 ? 1000 + (selectedId - 1001)
+                                                         : selectedId - 1;
+        onImport (activeImportFile, destinationCode);
     }
 
     void timerCallback () override
@@ -1198,7 +1251,8 @@ private:
             juce::isPositiveAndBelow (selectedRow, static_cast<int> (entries.size ()))
             && !entries[static_cast<std::size_t> (selectedRow)].isDirectory;
         importButton.setEnabled (selectedFile);
-        renameButton.setEnabled (true);
+        const auto selectedId = destinationBox.getSelectedId ();
+        renameButton.setEnabled (selectedId >= 1 && selectedId <= 10);
     }
 
     gp200ui::SpaceGroteskLookAndFeel spaceGroteskLookAndFeel;
@@ -2612,19 +2666,39 @@ void AudioPluginAudioProcessorEditor::openIRFileChooser ()
         initialSlot = 0;
 
     juce::DialogWindow::LaunchOptions options;
-    options.dialogTitle = "User IR";
+    options.dialogTitle = "IR Library — User IR 2048 / Factory CAB 1024";
     options.dialogBackgroundColour = backgroundColour;
     options.escapeKeyTriggersCloseButton = true;
     options.useNativeTitleBar = true;
     options.resizable = false;
     options.content.setOwned (new UserIRImportComponent (
         [safeThis = juce::Component::SafePointer<AudioPluginAudioProcessorEditor> (this)]
-        (const juce::File& file, int zeroBasedSlot)
+        (const juce::File& file, int destinationCode)
         {
             if (safeThis == nullptr)
                 return;
-            safeThis->userIRSlotBox.setSelectedId (zeroBasedSlot + 1, juce::dontSendNotification);
-            safeThis->importIRFile (file);
+
+            if (destinationCode < 1000)
+            {
+                safeThis->userIRSlotBox.setSelectedId (destinationCode + 1, juce::dontSendNotification);
+                safeThis->importIRFile (file);
+                return;
+            }
+
+            const auto factoryCabIndex = destinationCode - 1000;
+            if (!safeThis->midiConnection.startFactoryCabUpload (file, factoryCabIndex))
+            {
+                safeThis->effectsStatusText = safeThis->midiConnection.getIRUploadStatusText ();
+                safeThis->repaint ();
+                return;
+            }
+
+            const auto effectId = 0x0A000000u + static_cast<juce::uint32> (factoryCabIndex);
+            const auto displayName = file.getFileNameWithoutExtension ().substring (0, 12);
+            gp200::GP200ModSync::recordFactoryCabOverride (effectId, displayName, file.getFileName ());
+            safeThis->effectsStatusText = "Factory CAB upload started: " + file.getFileName ()
+                                        + " -> Factory CAB " + juce::String (factoryCabIndex + 1);
+            safeThis->repaint ();
         },
         [safeThis = juce::Component::SafePointer<AudioPluginAudioProcessorEditor> (this)]
         {
@@ -2724,7 +2798,7 @@ void AudioPluginAudioProcessorEditor::openSoundCloneWindow ()
     }
 
     juce::DialogWindow::LaunchOptions options;
-    options.dialogTitle = "Sound Clone";
+    options.dialogTitle = "Sound Clone — SnapTone / Factory AMP CLO";
     options.dialogBackgroundColour = backgroundColour;
     options.escapeKeyTriggersCloseButton = true;
     options.useNativeTitleBar = true;
@@ -2738,14 +2812,17 @@ void AudioPluginAudioProcessorEditor::openSoundCloneWindow ()
         },
         [safeThis = juce::Component::SafePointer<AudioPluginAudioProcessorEditor> (this)]
         {
-            return safeThis != nullptr
-                       ? safeThis->midiConnection.getSoundCloneUploadStatusText()
-                       : juce::String();
+            if (safeThis == nullptr)
+                return juce::String ();
+            if (safeThis->midiConnection.isIRUploadInProgress ())
+                return safeThis->midiConnection.getIRUploadStatusText ();
+            return safeThis->midiConnection.getSoundCloneUploadStatusText ();
         },
         [safeThis = juce::Component::SafePointer<AudioPluginAudioProcessorEditor> (this)]
         {
             return safeThis != nullptr
-                       && safeThis->midiConnection.isSoundCloneUploadInProgress();
+                       && (safeThis->midiConnection.isSoundCloneUploadInProgress ()
+                           || safeThis->midiConnection.isIRUploadInProgress ());
         },
         [safeThis = juce::Component::SafePointer<AudioPluginAudioProcessorEditor> (this)]
         (int zeroBasedIndex)
@@ -2768,6 +2845,48 @@ void AudioPluginAudioProcessorEditor::importSoundCloneFile (
     const juce::File& file,
     int globalSlot)
 {
+    if (globalSlot >= 1000)
+    {
+        const auto factoryAmpIndex = globalSlot - 1000;
+        if (!midiConnection.startFactoryAmpUpload (file, factoryAmpIndex))
+        {
+            effectsStatusText = midiConnection.getIRUploadStatusText ();
+            juce::AlertWindow::showMessageBoxAsync (
+                juce::MessageBoxIconType::WarningIcon,
+                "Factory AMP CLO import failed",
+                effectsStatusText);
+            repaint ();
+            return;
+        }
+
+        const auto ampEffects = gp200::GP200EffectDatabase::getEffectsForModule ("AMP");
+        int currentFactoryIndex = 0;
+        juce::uint32 effectId = 0;
+        juce::String stockName;
+        for (const auto& effect : ampEffects)
+        {
+            if ((effect.effectId & 0xFF000000u) == 0x0F000000u)
+                continue;
+            if (currentFactoryIndex == factoryAmpIndex)
+            {
+                effectId = effect.effectId;
+                stockName = effect.name;
+                break;
+            }
+            ++currentFactoryIndex;
+        }
+
+        const auto displayName = file.getFileNameWithoutExtension ().substring (0, 20);
+        if (effectId != 0)
+            gp200::GP200ModSync::recordFactoryAmpOverride (effectId, displayName, file.getFileName ());
+
+        effectsStatusText = "Factory AMP CLO upload started: " + displayName
+                          + " -> " + (stockName.isNotEmpty () ? stockName
+                                                              : "Factory AMP " + juce::String (factoryAmpIndex + 1));
+        repaint ();
+        return;
+    }
+
     if (!midiConnection.startSoundCloneUpload (file, globalSlot))
     {
         effectsStatusText = midiConnection.getSoundCloneUploadStatusText ();
@@ -2782,9 +2901,9 @@ void AudioPluginAudioProcessorEditor::importSoundCloneFile (
     }
 
     const juce::String destination =
-    juce::String ("SnapTone ")
-    + juce::String (globalSlot + 1)
-    + (globalSlot < 5 ? " (AMP)" : " (DIST)");
+        juce::String ("SnapTone ")
+        + juce::String (globalSlot + 1)
+        + (globalSlot < 5 ? " (AMP)" : " (DIST)");
 
     effectsStatusText =
         juce::String ("Sound Clone import started: ") +

@@ -16,6 +16,13 @@ class GP200ModSync final
     static juce::String getSourceFile (juce::uint32 effectId);
     static juce::String getDescription (juce::uint32 effectId);
 
+    static void recordFactoryAmpOverride (juce::uint32 effectId,
+                                          const juce::String& displayName,
+                                          const juce::String& sourceFile);
+    static void recordFactoryCabOverride (juce::uint32 effectId,
+                                          const juce::String& displayName,
+                                          const juce::String& sourceFile);
+
     static juce::File getManifestFile ();
 };
 } // namespace gp200
