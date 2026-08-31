@@ -240,8 +240,7 @@ bool MidiConnection::startFactoryAmpUpload (const juce::File& cloFile,
     midiOutput->sendMessageNow (irUpload.prepareMessage);
     irUploadPhase = IRUploadPhase::WaitingAfterPrepare;
 
-    // v1.3 robustness test: only Factory AMP/CLO gets relaxed timing.
-    irUploadNextActionMs = juce::Time::getMillisecondCounterHiRes () + 250.0;
+    irUploadNextActionMs = juce::Time::getMillisecondCounterHiRes () + 200.0;
     irUploadStatusText = irUploadLabel + ": preparing";
     lastMessageText = irUploadStatusText;
     return true;
@@ -257,10 +256,6 @@ void MidiConnection::processIRUpload ()
     if (now < irUploadNextActionMs)
         return;
 
-    const bool isFactoryAmpUpload = irUploadLabel.startsWith ("Factory AMP ");
-    const double chunkDelayMs      = isFactoryAmpUpload ? 40.0   : 30.0;
-    const double preCommitDelayMs  = isFactoryAmpUpload ? 400.0  : 300.0;
-    const double postCommitDelayMs = isFactoryAmpUpload ? 1200.0 : 1000.0;
 
     if (irUploadPhase == IRUploadPhase::WaitingAfterPrepare ||
         irUploadPhase == IRUploadPhase::SendingChunks)
@@ -270,7 +265,7 @@ void MidiConnection::processIRUpload ()
             midiOutput->sendMessageNow (irUpload.chunks[static_cast<std::size_t> (irUploadChunkIndex)]);
             ++irUploadChunkIndex;
             irUploadPhase = IRUploadPhase::SendingChunks;
-            irUploadNextActionMs = now + chunkDelayMs;
+            irUploadNextActionMs = now + 30.0;
             irUploadStatusText = irUploadLabel + ": block " + juce::String (irUploadChunkIndex) + "/" +
                                  juce::String (static_cast<int> (irUpload.chunks.size ()));
             lastMessageText = irUploadStatusText;
@@ -278,7 +273,7 @@ void MidiConnection::processIRUpload ()
         }
 
         irUploadPhase = IRUploadPhase::WaitingBeforeCommit;
-        irUploadNextActionMs = now + preCommitDelayMs;
+        irUploadNextActionMs = now + 300.0;
         irUploadStatusText = irUploadLabel + ": waiting before commit";
         return;
     }
@@ -287,7 +282,7 @@ void MidiConnection::processIRUpload ()
     {
         midiOutput->sendMessageNow (irUpload.commitMessage);
         irUploadPhase = IRUploadPhase::WaitingAfterCommit;
-        irUploadNextActionMs = now + postCommitDelayMs;
+        irUploadNextActionMs = now + 1000.0;
         irUploadStatusText = irUploadLabel + ": commit sent";
         lastMessageText = irUploadStatusText;
         return;
