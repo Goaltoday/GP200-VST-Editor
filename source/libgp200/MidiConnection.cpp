@@ -240,8 +240,7 @@ bool MidiConnection::startFactoryAmpUpload (const juce::File& cloFile,
     midiOutput->sendMessageNow (irUpload.prepareMessage);
     irUploadPhase = IRUploadPhase::WaitingAfterPrepare;
 
-    // v1.3: only Factory AMP/CLO gets slightly more relaxed timings.
-    // User IR2048, Factory CAB and stock SnapTone keep their proven timings.
+    // v1.3 robustness test: only Factory AMP/CLO gets relaxed timing.
     irUploadNextActionMs = juce::Time::getMillisecondCounterHiRes () + 250.0;
     irUploadStatusText = irUploadLabel + ": preparing";
     lastMessageText = irUploadStatusText;
@@ -304,13 +303,11 @@ void MidiConnection::processIRUpload ()
         lastMessageText = irUploadStatusText;
         irUpload = {};
 
-        // Factory AMP v1.3: no assignment-name query immediately after the
-        // custom flash/activation transaction. It removes unnecessary MIDI
-        // traffic at the point where intermittent timeouts were observed.
+        // Avoid immediate extra MIDI traffic after the custom Factory AMP
+        // flash/readback/hot-activation transaction.
         if (wasFactoryAmpUpload)
             return;
 
-        // Keep existing behaviour for User IR and Factory CAB.
         pendingAssignmentNameQueries.clear ();
 
         for (auto& name : userIRNames)
@@ -333,12 +330,8 @@ void MidiConnection::processIRUpload ()
             pendingAssignmentNameQueries.push_back ({ 0, 1, block });
         }
 
-        for (int block = 0;
-             block < static_cast<int> (snapToneCount);
-             ++block)
-        {
+        for (int block = 0; block < static_cast<int> (snapToneCount); ++block)
             pendingAssignmentNameQueries.push_back ({ 1, 0, block });
-        }
 
         currentAssignmentNameQuery = {};
         assignmentNameRequestInProgress = false;
@@ -358,7 +351,6 @@ juce::String MidiConnection::getIRUploadStatusText () const
     const juce::ScopedLock lock (stateLock);
     return irUploadStatusText;
 }
-
 
 
 bool MidiConnection::startSoundCloneUpload (const juce::File& cloFile, int globalSlot)
@@ -419,71 +411,102 @@ void MidiConnection::processSoundCloneUpload ()
                 soundCloneUpload.chunks[static_cast<std::size_t> (soundCloneUploadChunkIndex)]);
 
             ++soundCloneUploadChunkIndex;
-            soundCloneUploadPhase = SoundCloneUploadPhase::SendingChunks;
-            soundCloneUploadNextActionMs = now + 30.0;
             soundCloneUploadStatusText =
                 "Sound Clone upload: block " + juce::String (soundCloneUploadChunkIndex) + "/" +
                 juce::String (static_cast<int> (soundCloneUpload.chunks.size ()));
             lastMessageText = soundCloneUploadStatusText;
+
+            if (soundCloneUploadChunkIndex >= static_cast<int> (soundCloneUpload.chunks.size ()))
+            {
+                // Stock SnapTone route: no separate commit. The GP-200 sends
+                // 0x12/0x0C after it has processed the final model chunk.
+                soundCloneUploadPhase = SoundCloneUploadPhase::WaitingForAck;
+                soundCloneUploadNextActionMs = now + 2000.0;
+                soundCloneUploadStatusText = "Sound Clone upload: waiting for GP-200 confirmation";
+                lastMessageText = soundCloneUploadStatusText;
+            }
+            else
+            {
+                soundCloneUploadPhase = SoundCloneUploadPhase::SendingChunks;
+                soundCloneUploadNextActionMs = now + 30.0;
+            }
+
             return;
         }
 
-        soundCloneUploadPhase = SoundCloneUploadPhase::WaitingBeforeCommit;
-        soundCloneUploadNextActionMs = now + 200.0;
-        soundCloneUploadStatusText = "Sound Clone upload: waiting before commit";
-        return;
-    }
-
-    if (soundCloneUploadPhase == SoundCloneUploadPhase::WaitingBeforeCommit)
-    {
-        midiOutput->sendMessageNow (soundCloneUpload.commitMessage);
-        soundCloneUploadPhase = SoundCloneUploadPhase::WaitingAfterCommit;
-        soundCloneUploadNextActionMs = now + 100.0;
-        soundCloneUploadStatusText = "Sound Clone upload: commit sent";
+        soundCloneUploadPhase = SoundCloneUploadPhase::WaitingForAck;
+        soundCloneUploadNextActionMs = now + 2000.0;
+        soundCloneUploadStatusText = "Sound Clone upload: waiting for GP-200 confirmation";
         lastMessageText = soundCloneUploadStatusText;
         return;
     }
 
-    if (soundCloneUploadPhase == SoundCloneUploadPhase::WaitingAfterCommit)
+    if (soundCloneUploadPhase == SoundCloneUploadPhase::WaitingForAck)
     {
-        const auto uploadedName = soundCloneUpload.displayName;
-        const auto uploadedSlot = soundCloneUpload.globalSlot;
-
+        soundCloneUploadStatusText = "Sound Clone upload failed: GP-200 confirmation timeout";
+        lastMessageText = soundCloneUploadStatusText;
         soundCloneUploadPhase = SoundCloneUploadPhase::Idle;
-        soundCloneUploadStatusText = "Sound Clone upload completed: " + uploadedName;
-        lastMessageText = soundCloneUploadStatusText;
         soundCloneUpload = {};
-
-        // Keep the existing cache visible. Update the imported slot immediately,
-        // then refresh all names from the GP-200 without clearing the others.
-        if (juce::isPositiveAndBelow (uploadedSlot, static_cast<int> (snapToneNames.size ())))
-        {
-            snapToneNames[static_cast<std::size_t> (uploadedSlot)] = uploadedName;
-            ++assignmentNamesRevision;
-        }
-
-        pendingAssignmentNameQueries.clear ();
-
-        constexpr int assignmentPageSize = 16;
-
-        for (int block = 0; block < assignmentPageSize; ++block)
-            pendingAssignmentNameQueries.push_back ({ 0, 0, block });
-
-        for (int block = 0;
-             block < static_cast<int> (userIRCount) - assignmentPageSize;
-             ++block)
-        {
-            pendingAssignmentNameQueries.push_back ({ 0, 1, block });
-        }
-
-        for (int block = 0; block < static_cast<int> (snapToneCount); ++block)
-            pendingAssignmentNameQueries.push_back ({ 1, 0, block });
-
-        currentAssignmentNameQuery = {};
-        assignmentNameRequestInProgress = false;
-        assignmentNamesStatusText = "Assignment names: refreshing after Sound Clone upload...";
-        sendNextAssignmentNameQuery ();
+        soundCloneUploadChunkIndex = 0;
     }
+}
+
+bool MidiConnection::handleSoundCloneUploadAck (const juce::uint8* data, int size)
+{
+    if (soundCloneUploadPhase != SoundCloneUploadPhase::WaitingForAck || size < 38)
+        return false;
+
+    const bool matchesObservedAck =
+        data[8]  == 0x12 && data[9]  == 0x0c &&
+        data[13] == 0x01 && data[14] == 0x04 && data[15] == 0x01 &&
+        data[18] == 0x08 && data[26] == 0x01;
+
+    if (!matchesObservedAck)
+        return false;
+
+    const auto acknowledgedSlot = static_cast<int> (data[22]);
+    if (acknowledgedSlot != soundCloneUpload.globalSlot)
+        return false;
+
+    completeSoundCloneUpload ();
+    return true;
+}
+
+void MidiConnection::completeSoundCloneUpload ()
+{
+    const auto uploadedName = soundCloneUpload.displayName;
+    const auto uploadedSlot = soundCloneUpload.globalSlot;
+
+    soundCloneUploadPhase = SoundCloneUploadPhase::Idle;
+    soundCloneUploadStatusText = "Sound Clone upload completed: " + uploadedName;
+    lastMessageText = soundCloneUploadStatusText;
+    soundCloneUpload = {};
+    soundCloneUploadChunkIndex = 0;
+
+    if (juce::isPositiveAndBelow (uploadedSlot, static_cast<int> (snapToneNames.size ())))
+    {
+        snapToneNames[static_cast<std::size_t> (uploadedSlot)] = uploadedName;
+        ++assignmentNamesRevision;
+    }
+
+    pendingAssignmentNameQueries.clear ();
+    constexpr int assignmentPageSize = 16;
+
+    for (int block = 0; block < assignmentPageSize; ++block)
+        pendingAssignmentNameQueries.push_back ({ 0, 0, block });
+
+    for (int block = 0;
+         block < static_cast<int> (userIRCount) - assignmentPageSize;
+         ++block)
+        pendingAssignmentNameQueries.push_back ({ 0, 1, block });
+
+    for (int block = 0; block < static_cast<int> (snapToneCount); ++block)
+        pendingAssignmentNameQueries.push_back ({ 1, 0, block });
+
+    currentAssignmentNameQuery = {};
+    assignmentNameRequestInProgress = false;
+    assignmentNamesStatusText = "Assignment names: refreshing after Sound Clone upload...";
+    sendNextAssignmentNameQuery ();
 }
 
 bool MidiConnection::isSoundCloneUploadInProgress () const
@@ -501,6 +524,10 @@ juce::String MidiConnection::getSoundCloneUploadStatusText () const
 bool MidiConnection::requestCurrentPresetFromGP200 ()
 {
     const juce::ScopedLock lock (stateLock);
+
+    if (presetRestoreTransactionActive)
+        return false;
+
     if (midiOutput == nullptr)
     {
         lastMessageText = "Cannot query current preset: MIDI output not open";
@@ -565,7 +592,7 @@ bool MidiConnection::sendEnterEditorModeUnlocked ()
 
 bool MidiConnection::sendStateDumpRequestUnlocked ()
 {
-    if (midiOutput == nullptr)
+    if (midiOutput == nullptr || presetRestoreTransactionActive)
         return false;
 
     // Preset-name reads and live preset reads both use 0x12/0x18. Do not start
@@ -597,7 +624,7 @@ void MidiConnection::processStartupHandshake ()
 {
     const juce::ScopedLock lock (stateLock);
 
-    if (midiOutput == nullptr)
+    if (midiOutput == nullptr || presetRestoreTransactionActive)
         return;
 
     const auto nowMs = juce::Time::getMillisecondCounterHiRes ();
@@ -810,6 +837,108 @@ juce::String MidiConnection::getSnapToneDisplayName (int zeroBasedIndex) const
         return fallback;
 
     return fallback + " - " + name;
+}
+
+bool MidiConnection::renameSnapToneOnGP200 (int zeroBasedIndex, const juce::String& newName)
+{
+    const juce::ScopedLock lock (stateLock);
+
+    if (midiOutput == nullptr)
+    {
+        lastMessageText = "Cannot rename SnapTone: MIDI output not open";
+        return false;
+    }
+
+    if (zeroBasedIndex < 0 || zeroBasedIndex >= static_cast<int> (snapToneNames.size ()))
+    {
+        lastMessageText = "Cannot rename SnapTone: invalid slot";
+        return false;
+    }
+
+    if (irUploadPhase != IRUploadPhase::Idle ||
+        soundCloneUploadPhase != SoundCloneUploadPhase::Idle ||
+        presetRestoreTransactionActive)
+    {
+        lastMessageText = "Cannot rename SnapTone: another transfer is in progress";
+        return false;
+    }
+
+    auto safeName = newName.trim ().substring (0, 16);
+    if (safeName.isEmpty ())
+    {
+        lastMessageText = "Cannot rename SnapTone: name is empty";
+        return false;
+    }
+
+    for (int i = 0; i < safeName.length (); ++i)
+    {
+        const auto c = safeName[i];
+        if (c < 32 || c > 126)
+            safeName = safeName.replaceSection (i, 1, " ");
+    }
+
+    const auto bytes = buildRenameSnapTone (zeroBasedIndex, safeName);
+    auto message = juce::MidiMessage::createSysExMessage (bytes.data () + 1,
+                                                           static_cast<int> (bytes.size () - 2));
+    midiOutput->sendMessageNow (message);
+
+    snapToneNames[static_cast<std::size_t> (zeroBasedIndex)] = safeName;
+    ++assignmentNamesRevision;
+
+    const auto blockType = zeroBasedIndex < 5 ? "AMP" : "DIST";
+    const auto localSlot = zeroBasedIndex < 5 ? zeroBasedIndex + 1 : zeroBasedIndex - 4;
+    lastMessageText = "Renamed SnapTone " + juce::String (localSlot) + " (" + blockType + ") to: " + safeName;
+    return true;
+}
+
+bool MidiConnection::renameUserIROnGP200 (int zeroBasedIndex, const juce::String& newName)
+{
+    const juce::ScopedLock lock (stateLock);
+
+    if (midiOutput == nullptr)
+    {
+        lastMessageText = "Cannot rename User IR: MIDI output not open";
+        return false;
+    }
+
+    if (zeroBasedIndex < 0 || zeroBasedIndex >= static_cast<int> (userIRNames.size ()))
+    {
+        lastMessageText = "Cannot rename User IR: invalid slot";
+        return false;
+    }
+
+    if (irUploadPhase != IRUploadPhase::Idle ||
+        soundCloneUploadPhase != SoundCloneUploadPhase::Idle ||
+        presetRestoreTransactionActive)
+    {
+        lastMessageText = "Cannot rename User IR: another transfer is in progress";
+        return false;
+    }
+
+    auto safeName = newName.trim ().substring (0, 16);
+    if (safeName.isEmpty ())
+    {
+        lastMessageText = "Cannot rename User IR: name is empty";
+        return false;
+    }
+
+    for (int i = 0; i < safeName.length (); ++i)
+    {
+        const auto c = safeName[i];
+        if (c < 32 || c > 126)
+            safeName = safeName.replaceSection (i, 1, " ");
+    }
+
+    const auto bytes = buildRenameUserIR (zeroBasedIndex, safeName);
+    auto message = juce::MidiMessage::createSysExMessage (bytes.data () + 1,
+                                                           static_cast<int> (bytes.size () - 2));
+    midiOutput->sendMessageNow (message);
+
+    userIRNames[static_cast<std::size_t> (zeroBasedIndex)] = safeName;
+    ++assignmentNamesRevision;
+
+    lastMessageText = "Renamed User IR " + juce::String (zeroBasedIndex + 1) + " to: " + safeName;
+    return true;
 }
 
 bool MidiConnection::sendNextAssignmentNameQuery ()
@@ -1634,6 +1763,13 @@ void MidiConnection::adoptCurrentPresetSnapshot (int slot,
     livePresetReadPending = false;
     liveRefreshPending = false;
     liveRefreshDueMs = 0.0;
+
+    currentStateRequestQueued = false;
+    currentStateRequestPending = false;
+
+    if (presetRestoreTransactionActive)
+        startupHandshakePhase = StartupHandshakePhase::Ready;
+
     lastRequestedNameSlot = currentSlot;
     presetDumpSlot = -1;
     presetReadChunks.clear ();
@@ -1655,10 +1791,43 @@ void MidiConnection::adoptCurrentPresetSnapshot (int slot,
                       currentPresetName;
 }
 
+void MidiConnection::beginPresetRestoreTransaction ()
+{
+    const juce::ScopedLock lock (stateLock);
+
+    presetRestoreTransactionActive = true;
+    currentStateRequestQueued = false;
+    currentStateRequestPending = false;
+    stateDumpChunks.clear ();
+    liveRefreshPending = false;
+    liveRefreshDueMs = 0.0;
+    livePresetReadPending = false;
+    presetNameRequestPending = false;
+    lastRequestedNameSlot = -1;
+    presetDumpSlot = -1;
+    presetReadChunks.clear ();
+}
+
+void MidiConnection::endPresetRestoreTransaction ()
+{
+    const juce::ScopedLock lock (stateLock);
+
+    currentStateRequestQueued = false;
+    currentStateRequestPending = false;
+    stateDumpChunks.clear ();
+    liveRefreshPending = false;
+    liveRefreshDueMs = 0.0;
+    livePresetReadPending = false;
+    presetNameRequestPending = false;
+    presetDumpSlot = -1;
+    presetReadChunks.clear ();
+    presetRestoreTransactionActive = false;
+}
+
 bool MidiConnection::requestPresetNameForCurrentSlotIfNeeded ()
 {
     const juce::ScopedLock lock (stateLock);
-    if (!presetNameRequestPending)
+    if (presetRestoreTransactionActive || !presetNameRequestPending)
         return false;
 
     if (currentSlot < 0)
@@ -1705,6 +1874,7 @@ void MidiConnection::processPresetNameScan ()
     presetNameScanner.handleTimeout (nowMs);
 
     const bool busy = midiOutput == nullptr
+                      || presetRestoreTransactionActive
                       || irUploadPhase != IRUploadPhase::Idle
                       || soundCloneUploadPhase != SoundCloneUploadPhase::Idle
                       || currentStateRequestQueued
@@ -2285,6 +2455,56 @@ std::vector<juce::uint8> MidiConnection::buildStorePresetCommit (int slot, const
     return message;
 }
 
+std::vector<juce::uint8> MidiConnection::buildRenameSnapTone (int globalSlot, const juce::String& newName)
+{
+    juce::uint8 decoded[24]{};
+    decoded[0] = 0x15;
+    decoded[1] = 0x10;
+    decoded[2] = 0x14;
+    decoded[4] = static_cast<juce::uint8> (globalSlot & 0xFF);
+
+    const auto safeName = newName.trim ().substring (0, 16);
+    for (int i = 0; i < safeName.length () && i < 16; ++i)
+    {
+        const auto c = safeName[i];
+        decoded[8 + i] = static_cast<juce::uint8> (c >= 32 && c <= 126 ? c : ' ');
+    }
+
+    const auto nibbles = nibbleEncode (decoded, 24);
+    std::vector<juce::uint8> message;
+    message.reserve (62);
+    message.insert (message.end (), { 0xF0, 0x21, 0x25, 0x7E, 0x47, 0x50, 0x2D, 0x32,
+                                     0x12, 0x18, 0x00, 0x00, 0x00 });
+    message.insert (message.end (), nibbles.begin (), nibbles.end ());
+    message.push_back (0xF7);
+    return message;
+}
+
+std::vector<juce::uint8> MidiConnection::buildRenameUserIR (int zeroBasedIndex, const juce::String& newName)
+{
+    juce::uint8 decoded[24]{};
+    decoded[0] = 0x0C;
+    decoded[1] = 0x10;
+    decoded[2] = 0x14;
+    decoded[4] = static_cast<juce::uint8> (zeroBasedIndex & 0xFF);
+
+    const auto safeName = newName.trim ().substring (0, 16);
+    for (int i = 0; i < safeName.length () && i < 16; ++i)
+    {
+        const auto c = safeName[i];
+        decoded[8 + i] = static_cast<juce::uint8> (c >= 32 && c <= 126 ? c : ' ');
+    }
+
+    const auto nibbles = nibbleEncode (decoded, 24);
+    std::vector<juce::uint8> message;
+    message.reserve (62);
+    message.insert (message.end (), { 0xF0, 0x21, 0x25, 0x7E, 0x47, 0x50, 0x2D, 0x32,
+                                     0x12, 0x18, 0x00, 0x00, 0x00 });
+    message.insert (message.end (), nibbles.begin (), nibbles.end ());
+    message.push_back (0xF7);
+    return message;
+}
+
 std::vector<juce::uint8> MidiConnection::nibbleEncode (const juce::uint8* data, int size)
 {
     std::vector<juce::uint8> encoded;
@@ -2434,6 +2654,9 @@ void MidiConnection::parseGP200SysEx (const juce::uint8* data, int size)
     const auto command = data[8];
     const auto subCommand = data[9];
 
+    if (command == 0x12 && subCommand == 0x0c && handleSoundCloneUploadAck (data, size))
+        return;
+
     if (command == 0x12 && subCommand == 0x1C)
     {
         handleAssignmentNameResponse (data, size);
@@ -2492,6 +2715,9 @@ void MidiConnection::parseGP200SysEx (const juce::uint8* data, int size)
             lastMessageText = data[26] != 0 ? "AUTO CAB enabled" : "AUTO CAB disabled";
             return;
         }
+
+        if (presetRestoreTransactionActive)
+            return;
 
         if (data[14] == 0x08)
         {
@@ -2556,6 +2782,9 @@ void MidiConnection::parseGP200SysEx (const juce::uint8* data, int size)
         return;
     }
 
+    if (command == 0x12 && subCommand == 0x18 && presetRestoreTransactionActive)
+        return;
+
     // Response to preset read request. We use the same 7 chunks for:
     // - preset name
     // - full decoded preset dump capture
@@ -2600,7 +2829,8 @@ void MidiConnection::parseGP200SysEx (const juce::uint8* data, int size)
     // state as complete after all five have arrived.
     if (command == 0x12 && subCommand == 0x4E && size >= 28)
     {
-        collectStateDumpChunk (data, size);
+        if (!presetRestoreTransactionActive)
+            collectStateDumpChunk (data, size);
         return;
     }
 
