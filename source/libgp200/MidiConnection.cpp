@@ -419,112 +419,71 @@ void MidiConnection::processSoundCloneUpload ()
                 soundCloneUpload.chunks[static_cast<std::size_t> (soundCloneUploadChunkIndex)]);
 
             ++soundCloneUploadChunkIndex;
+            soundCloneUploadPhase = SoundCloneUploadPhase::SendingChunks;
+            soundCloneUploadNextActionMs = now + 30.0;
             soundCloneUploadStatusText =
                 "Sound Clone upload: block " + juce::String (soundCloneUploadChunkIndex) + "/" +
                 juce::String (static_cast<int> (soundCloneUpload.chunks.size ()));
             lastMessageText = soundCloneUploadStatusText;
-
-            if (soundCloneUploadChunkIndex >= static_cast<int> (soundCloneUpload.chunks.size ()))
-            {
-                // Stock SnapTone/SoundClone route: the official editor does NOT
-                // send a separate commit. The GP-200 sends 0x12/0x0C when the
-                // model has been processed successfully.
-                soundCloneUploadPhase = SoundCloneUploadPhase::WaitingForAck;
-                soundCloneUploadNextActionMs = now + 2000.0;
-                soundCloneUploadStatusText = "Sound Clone upload: waiting for GP-200 confirmation";
-                lastMessageText = soundCloneUploadStatusText;
-            }
-            else
-            {
-                soundCloneUploadPhase = SoundCloneUploadPhase::SendingChunks;
-                soundCloneUploadNextActionMs = now + 30.0;
-            }
-
             return;
         }
 
-        // Defensive fallback: normally the final chunk switches directly to
-        // WaitingForAck above.
-        soundCloneUploadPhase = SoundCloneUploadPhase::WaitingForAck;
-        soundCloneUploadNextActionMs = now + 2000.0;
-        soundCloneUploadStatusText = "Sound Clone upload: waiting for GP-200 confirmation";
+        soundCloneUploadPhase = SoundCloneUploadPhase::WaitingBeforeCommit;
+        soundCloneUploadNextActionMs = now + 200.0;
+        soundCloneUploadStatusText = "Sound Clone upload: waiting before commit";
+        return;
+    }
+
+    if (soundCloneUploadPhase == SoundCloneUploadPhase::WaitingBeforeCommit)
+    {
+        midiOutput->sendMessageNow (soundCloneUpload.commitMessage);
+        soundCloneUploadPhase = SoundCloneUploadPhase::WaitingAfterCommit;
+        soundCloneUploadNextActionMs = now + 100.0;
+        soundCloneUploadStatusText = "Sound Clone upload: commit sent";
         lastMessageText = soundCloneUploadStatusText;
         return;
     }
 
-    if (soundCloneUploadPhase == SoundCloneUploadPhase::WaitingForAck)
+    if (soundCloneUploadPhase == SoundCloneUploadPhase::WaitingAfterCommit)
     {
-        soundCloneUploadStatusText = "Sound Clone upload failed: GP-200 confirmation timeout";
-        lastMessageText = soundCloneUploadStatusText;
+        const auto uploadedName = soundCloneUpload.displayName;
+        const auto uploadedSlot = soundCloneUpload.globalSlot;
+
         soundCloneUploadPhase = SoundCloneUploadPhase::Idle;
+        soundCloneUploadStatusText = "Sound Clone upload completed: " + uploadedName;
+        lastMessageText = soundCloneUploadStatusText;
         soundCloneUpload = {};
-        soundCloneUploadChunkIndex = 0;
+
+        // Keep the existing cache visible. Update the imported slot immediately,
+        // then refresh all names from the GP-200 without clearing the others.
+        if (juce::isPositiveAndBelow (uploadedSlot, static_cast<int> (snapToneNames.size ())))
+        {
+            snapToneNames[static_cast<std::size_t> (uploadedSlot)] = uploadedName;
+            ++assignmentNamesRevision;
+        }
+
+        pendingAssignmentNameQueries.clear ();
+
+        constexpr int assignmentPageSize = 16;
+
+        for (int block = 0; block < assignmentPageSize; ++block)
+            pendingAssignmentNameQueries.push_back ({ 0, 0, block });
+
+        for (int block = 0;
+             block < static_cast<int> (userIRCount) - assignmentPageSize;
+             ++block)
+        {
+            pendingAssignmentNameQueries.push_back ({ 0, 1, block });
+        }
+
+        for (int block = 0; block < static_cast<int> (snapToneCount); ++block)
+            pendingAssignmentNameQueries.push_back ({ 1, 0, block });
+
+        currentAssignmentNameQuery = {};
+        assignmentNameRequestInProgress = false;
+        assignmentNamesStatusText = "Assignment names: refreshing after Sound Clone upload...";
+        sendNextAssignmentNameQuery ();
     }
-}
-
-bool MidiConnection::handleSoundCloneUploadAck (const juce::uint8* data, int size)
-{
-    // Observed completion reply from GP-200 after the final stock SoundClone
-    // data chunk. Byte 22 contains the global SnapTone destination slot.
-    if (soundCloneUploadPhase != SoundCloneUploadPhase::WaitingForAck || size < 38)
-        return false;
-
-    const bool matchesObservedAck =
-        data[8]  == 0x12 && data[9]  == 0x0c &&
-        data[13] == 0x01 && data[14] == 0x04 && data[15] == 0x01 &&
-        data[18] == 0x08 && data[26] == 0x01;
-
-    if (!matchesObservedAck)
-        return false;
-
-    const auto acknowledgedSlot = static_cast<int> (data[22]);
-    if (acknowledgedSlot != soundCloneUpload.globalSlot)
-        return false;
-
-    completeSoundCloneUpload ();
-    return true;
-}
-
-void MidiConnection::completeSoundCloneUpload ()
-{
-    const auto uploadedName = soundCloneUpload.displayName;
-    const auto uploadedSlot = soundCloneUpload.globalSlot;
-
-    soundCloneUploadPhase = SoundCloneUploadPhase::Idle;
-    soundCloneUploadStatusText = "Sound Clone upload completed: " + uploadedName;
-    lastMessageText = soundCloneUploadStatusText;
-    soundCloneUpload = {};
-    soundCloneUploadChunkIndex = 0;
-
-    // Preserve the stock SnapTone behaviour: update this slot locally, then
-    // refresh assignment names without clearing the existing cache.
-    if (juce::isPositiveAndBelow (uploadedSlot, static_cast<int> (snapToneNames.size ())))
-    {
-        snapToneNames[static_cast<std::size_t> (uploadedSlot)] = uploadedName;
-        ++assignmentNamesRevision;
-    }
-
-    pendingAssignmentNameQueries.clear ();
-
-    constexpr int assignmentPageSize = 16;
-
-    for (int block = 0; block < assignmentPageSize; ++block)
-        pendingAssignmentNameQueries.push_back ({ 0, 0, block });
-
-    for (int block = 0;
-         block < static_cast<int> (userIRCount) - assignmentPageSize;
-         ++block)
-    {
-        pendingAssignmentNameQueries.push_back ({ 0, 1, block });
-    }
-
-    for (int block = 0; block < static_cast<int> (snapToneCount); ++block)
-        pendingAssignmentNameQueries.push_back ({ 1, 0, block });
-
-    currentAssignmentNameQuery = {};
-    assignmentNameRequestInProgress = false;
-    assignmentNamesStatusText = "Assignment names: refreshing after Sound Clone upload...";
-    sendNextAssignmentNameQuery ();
 }
 
 bool MidiConnection::isSoundCloneUploadInProgress () const
@@ -2474,9 +2433,6 @@ void MidiConnection::parseGP200SysEx (const juce::uint8* data, int size)
 
     const auto command = data[8];
     const auto subCommand = data[9];
-
-    if (command == 0x12 && subCommand == 0x0c && handleSoundCloneUploadAck (data, size))
-        return;
 
     if (command == 0x12 && subCommand == 0x1C)
     {
