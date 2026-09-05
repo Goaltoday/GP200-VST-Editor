@@ -20,40 +20,10 @@
 
 namespace gp200
 {
-MidiConnection::MidiConnection () { startTimer (40); }
-
-void MidiConnection::timerCallback ()
-{
-    // Message-thread work only; never MIDI I/O or JSON I/O on processBlock.
-    const auto now = juce::Time::getMillisecondCounterHiRes ();
-    if (!isConnected ())
-    {
-        if (!initialPortConnectionMade && now >= nextInitialPortAttemptMs)
-        {
-            nextInitialPortAttemptMs = now + 1000.0;
-            if (connectToGP200 ()) requestCurrentPresetFromGP200 ();
-        }
-        return;
-    }
-    const juce::ScopedLock lock (stateLock);
-    if (irUploadPhase != IRUploadPhase::Idle || soundCloneUploadPhase != SoundCloneUploadPhase::Idle || presetRestoreTransactionActive)
-    {
-        if (modSyncActive) finishModSyncFailure ("interrupted by a transfer");
-        return;
-    }
-    if (startupHandshakePhase == StartupHandshakePhase::Idle) requestCurrentPresetFromGP200 ();
-    processStartupHandshake ();
-    if (!modSyncActive)
-    {
-        processPendingLivePresetRefresh ();
-        requestPresetNameForCurrentSlotIfNeeded ();
-    }
-}
-
+MidiConnection::MidiConnection () = default;
 
 MidiConnection::~MidiConnection ()
 {
-    stopTimer ();
     disconnect ();
 }
 
@@ -90,7 +60,6 @@ bool MidiConnection::connectToGP200 ()
         lastMessageText = "Listening for GP-200 messages...";
     }
 
-    initialPortConnectionMade = true;
     midiInput->start ();
     return true;
 }

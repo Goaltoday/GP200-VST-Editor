@@ -23,7 +23,7 @@
 
 namespace gp200
 {
-class MidiConnection final : private juce::MidiInputCallback, private juce::Timer
+class MidiConnection final : private juce::MidiInputCallback
 {
   public:
     MidiConnection ();
@@ -119,13 +119,10 @@ class MidiConnection final : private juce::MidiInputCallback, private juce::Time
     void endPresetRestoreTransaction ();
 
   private:
-    void timerCallback () override;
     bool processModSyncStartup (double nowMs);
     bool handleModSyncResponse (const juce::uint8* data, int size);
     void finishModSyncFailure (const juce::String& reason);
     void applyModSyncSnapshot ();
-    bool initialPortConnectionMade{false};
-    double nextInitialPortAttemptMs{0};
     bool modSyncAttempted{false}; // Lifetime of this instance; NOT reset on disconnect/editor reopen.
     bool modSyncActive{false};
     bool modSyncWaiting{false};

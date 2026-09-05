@@ -1,0 +1,31 @@
+STEP11 — Corrección de apertura MIDI y sondeo en segundo plano
+
+Aplicar SOBRE el VST con los siete archivos STEP11 ya instalados.
+Sustituir los tres archivos source/ de este ZIP respetando sus rutas y recompilar el VST3.
+Cerrar el DAW antes de sustituir el VST3 compilado y volver a cargar el proyecto.
+No requiere cambiar el HTML ni volver a flashear el firmware.
+
+Cambios:
+- MidiConnection.cpp: elimina el temporizador autónomo y los intentos de conexión cada segundo.
+- MidiConnection.h: elimina la herencia Timer y sus variables de sondeo.
+- PluginEditor.cpp: restaura exactamente el archivo de la base experimental anterior a STEP11.
+  El temporizador del editor vuelve a avanzar el handshake y las lecturas pendientes.
+- Se conserva MOD_SYNC MS11 y su indicador de un intento por instancia.
+- La apertura de puertos vuelve a producirse al abrir la ventana del editor.
+  Sin abrir ninguna ventana, no hay conexión ni consulta MIDI automática.
+- Al cerrar la ventana se pausa el avance del handshake/MOD_SYNC; al reabrir continúa.
+  Cerrar la ventana no libera los puertos: esto conserva el comportamiento anterior.
+
+Validación:
+- Comprobación de sintaxis C++ de MidiConnection con JUCE local.
+- Apertura de puertos idéntica a la base experimental.
+- PluginEditor.cpp idéntico byte a byte a la base experimental.
+- No contiene VST3 compilado. Pendiente compilar en Windows y probar en el DAW.
+
+Prueba en tu equipo:
+1. Cargar varias instancias con GP-200 desconectada: comprobar que desaparecen los tirones.
+2. Conectar la pedalera y abrir el editor: comprobar detección, preset y MOD_SYNC.
+3. Repetir tu flujo de bajo/guitarra con varias instancias.
+
+Este parche revierte la regresión del sondeo. No implementa un puerto compartido
+entre instancias ni demuestra que el controlador permita varias aperturas simultáneas.
