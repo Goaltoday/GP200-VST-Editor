@@ -1,31 +1,28 @@
-STEP11 — Corrección de apertura MIDI y sondeo en segundo plano
+STEP11 MOD_SYNC: cierre de lectura y diagnóstico
+Aplicar sobre STEP11 con MIDI_CONNECTION_FIX ya instalado. Sustituir los tres
+archivos source/ y recompilar. Cerrar el DAW antes de instalar el VST3 nuevo.
+No requiere cambios en HTML o firmware.
 
-Aplicar SOBRE el VST con los siete archivos STEP11 ya instalados.
-Sustituir los tres archivos source/ de este ZIP respetando sus rutas y recompilar el VST3.
-Cerrar el DAW antes de sustituir el VST3 compilado y volver a cargar el proyecto.
-No requiere cambiar el HTML ni volver a flashear el firmware.
+Corrige un bloqueo posible: presetNameRequestPending podía seguir activo después
+de recibir los siete bloques del preset cuando no se extraía nombre del primer
+bloque. MOD_SYNC esperaba esa marca indefinidamente. Ahora se limpian las marcas
+pendientes al completar la lectura del slot activo. No se cancela una lectura
+de otro slot ni se cambia el preset físico.
 
-Cambios:
-- MidiConnection.cpp: elimina el temporizador autónomo y los intentos de conexión cada segundo.
-- MidiConnection.h: elimina la herencia Timer y sus variables de sondeo.
-- PluginEditor.cpp: restaura exactamente el archivo de la base experimental anterior a STEP11.
-  El temporizador del editor vuelve a avanzar el handshake y las lecturas pendientes.
-- Se conserva MOD_SYNC MS11 y su indicador de un intento por instancia.
-- La apertura de puertos vuelve a producirse al abrir la ventana del editor.
-  Sin abrir ninguna ventana, no hay conexión ni consulta MIDI automática.
-- Al cerrar la ventana se pausa el avance del handshake/MOD_SYNC; al reabrir continúa.
-  Cerrar la ventana no libera los puertos: esto conserva el comportamiento anterior.
+Añade el estado MOD_SYNC junto al indicador de conexión:
+- waiting for startup: el handshake todavía no está listo.
+- waiting: indica la operación que impide iniciar la consulta.
+- page N/19, retry N: consulta enviada, pendiente de respuesta/progreso.
+- OK: fotografía completa aplicada, con número de CAB y AMP overrides.
+- timed out: se agotaron las respuestas esperadas. No demuestra firmware stock.
 
-Validación:
-- Comprobación de sintaxis C++ de MidiConnection con JUCE local.
-- Apertura de puertos idéntica a la base experimental.
-- PluginEditor.cpp idéntico byte a byte a la base experimental.
-- No contiene VST3 compilado. Pendiente compilar en Windows y probar en el DAW.
+Mantiene apertura al abrir editor, sin sondeo de puertos en segundo plano.
+Mantener la ventana abierta durante el arranque. Un fallo consume el intento
+por instancia; para repetir la prueba crear una instancia nueva/reiniciar DAW.
 
-Prueba en tu equipo:
-1. Cargar varias instancias con GP-200 desconectada: comprobar que desaparecen los tirones.
-2. Conectar la pedalera y abrir el editor: comprobar detección, preset y MOD_SYNC.
-3. Repetir tu flujo de bajo/guitarra con varias instancias.
-
-Este parche revierte la regresión del sondeo. No implementa un puerto compartido
-entre instancias ni demuestra que el controlador permita varias aperturas simultáneas.
+Confirmado por inspección: existe el camino que deja la marca de nombre pendiente.
+Pendiente: demostrar que es la causa en tu equipo. Si no actualiza los nombres,
+enviar captura del estado MOD_SYNC; si aparece OK, indicar cuál lista no cambia.
+Validación: sintaxis de MidiConnection pasa. Editor sin errores adicionales frente
+a la base (persisten incompatibilidades GCC preexistentes). Falta compilar y probar
+el VST3 en Windows con GP-200.

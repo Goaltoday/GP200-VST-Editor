@@ -123,6 +123,7 @@ class MidiConnection final : private juce::MidiInputCallback
     bool handleModSyncResponse (const juce::uint8* data, int size);
     void finishModSyncFailure (const juce::String& reason);
     void applyModSyncSnapshot ();
+    juce::String modSyncStatus{"MOD_SYNC: waiting for startup"};
     bool modSyncAttempted{false}; // Lifetime of this instance; NOT reset on disconnect/editor reopen.
     bool modSyncActive{false};
     bool modSyncWaiting{false};

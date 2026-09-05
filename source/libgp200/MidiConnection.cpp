@@ -677,7 +677,8 @@ void MidiConnection::finishModSyncFailure (const juce::String& reason)
     modSyncWaiting = false;
     modSyncAttempted = true;
     modSyncPages = {};
-    lastMessageText = "MOD_SYNC: " + reason + "; previous cache retained (not verified on this device)";
+    modSyncStatus = "MOD_SYNC: " + reason + "; cache not verified";
+    lastMessageText = modSyncStatus;
 }
 
 bool MidiConnection::processModSyncStartup (double nowMs)
@@ -687,7 +688,15 @@ bool MidiConnection::processModSyncStartup (double nowMs)
     {
         if (currentStateRequestPending || presetNameRequestPending || livePresetReadPending
             || presetDumpSlot >= 0 || presetNameScanner.hasPendingRequest () || assignmentNameRequestInProgress)
+        {
+            modSyncStatus = "MOD_SYNC waiting:";
+            if (currentStateRequestPending) modSyncStatus += " state";
+            if (presetNameRequestPending) modSyncStatus += " name";
+            if (livePresetReadPending || presetDumpSlot >= 0) modSyncStatus += " preset";
+            if (presetNameScanner.hasPendingRequest ()) modSyncStatus += " name scan";
+            if (assignmentNameRequestInProgress) modSyncStatus += " assignments";
             return false;
+        }
         modSyncAttempted = true;
         modSyncActive = true;
         modSyncPage = 0;
@@ -716,6 +725,7 @@ bool MidiConnection::processModSyncStartup (double nowMs)
     const auto bytes = modsync::request (modSyncPage, modSyncNonce);
     modSyncWaiting = true;
     modSyncSentMs = nowMs;
+    modSyncStatus = "MOD_SYNC page " + juce::String (modSyncPage + 1) + "/19, retry " + juce::String (modSyncRetries);
     midiOutput->sendMessageNow (juce::MidiMessage::createSysExMessage (bytes.data ()+1, static_cast<int> (bytes.size ()-2)));
     return false;
 }
@@ -771,7 +781,8 @@ void MidiConnection::applyModSyncSnapshot ()
     root->setProperty ("factory_amp_overrides", amps);
     root->setProperty ("factory_cab_overrides", cabs);
     const bool saved = GP200ModSync::replaceFromDevice (juce::var(root), (modSyncPages[0].bytes[19]&2) ? 2048 : 1024);
-    lastMessageText = saved ? "MOD_SYNC: device snapshot applied and saved" : "MOD_SYNC: device snapshot applied; cache file could not be saved";
+    modSyncStatus = saved ? "MOD_SYNC OK: 70 CAB, " + juce::String (amps.size ()) + " AMP overrides" : "MOD_SYNC applied; cache save failed";
+    lastMessageText = modSyncStatus;
 }
 
 void MidiConnection::collectStateDumpChunk (const juce::uint8* data, int size)
@@ -1755,7 +1766,7 @@ bool MidiConnection::sendPresetChange (int slot)
 juce::String MidiConnection::getStatusText () const
 {
     const juce::ScopedLock lock (stateLock);
-    return statusText;
+    return statusText + " | " + modSyncStatus;
 }
 
 juce::String MidiConnection::getLastMessageText () const
@@ -2179,6 +2190,13 @@ void MidiConnection::collectPresetReadChunk (const juce::uint8* data, int size)
                                       juce::String (static_cast<int> (currentPresetDecodedData.getSize ())) +
                                       " bytes";
 
+        // A complete reply for the active slot completes the name request too.
+        // Do not leave MOD_SYNC blocked on optional first-chunk name extraction.
+        if (currentPresetDataIsLive && presetDumpSlot == currentSlot)
+        {
+            presetNameRequestPending = false;
+            livePresetReadPending = false;
+        }
         presetDumpSlot = -1;
 
         if (startupHandshakePhase == StartupHandshakePhase::WaitingForCurrentPreset)

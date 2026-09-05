@@ -1933,6 +1933,11 @@ void AudioPluginAudioProcessorEditor::paint (juce::Graphics& g)
     g.fillEllipse (244.0f, 17.0f, 12.0f, 12.0f);
     g.setColour (juce::Colours::black.withAlpha (0.45f));
     g.drawEllipse (244.0f, 17.0f, 12.0f, 12.0f, 1.0f);
+    g.setFont (gp200ui::semibold (12.0f));
+    g.setColour (panelOutlineColour);
+    g.drawText (midiConnection.getStatusText ().fromFirstOccurrenceOf ("MOD_SYNC", true, false),
+                270, 11, getWidth () - 282, 26, juce::Justification::centredLeft);
+
 
     // ============================================================
     // Main top container
@@ -2242,6 +2247,7 @@ void AudioPluginAudioProcessorEditor::timerCallback ()
     // Advance the non-blocking startup handshake (Identity -> Editor Mode ->
     // 100 ms -> five-chunk State Dump -> active preset read).
     midiConnection.processStartupHandshake ();
+    repaint (270, 11, getWidth () - 282, 26);
 
     // The connection may already contain a DAW snapshot or data from an
     // earlier editor session. Retry until a complete preset has actually
