@@ -1,28 +1,39 @@
-STEP11 MOD_SYNC: cierre de lectura y diagnóstico
-Aplicar sobre STEP11 con MIDI_CONNECTION_FIX ya instalado. Sustituir los tres
-archivos source/ y recompilar. Cerrar el DAW antes de instalar el VST3 nuevo.
-No requiere cambios en HTML o firmware.
+STEP11 — MOD_SYNC con temporizador solo mientras hay puertos abiertos
 
-Corrige un bloqueo posible: presetNameRequestPending podía seguir activo después
-de recibir los siete bloques del preset cuando no se extraía nombre del primer
-bloque. MOD_SYNC esperaba esa marca indefinidamente. Ahora se limpian las marcas
-pendientes al completar la lectura del slot activo. No se cancela una lectura
-de otro slot ni se cambia el preset físico.
+Sustituir los tres archivos source/ sobre un proyecto que tenga STEP11 instalado.
+Este paquete sustituye los dos parches anteriores MIDI_CONNECTION_FIX y
+MOD_SYNC_NAMES_FIX; incorpora la corrección de la marca de nombre y diagnóstico.
+No incluye los otros cuatro archivos originales de STEP11: deben seguir instalados.
+Recompilar el VST3, cerrar DAW, sustituir el binario y volver a abrir el proyecto.
+No requiere cambiar el HTML ni el firmware STEP11.
 
-Añade el estado MOD_SYNC junto al indicador de conexión:
-- waiting for startup: el handshake todavía no está listo.
-- waiting: indica la operación que impide iniciar la consulta.
-- page N/19, retry N: consulta enviada, pendiente de respuesta/progreso.
-- OK: fotografía completa aplicada, con número de CAB y AMP overrides.
-- timed out: se agotaron las respuestas esperadas. No demuestra firmware stock.
+Qué cambia:
+- El constructor de MidiConnection no activa ningún temporizador.
+- connectToGP200 sigue llamándose al abrir el editor, como en la base experimental.
+- Solo después de abrir entrada y salida MIDI se activa el temporizador de 40 ms.
+- Ese temporizador avanza handshake, MOD_SYNC y lecturas pendientes como STEP11.
+- Nunca enumera dispositivos ni llama a connectToGP200 desde el temporizador.
+- disconnect y el destructor paran el temporizador.
+- El editor deja de avanzar esas mismas funciones para evitar doble ejecución.
+- La sincronización puede continuar al cerrar la ventana con la conexión abierta.
+- Mantiene un intento MOD_SYNC por instancia y sus reintentos limitados por página.
+- Conserva el indicador MOD_SYNC y el cierre de marcas pendientes tras el preset.
 
-Mantiene apertura al abrir editor, sin sondeo de puertos en segundo plano.
-Mantener la ventana abierta durante el arranque. Un fallo consume el intento
-por instancia; para repetir la prueba crear una instancia nueva/reiniciar DAW.
+Prueba recomendada:
+1. Abrir el proyecto con varias instancias y GP-200 desconectada: no hay sondeo
+   periódico. Abrir una ventana puede hacer el intento único habitual de conexión.
+2. Conectar GP-200 y abrir el editor en una instancia nueva.
+3. Esperar MOD_SYNC OK junto al indicador; abrir después el menú CAB.
+   Para la captura aportada deben aparecer YA BGNR 412, YA MES 412 O,
+   YA MRSH 412, YA ORNG 412 y YA YORK 212 en las cinco primeras entradas.
+4. Si muestra timeout, enviar captura del estado. Si muestra OK pero los nombres
+   siguen stock, adjuntar Documentos/GP200/GP200_MOD_SYNC.json para contrastarlos.
 
-Confirmado por inspección: existe el camino que deja la marca de nombre pendiente.
-Pendiente: demostrar que es la causa en tu equipo. Si no actualiza los nombres,
-enviar captura del estado MOD_SYNC; si aparece OK, indicar cuál lista no cambia.
-Validación: sintaxis de MidiConnection pasa. Editor sin errores adicionales frente
-a la base (persisten incompatibilidades GCC preexistentes). Falta compilar y probar
-el VST3 en Windows con GP-200.
+La captura del HTML muestra la configuración seleccionada, no demuestra por sí
+sola qué BIN está instalado; no se cambia firmware para esta prueba.
+
+Validación local: MidiConnection supera comprobación de sintaxis con JUCE.
+PluginEditor no añade errores de compilación respecto a la base; siguen los
+problemas GCC preexistentes. Falta compilar VST3 en Windows y validar en GP-200.
+No se afirma resuelto el fallo observado hasta esa prueba. No se implementa
+compartición de puertos entre instancias: se conserva la apertura anterior.

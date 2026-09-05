@@ -22,8 +22,35 @@ namespace gp200
 {
 MidiConnection::MidiConnection () = default;
 
+void MidiConnection::timerCallback ()
+{
+    // Advance an already-open connection only. Never discover or open ports here.
+    if (!isConnected ())
+    {
+        stopTimer ();
+        return;
+    }
+    const juce::ScopedLock lock (stateLock);
+    if (irUploadPhase != IRUploadPhase::Idle || soundCloneUploadPhase != SoundCloneUploadPhase::Idle || presetRestoreTransactionActive)
+    {
+        if (modSyncActive) finishModSyncFailure ("interrupted by a transfer");
+        return;
+    }
+    if (startupHandshakePhase == StartupHandshakePhase::Idle) requestCurrentPresetFromGP200 ();
+    processStartupHandshake ();
+    if (!modSyncActive)
+    {
+        processPendingLivePresetRefresh ();
+        requestPresetNameForCurrentSlotIfNeeded ();
+    }
+}
+
+
+
+
 MidiConnection::~MidiConnection ()
 {
+    stopTimer ();
     disconnect ();
 }
 
@@ -61,11 +88,13 @@ bool MidiConnection::connectToGP200 ()
     }
 
     midiInput->start ();
+    startTimer (40); // Only after both MIDI ports are open.
     return true;
 }
 
 void MidiConnection::disconnect ()
 {
+    stopTimer ();
     std::unique_ptr<juce::MidiInput> inputToStop;
 
     {
