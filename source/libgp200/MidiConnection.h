@@ -10,6 +10,7 @@
 #pragma once
 
 #include "GP200Preset.h"
+#include "GP200ModSyncProtocol.h"
 #include "GP200IR.h"
 #include "GP200SoundClone.h"
 #include "GP200PresetNameScanner.h"
@@ -22,7 +23,7 @@
 
 namespace gp200
 {
-class MidiConnection final : private juce::MidiInputCallback
+class MidiConnection final : private juce::MidiInputCallback, private juce::Timer
 {
   public:
     MidiConnection ();
@@ -118,6 +119,21 @@ class MidiConnection final : private juce::MidiInputCallback
     void endPresetRestoreTransaction ();
 
   private:
+    void timerCallback () override;
+    bool processModSyncStartup (double nowMs);
+    bool handleModSyncResponse (const juce::uint8* data, int size);
+    void finishModSyncFailure (const juce::String& reason);
+    void applyModSyncSnapshot ();
+    bool initialPortConnectionMade{false};
+    double nextInitialPortAttemptMs{0};
+    bool modSyncAttempted{false}; // Lifetime of this instance; NOT reset on disconnect/editor reopen.
+    bool modSyncActive{false};
+    bool modSyncWaiting{false};
+    int modSyncPage{0}, modSyncRetries{0};
+    double modSyncSentMs{0};
+    std::uint32_t modSyncNonce{0};
+    std::array<modsync::Page,modsync::pageCount> modSyncPages{};
+
     struct AssignmentNameQuery
     {
         int section{-1};

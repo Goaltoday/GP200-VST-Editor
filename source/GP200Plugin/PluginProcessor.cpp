@@ -10,6 +10,7 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include "../libgp200/GP200Constants.h"
+#include "../libgp200/GP200ModSync.h"
 #include "../libgp200/GP200EffectDatabase.h"
 #include "../libgp200/GP200EffectParamDatabase.h"
 
@@ -377,6 +378,7 @@ AudioPluginAudioProcessor::AudioPluginAudioProcessor ()
       ),
       offlinePreset (makeDefaultOfflinePreset ())
 {
+    gp200::GP200ModSync::reloadIfChanged ();
 }
 
 AudioPluginAudioProcessor::~AudioPluginAudioProcessor ()

@@ -10,6 +10,7 @@
 #include "MidiConnection.h"
 #include "GP200EffectParamDatabase.h"
 #include "MidiDeviceScanner.h"
+#include "GP200ModSync.h"
 
 #include <algorithm>
 #include <array>
@@ -19,10 +20,40 @@
 
 namespace gp200
 {
-MidiConnection::MidiConnection () = default;
+MidiConnection::MidiConnection () { startTimer (40); }
+
+void MidiConnection::timerCallback ()
+{
+    // Message-thread work only; never MIDI I/O or JSON I/O on processBlock.
+    const auto now = juce::Time::getMillisecondCounterHiRes ();
+    if (!isConnected ())
+    {
+        if (!initialPortConnectionMade && now >= nextInitialPortAttemptMs)
+        {
+            nextInitialPortAttemptMs = now + 1000.0;
+            if (connectToGP200 ()) requestCurrentPresetFromGP200 ();
+        }
+        return;
+    }
+    const juce::ScopedLock lock (stateLock);
+    if (irUploadPhase != IRUploadPhase::Idle || soundCloneUploadPhase != SoundCloneUploadPhase::Idle || presetRestoreTransactionActive)
+    {
+        if (modSyncActive) finishModSyncFailure ("interrupted by a transfer");
+        return;
+    }
+    if (startupHandshakePhase == StartupHandshakePhase::Idle) requestCurrentPresetFromGP200 ();
+    processStartupHandshake ();
+    if (!modSyncActive)
+    {
+        processPendingLivePresetRefresh ();
+        requestPresetNameForCurrentSlotIfNeeded ();
+    }
+}
+
 
 MidiConnection::~MidiConnection ()
 {
+    stopTimer ();
     disconnect ();
 }
 
@@ -59,6 +90,7 @@ bool MidiConnection::connectToGP200 ()
         lastMessageText = "Listening for GP-200 messages...";
     }
 
+    initialPortConnectionMade = true;
     midiInput->start ();
     return true;
 }
@@ -78,6 +110,7 @@ void MidiConnection::disconnect ()
 
     const juce::ScopedLock lock (stateLock);
 
+    if (modSyncActive) finishModSyncFailure ("disconnected");
     presetNameScanner.cancel ();
 
     statusText = "Not connected";
@@ -525,7 +558,7 @@ bool MidiConnection::requestCurrentPresetFromGP200 ()
 {
     const juce::ScopedLock lock (stateLock);
 
-    if (presetRestoreTransactionActive)
+    if (presetRestoreTransactionActive || modSyncActive)
         return false;
 
     if (midiOutput == nullptr)
@@ -658,11 +691,118 @@ void MidiConnection::processStartupHandshake ()
     // same order as the official editor without changing how those names are
     // queried or refreshed later.
     if (startupHandshakePhase == StartupHandshakePhase::Ready
+        && !processModSyncStartup (nowMs))
+        return;
+
+    if (startupHandshakePhase == StartupHandshakePhase::Ready
         && !startupAssignmentNamesRequested)
     {
         startupAssignmentNamesRequested = true;
         requestAssignmentNamesFromGP200 ();
     }
+}
+
+void MidiConnection::finishModSyncFailure (const juce::String& reason)
+{
+    modSyncActive = false;
+    modSyncWaiting = false;
+    modSyncAttempted = true;
+    modSyncPages = {};
+    lastMessageText = "MOD_SYNC: " + reason + "; previous cache retained (not verified on this device)";
+}
+
+bool MidiConnection::processModSyncStartup (double nowMs)
+{
+    if (!modSyncActive && modSyncAttempted) return true;
+    if (!modSyncActive)
+    {
+        if (currentStateRequestPending || presetNameRequestPending || livePresetReadPending
+            || presetDumpSlot >= 0 || presetNameScanner.hasPendingRequest () || assignmentNameRequestInProgress)
+            return false;
+        modSyncAttempted = true;
+        modSyncActive = true;
+        modSyncPage = 0;
+        modSyncRetries = 0;
+        modSyncNonce = static_cast<std::uint32_t> (juce::Random::getSystemRandom ().nextInt ());
+        modSyncPages = {};
+    }
+    if (modSyncWaiting)
+    {
+        if (nowMs - modSyncSentMs < 800.0) return false;
+        if (modSyncRetries >= 2)
+        {
+            finishModSyncFailure ("MIDI query timed out");
+            return true;
+        }
+        ++modSyncRetries;
+        modSyncWaiting = false;
+    }
+    if (modSyncPage == modsync::pageCount)
+    {
+        applyModSyncSnapshot ();
+        modSyncActive = false;
+        modSyncPages = {};
+        return true;
+    }
+    const auto bytes = modsync::request (modSyncPage, modSyncNonce);
+    modSyncWaiting = true;
+    modSyncSentMs = nowMs;
+    midiOutput->sendMessageNow (juce::MidiMessage::createSysExMessage (bytes.data ()+1, static_cast<int> (bytes.size ()-2)));
+    return false;
+}
+
+bool MidiConnection::handleModSyncResponse (const juce::uint8* data, int size)
+{
+    modsync::Page page;
+    const auto result = modsync::decode (data, size, modSyncPage, modSyncNonce, page);
+    if (result == modsync::Decode::unrelated) return false;
+    // Consume late/duplicate/malformed MS11 frames before all stock parsers.
+    if (!modSyncActive || !modSyncWaiting) return true;
+    if (irUploadPhase != IRUploadPhase::Idle || soundCloneUploadPhase != SoundCloneUploadPhase::Idle || presetRestoreTransactionActive)
+    {
+        finishModSyncFailure ("interrupted by a transfer");
+        return true;
+    }
+    if (result != modsync::Decode::valid) return true; // Bounded timeout/retry handles corrupt frames.
+    if (modSyncPage > 0 && page.bytes[19] != modSyncPages[0].bytes[19])
+    {
+        finishModSyncFailure ("capabilities changed during snapshot");
+        return true;
+    }
+    modSyncPages[static_cast<std::size_t> (modSyncPage)] = page;
+    ++modSyncPage;
+    modSyncWaiting = false;
+    modSyncRetries = 0;
+    return true;
+}
+
+void MidiConnection::applyModSyncSnapshot ()
+{
+    juce::Array<juce::var> amps, cabs;
+    for (int page = 1; page < modsync::pageCount; ++page)
+    {
+        const auto& bytes = modSyncPages[static_cast<std::size_t> (page)].bytes;
+        const bool isAmp = page >= 10;
+        for (int i = 0; i < bytes[18]; ++i)
+        {
+            const auto* rec = bytes.data () + 24 + i*18;
+            if (isAmp && rec[0] == 0) continue;
+            const auto index = (page - (isAmp ? 10 : 1))*8 + i;
+            const auto id = isAmp ? modsync::ampIds[static_cast<std::size_t> (index)] : 0x0a000000u + static_cast<unsigned> (index);
+            auto* entry = new juce::DynamicObject ();
+            entry->setProperty ("effect_id", static_cast<juce::int64> (id));
+            entry->setProperty ("display_name", juce::String::fromUTF8 (reinterpret_cast<const char*> (rec+2),16).trim ());
+            entry->setProperty ("source_file", "");
+            if (isAmp) { entry->setProperty ("parameter_profile", "CLO5"); entry->setProperty ("parameter_count", 5); amps.add (juce::var(entry)); }
+            else cabs.add (juce::var(entry));
+        }
+    }
+    // Complete replacement also removes AMP overrides that are now stock.
+    auto* root = new juce::DynamicObject ();
+    root->setProperty ("factory_amp_overrides", amps);
+    root->setProperty ("factory_cab_overrides", cabs);
+    const bool saved = GP200ModSync::replaceFromDevice (juce::var(root), (modSyncPages[0].bytes[19]&2) ? 2048 : 1024);
+    lastMessageText = saved ? "MOD_SYNC: device snapshot applied and saved" : "MOD_SYNC: device snapshot applied; cache file could not be saved";
 }
 
 void MidiConnection::collectStateDumpChunk (const juce::uint8* data, int size)
@@ -742,7 +882,7 @@ void MidiConnection::processPendingLivePresetRefresh ()
 {
     const juce::ScopedLock lock (stateLock);
 
-    if (!liveRefreshPending || midiOutput == nullptr || currentSlot < 0)
+    if (modSyncActive || !liveRefreshPending || midiOutput == nullptr || currentSlot < 0)
         return;
 
     const auto nowMs = juce::Time::getMillisecondCounterHiRes ();
@@ -1827,7 +1967,7 @@ void MidiConnection::endPresetRestoreTransaction ()
 bool MidiConnection::requestPresetNameForCurrentSlotIfNeeded ()
 {
     const juce::ScopedLock lock (stateLock);
-    if (presetRestoreTransactionActive || !presetNameRequestPending)
+    if (modSyncActive || presetRestoreTransactionActive || !presetNameRequestPending)
         return false;
 
     if (currentSlot < 0)
@@ -1873,7 +2013,7 @@ void MidiConnection::processPresetNameScan ()
     // the live-state query paused indefinitely.
     presetNameScanner.handleTimeout (nowMs);
 
-    const bool busy = midiOutput == nullptr
+    const bool busy = modSyncActive || midiOutput == nullptr
                       || presetRestoreTransactionActive
                       || irUploadPhase != IRUploadPhase::Idle
                       || soundCloneUploadPhase != SoundCloneUploadPhase::Idle
@@ -1902,7 +2042,7 @@ bool MidiConnection::sendNextPresetNameScanRequestUnlocked ()
         || liveRefreshPending
         || presetDumpSlot >= 0;
 
-    if (midiOutput == nullptr
+    if (modSyncActive || midiOutput == nullptr
         || presetTrafficBusy
         || !presetNameScanner.shouldSendNextRequest (nowMs))
     {
@@ -2650,6 +2790,8 @@ void MidiConnection::parseGP200SysEx (const juce::uint8* data, int size)
 
     if (!isGP200Header)
         return;
+
+    if (handleModSyncResponse (data, size)) return;
 
     const auto command = data[8];
     const auto subCommand = data[9];

@@ -9,6 +9,7 @@ class GP200ModSync final
 {
   public:
     static void reloadIfChanged ();
+    static bool replaceFromDevice (const juce::var& snapshot, int userIRSamples);
     static std::uint64_t getRevision ();
 
     static bool isCustomCloAmp (juce::uint32 effectId);

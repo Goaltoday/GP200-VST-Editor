@@ -19,6 +19,9 @@ std::map<juce::uint32, OverrideEntry> overrides;
 juce::int64 lastModificationMs{-1};
 bool loadedOnce{false};
 std::uint64_t revision{0};
+int knownUserIRSamples{0};
+bool deviceSnapshot{false};
+bool unsavedDeviceSnapshot{false};
 
 juce::uint32 parseEffectId (const juce::var& value)
 {
@@ -64,6 +67,8 @@ void parseOverrideArray (const juce::var& root,
 void loadUnlocked (const juce::File& file)
 {
     overrides.clear ();
+    knownUserIRSamples = 0;
+    deviceSnapshot = false;
 
     if (! file.existsAsFile ())
     {
@@ -82,6 +87,9 @@ void loadUnlocked (const juce::File& file)
         return;
     }
 
+    const auto features = parsed.getProperty ("features", {});
+    const auto samples = static_cast<int> (features.getProperty ("user_ir_samples", 0));
+    if (samples == 1024 || samples == 2048) knownUserIRSamples = samples;
     parseOverrideArray (parsed, "factory_amp_overrides", true, false);
     parseOverrideArray (parsed, "factory_cab_overrides", false, true);
 
@@ -90,7 +98,7 @@ void loadUnlocked (const juce::File& file)
     ++revision;
 }
 
-void saveUnlocked ()
+bool saveUnlocked ()
 {
     auto* rootObject = new juce::DynamicObject ();
     rootObject->setProperty ("schema", "gp200-mod-sync/v1");
@@ -98,7 +106,8 @@ void saveUnlocked ()
     rootObject->setProperty ("firmware", "V180");
 
     auto* features = new juce::DynamicObject ();
-    features->setProperty ("user_ir_samples", 2048);
+    if (knownUserIRSamples != 0) features->setProperty ("user_ir_samples", knownUserIRSamples);
+    rootObject->setProperty ("source", deviceSnapshot ? "device-midi-ms11" : "local-cache");
     features->setProperty ("factory_cab_samples", 1024);
     rootObject->setProperty ("features", juce::var (features));
 
@@ -124,10 +133,12 @@ void saveUnlocked ()
 
     const auto file = GP200ModSync::getManifestFile ();
     file.getParentDirectory ().createDirectory ();
-    file.replaceWithText (juce::JSON::toString (juce::var (rootObject), true) + "\n");
+    const bool saved = file.replaceWithText (juce::JSON::toString (juce::var (rootObject), true) + "\n");
     lastModificationMs = file.getLastModificationTime ().toMilliseconds ();
+    unsavedDeviceSnapshot = deviceSnapshot && !saved;
     loadedOnce = true;
     ++revision;
+    return saved;
 }
 
 void recordOverrideUnlocked (juce::uint32 effectId,
@@ -147,6 +158,17 @@ void recordOverrideUnlocked (juce::uint32 effectId,
 
 } // namespace
 
+bool GP200ModSync::replaceFromDevice (const juce::var& snapshot, int userIRSamples)
+{
+    const juce::ScopedLock lock (syncLock);
+    overrides.clear ();
+    parseOverrideArray (snapshot, "factory_amp_overrides", true, false);
+    parseOverrideArray (snapshot, "factory_cab_overrides", false, true);
+    knownUserIRSamples = userIRSamples;
+    deviceSnapshot = true;
+    return saveUnlocked ();
+}
+
 juce::File GP200ModSync::getManifestFile ()
 {
     return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
@@ -157,6 +179,8 @@ juce::File GP200ModSync::getManifestFile ()
 void GP200ModSync::reloadIfChanged ()
 {
     const juce::ScopedLock lock (syncLock);
+    // A failed disk write must not discard the complete live snapshot on the next getter.
+    if (unsavedDeviceSnapshot) return;
     const auto file = getManifestFile ();
 
     if (! loadedOnce)

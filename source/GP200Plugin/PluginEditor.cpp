@@ -2241,7 +2241,7 @@ void AudioPluginAudioProcessorEditor::timerCallback ()
 
     // Advance the non-blocking startup handshake (Identity -> Editor Mode ->
     // 100 ms -> five-chunk State Dump -> active preset read).
-    midiConnection.processStartupHandshake ();
+    // Startup and live reads advance in MidiConnection even with this window closed.
 
     // The connection may already contain a DAW snapshot or data from an
     // earlier editor session. Retry until a complete preset has actually
@@ -2256,7 +2256,7 @@ void AudioPluginAudioProcessorEditor::timerCallback ()
 
     midiConnection.processIRUpload ();
     midiConnection.processSoundCloneUpload ();
-    midiConnection.processPendingLivePresetRefresh ();
+
 
     const auto userIRNamesRevision = midiConnection.getAssignmentNamesRevision ();
     if (userIRNamesRevision != lastUserIRNamesRevision)
@@ -2332,7 +2332,7 @@ void AudioPluginAudioProcessorEditor::timerCallback ()
     }
     else
     {
-        midiConnection.requestPresetNameForCurrentSlotIfNeeded ();
+        // MidiConnection owns the pending read.
     }
 
     syncPresetNameEditorFromCurrentPreset ();
