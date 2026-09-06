@@ -11,6 +11,7 @@
 #include "GP200EffectParamDatabase.h"
 #include "MidiDeviceScanner.h"
 #include "GP200ModSync.h"
+#include "GP200EffectDatabase.h"
 
 #include <algorithm>
 #include <array>
