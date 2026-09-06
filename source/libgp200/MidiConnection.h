@@ -61,7 +61,9 @@ class MidiConnection final : private juce::MidiInputCallback, private juce::Time
 
     bool startIRUpload (const juce::File& wavFile, int zeroBasedUserIRSlot);
     bool startFactoryCabUpload (const juce::File& wavFile, int zeroBasedFactoryCabIndex);
-    bool startFactoryAmpUpload (const juce::File& cloFile, int zeroBasedFactoryAmpIndex);
+    bool startFactoryAmpUpload (const juce::File& cloFile,
+                                int zeroBasedFactoryAmpIndex,
+                                const juce::String& requestedDisplayName);
     void processIRUpload ();
     bool isIRUploadInProgress () const;
     juce::String getIRUploadStatusText () const;

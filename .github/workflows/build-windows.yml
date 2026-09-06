@@ -18,6 +18,28 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Verify HOT1 sources
+        shell: powershell
+        run: |
+          $cloneSource = Get-Content "source/libgp200/GP200SoundClone.cpp" -Raw
+          $cloneHeader = Get-Content "source/libgp200/GP200SoundClone.h" -Raw
+          $midiSource = Get-Content "source/libgp200/MidiConnection.cpp" -Raw
+          if ($cloneSource -notmatch 'blob\[11\]\s*=\s*0xa1') {
+            throw "HOT1 marker 0xA1 is missing from GP200SoundClone.cpp"
+          }
+          if ($cloneHeader -notmatch 'factoryAmpUploadHasHot1Marker') {
+            throw "HOT1 verifier declaration is missing from GP200SoundClone.h"
+          }
+          if ($midiSource -notmatch '#include\s+"GP200EffectDatabase.h"') {
+            throw "GP200EffectDatabase.h include is missing from MidiConnection.cpp"
+          }
+          if ($midiSource -notmatch 'HOT1 build mismatch') {
+            throw "HOT1 runtime verifier is missing from MidiConnection.cpp"
+          }
+          if ($cloneSource -notmatch 'requestedDisplayName') {
+            throw "Editable Factory AMP name support is missing"
+          }
+
       - name: Configure CMake
         run: cmake -S . -B build -A x64
 
@@ -33,7 +55,7 @@ jobs:
       - name: Upload VST3
         uses: actions/upload-artifact@v7
         with:
-          name: GP200-VST3-Windows
+          name: GP200-VST3-Windows-HOT1-V4
           path: |
             build/**/*_artefacts/Release/VST3/*.vst3/**
             build/**/*_artefacts/Release/VST3/*.vst3

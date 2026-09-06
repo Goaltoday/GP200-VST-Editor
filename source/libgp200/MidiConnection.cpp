@@ -8,10 +8,10 @@
     SPDX-License-Identifier: GPL-3.0-or-later
 */
 #include "MidiConnection.h"
+#include "GP200EffectDatabase.h"
 #include "GP200EffectParamDatabase.h"
 #include "MidiDeviceScanner.h"
 #include "GP200ModSync.h"
-#include "GP200EffectDatabase.h"
 
 #include <algorithm>
 #include <array>
@@ -273,7 +273,8 @@ bool MidiConnection::isFactoryAmpDestinationInactiveLocked (int zeroBasedFactory
 }
 
 bool MidiConnection::startFactoryAmpUpload (const juce::File& cloFile,
-                                            int zeroBasedFactoryAmpIndex)
+                                            int zeroBasedFactoryAmpIndex,
+                                            const juce::String& requestedDisplayName)
 {
     const juce::ScopedLock lock (stateLock);
     if (midiOutput == nullptr)
@@ -300,6 +301,7 @@ bool MidiConnection::startFactoryAmpUpload (const juce::File& cloFile,
     GP200IRUpload prepared;
     const auto result = GP200SoundClone::buildFactoryAmpUpload (cloFile,
                                                                 zeroBasedFactoryAmpIndex,
+                                                                requestedDisplayName,
                                                                 prepared);
     if (result.failed ())
     {

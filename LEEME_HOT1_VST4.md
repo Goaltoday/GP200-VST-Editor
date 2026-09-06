@@ -47,3 +47,22 @@ Compilación VST3 Windows y prueba física pendientes.
 ## Corrección V2 tras captura física
 
 La captura `captura_clo.pcapng` mostró que el VST probado envió wrapper byte 11 = `0x00`, aunque el BIN sí contenía el helper HOT1. Por eso el firmware usó la ruta anterior. Esta versión comprueba el primer bloque SysEx ya codificado antes de comenzar. Debe contener `0A 01` en las posiciones que representan `0xA1`; si falta, aborta con `HOT1 build mismatch`.
+
+## Corrección V3 para GitHub Actions
+
+Se añade `#include "GP200EffectDatabase.h"` a `MidiConnection.cpp`. Sin esta
+cabecera MSVC no puede resolver `GP200EffectDatabase::getEffectsForModule` y
+detiene la compilación en las antiguas líneas 248 y 408. Los errores posteriores
+de `begin`, `end` y el bucle `for` eran consecuencias del mismo tipo desconocido.
+
+## Cambio V4: nombre Factory AMP editable
+
+El campo de nombre vuelve a estar habilitado al seleccionar un Factory AMP.
+Al elegir un archivo se rellena con su nombre, limitado a 16 caracteres, pero
+puede editarse antes de pulsar `Import selected clone`. El texto elegido viaja
+en el wrapper HOT1, se guarda en `slot + 0x1300` y MOD_SYNC lo recupera después.
+
+Para cambiar el nombre de un CLO ya importado, selecciona el mismo archivo CLO,
+escribe el nombre nuevo y vuelve a importarlo en el mismo slot. Esa sustitución
+es hot porque el slot ya está convertido. El botón `Rename` continúa reservado
+para SnapTone; Factory AMP aplica el nombre mediante la importación.

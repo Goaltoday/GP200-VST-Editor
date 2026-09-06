@@ -27,6 +27,7 @@ public:
     // the matching package-local callback in RAM.
     static juce::Result buildFactoryAmpUpload (const juce::File& cloFile,
                                                int zeroBasedFactoryAmpIndex,
+                                               const juce::String& requestedDisplayName,
                                                GP200IRUpload& result);
 
     // Verifies the actual encoded first chunk, so mixed/stale builds cannot

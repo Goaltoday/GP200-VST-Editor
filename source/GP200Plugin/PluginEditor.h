@@ -53,7 +53,9 @@ class AudioPluginAudioProcessorEditor final : public juce::AudioProcessorEditor,
     void importIRFile (const juce::File& file);
     void refreshUserIRSlotItems ();
     void openSoundCloneWindow ();
-    void importSoundCloneFile (const juce::File& file, int globalSlot);
+    void importSoundCloneFile (const juce::File& file,
+                               int globalSlot,
+                               const juce::String& requestedName);
 	void syncUserIRSlotBoxFromCabEffectId(juce::uint32 effectId);
 	
 	void selectCompareSnapshot (CompareSnapshot snapshot);

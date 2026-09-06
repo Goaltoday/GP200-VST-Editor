@@ -760,7 +760,7 @@ class SoundCloneImportComponent final : public juce::Component,
                                               private juce::Timer
 {
 public:
-    using ImportCallback = std::function<void (const juce::File&, int)>;
+    using ImportCallback = std::function<void (const juce::File&, int, const juce::String&)>;
     using StatusCallback = std::function<juce::String ()>;
     using BusyCallback = std::function<bool ()>;
     using SnapToneNameCallback = std::function<juce::String (int)>;
@@ -857,7 +857,8 @@ public:
         destinationBox.setColour (juce::ComboBox::outlineColourId, panelOutlineColour);
         destinationBox.onChange = [this] { updateRenameEditorForSelectedSlot (); };
 
-        renameEditor.setTextToShowWhenEmpty ("New SnapTone name", mutedTextColour.withAlpha (0.65f));
+        renameEditor.setTextToShowWhenEmpty ("Name (maximum 16 characters)",
+                                             mutedTextColour.withAlpha (0.65f));
         renameEditor.setFont (gp200ui::regular (14.0f));
         renameEditor.setColour (juce::TextEditor::backgroundColourId, panelColour);
         renameEditor.setColour (juce::TextEditor::textColourId, textColour);
@@ -972,12 +973,25 @@ private:
     {
         const auto selectedId = destinationBox.getSelectedId ();
         const bool isSnapTone = selectedId >= 1 && selectedId <= 10;
-        renameEditor.setEnabled (isSnapTone);
+        const bool isFactoryAmp = selectedId >= 1001 && selectedId <= 1071;
+        renameEditor.setEnabled (isSnapTone || isFactoryAmp);
         renameButton.setEnabled (isSnapTone && !isCurrentlyBusy ());
+        if (isFactoryAmp)
+        {
+            const auto selectedRow = fileList.getSelectedRow ();
+            if (juce::isPositiveAndBelow (selectedRow, static_cast<int> (entries.size ()))
+                && !entries[static_cast<std::size_t> (selectedRow)].isDirectory)
+                renameEditor.setText (
+                    entries[static_cast<std::size_t> (selectedRow)].file
+                        .getFileNameWithoutExtension ().substring (0, 16),
+                    juce::dontSendNotification);
+            else
+                renameEditor.clear ();
+            return;
+        }
         if (!isSnapTone || getSnapToneDisplayName == nullptr)
         {
-            renameEditor.setText ("Factory AMP name follows the CLO filename / MOD_SYNC",
-                                  juce::dontSendNotification);
+            renameEditor.clear ();
             return;
         }
 
@@ -1005,7 +1019,8 @@ private:
         if (selectedId < 1 || selectedId > 10)
         {
             statusLabel.setColour (juce::Label::textColourId, mutedTextColour);
-            statusLabel.setText ("Factory AMP names are derived from the CLO filename and saved in MOD_SYNC.", juce::dontSendNotification);
+            statusLabel.setText ("The Factory AMP name is applied when the CLO is imported.",
+                                 juce::dontSendNotification);
             return;
         }
         if (newName.isEmpty () || onRename == nullptr)
@@ -1077,6 +1092,11 @@ private:
             juce::isPositiveAndBelow (lastRowSelected, static_cast<int> (entries.size ()))
             && !entries[static_cast<std::size_t> (lastRowSelected)].isDirectory;
         importButton.setEnabled (selectedFile && !isCurrentlyBusy ());
+        if (selectedFile && destinationBox.getSelectedId () >= 1001)
+            renameEditor.setText (
+                entries[static_cast<std::size_t> (lastRowSelected)].file
+                    .getFileNameWithoutExtension ().substring (0, 16),
+                juce::dontSendNotification);
     }
 
     void listBoxItemDoubleClicked (int row, const juce::MouseEvent&) override
@@ -1219,7 +1239,14 @@ private:
         importButton.setEnabled (false);
         const auto destinationCode = selectedId >= 1001 ? 1000 + (selectedId - 1001)
                                                          : selectedId - 1;
-        onImport (activeImportFile, destinationCode);
+        auto requestedName = juce::String ();
+        if (selectedId >= 1001)
+        {
+            requestedName = renameEditor.getText ().trim ().substring (0, 16);
+            if (requestedName.isEmpty ())
+                requestedName = activeImportFile.getFileNameWithoutExtension ().substring (0, 16);
+        }
+        onImport (activeImportFile, destinationCode, requestedName);
     }
 
     void timerCallback () override
@@ -2811,10 +2838,10 @@ void AudioPluginAudioProcessorEditor::openSoundCloneWindow ()
     options.resizable = false;
     options.content.setOwned (new SoundCloneImportComponent (
         [safeThis = juce::Component::SafePointer<AudioPluginAudioProcessorEditor> (this)]
-        (const juce::File& file, int globalSlot)
+        (const juce::File& file, int globalSlot, const juce::String& requestedName)
         {
             if (safeThis != nullptr)
-                safeThis->importSoundCloneFile (file, globalSlot);
+                safeThis->importSoundCloneFile (file, globalSlot, requestedName);
         },
         [safeThis = juce::Component::SafePointer<AudioPluginAudioProcessorEditor> (this)]
         {
@@ -2849,12 +2876,13 @@ void AudioPluginAudioProcessorEditor::openSoundCloneWindow ()
 
 void AudioPluginAudioProcessorEditor::importSoundCloneFile (
     const juce::File& file,
-    int globalSlot)
+    int globalSlot,
+    const juce::String& requestedName)
 {
     if (globalSlot >= 1000)
     {
         const auto factoryAmpIndex = globalSlot - 1000;
-        if (!midiConnection.startFactoryAmpUpload (file, factoryAmpIndex))
+        if (!midiConnection.startFactoryAmpUpload (file, factoryAmpIndex, requestedName))
         {
             effectsStatusText = midiConnection.getIRUploadStatusText ();
             juce::AlertWindow::showMessageBoxAsync (
@@ -2880,7 +2908,9 @@ void AudioPluginAudioProcessorEditor::importSoundCloneFile (
             ++currentFactoryIndex;
         }
 
-        const auto displayName = file.getFileNameWithoutExtension ().substring (0, 20);
+        auto displayName = requestedName.trim ().substring (0, 16);
+        if (displayName.isEmpty ())
+            displayName = file.getFileNameWithoutExtension ().substring (0, 16);
         effectsStatusText = "Factory AMP CLO upload started: " + displayName
                           + " -> " + (stockName.isNotEmpty () ? stockName
                                                               : "Factory AMP " + juce::String (factoryAmpIndex + 1));

@@ -271,6 +271,7 @@ juce::Result GP200SoundClone::buildUpload (const juce::File& cloFile,
 
 juce::Result GP200SoundClone::buildFactoryAmpUpload (const juce::File& cloFile,
                                                       int zeroBasedFactoryAmpIndex,
+                                                      const juce::String& requestedDisplayName,
                                                       GP200IRUpload& result)
 {
     constexpr int compactBytes = static_cast<int> (gp200DeclaredBytes);
@@ -296,7 +297,9 @@ juce::Result GP200SoundClone::buildFactoryAmpUpload (const juce::File& cloFile,
     blob[10] = static_cast<juce::uint8> (zeroBasedFactoryAmpIndex);
     blob[11] = 0xa1; // HOT1: activate a verified, unselected Factory AMP destination.
 
-    const auto displayName = cloFile.getFileNameWithoutExtension ().substring (0, 20);
+    auto displayName = requestedDisplayName.trim ().substring (0, 16);
+    if (displayName.isEmpty ())
+        displayName = cloFile.getFileNameWithoutExtension ().substring (0, 16);
     const auto* nameBytes = displayName.toRawUTF8 ();
     for (int i = 0; i < 16 && nameBytes[i] != 0; ++i)
         blob[12 + i] = static_cast<juce::uint8> (nameBytes[i]);
