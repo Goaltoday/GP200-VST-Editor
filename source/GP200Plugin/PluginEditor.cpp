@@ -2867,7 +2867,6 @@ void AudioPluginAudioProcessorEditor::importSoundCloneFile (
 
         const auto ampEffects = gp200::GP200EffectDatabase::getEffectsForModule ("AMP");
         int currentFactoryIndex = 0;
-        juce::uint32 effectId = 0;
         juce::String stockName;
         for (const auto& effect : ampEffects)
         {
@@ -2875,7 +2874,6 @@ void AudioPluginAudioProcessorEditor::importSoundCloneFile (
                 continue;
             if (currentFactoryIndex == factoryAmpIndex)
             {
-                effectId = effect.effectId;
                 stockName = effect.name;
                 break;
             }
@@ -2883,9 +2881,6 @@ void AudioPluginAudioProcessorEditor::importSoundCloneFile (
         }
 
         const auto displayName = file.getFileNameWithoutExtension ().substring (0, 20);
-        if (effectId != 0)
-            gp200::GP200ModSync::recordFactoryAmpOverride (effectId, displayName, file.getFileName ());
-
         effectsStatusText = "Factory AMP CLO upload started: " + displayName
                           + " -> " + (stockName.isNotEmpty () ? stockName
                                                               : "Factory AMP " + juce::String (factoryAmpIndex + 1));

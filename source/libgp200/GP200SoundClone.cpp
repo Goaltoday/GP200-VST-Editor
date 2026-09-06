@@ -294,6 +294,7 @@ juce::Result GP200SoundClone::buildFactoryAmpUpload (const juce::File& cloFile,
     blob[6] = 0x43; // little-endian 0x4C43 = "CL"
     blob[7] = 0x4c;
     blob[10] = static_cast<juce::uint8> (zeroBasedFactoryAmpIndex);
+    blob[11] = 0xa1; // HOT1: activate a verified, unselected Factory AMP destination.
 
     const auto displayName = cloFile.getFileNameWithoutExtension ().substring (0, 20);
     const auto* nameBytes = displayName.toRawUTF8 ();

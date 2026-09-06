@@ -120,6 +120,7 @@ class MidiConnection final : private juce::MidiInputCallback, private juce::Time
 
   private:
     void timerCallback () override;
+    bool isFactoryAmpDestinationInactiveLocked (int zeroBasedFactoryAmpIndex) const;
     bool processModSyncStartup (double nowMs);
     bool handleModSyncResponse (const juce::uint8* data, int size);
     void finishModSyncFailure (const juce::String& reason);
@@ -258,6 +259,8 @@ class MidiConnection final : private juce::MidiInputCallback, private juce::Time
     GP200IRUpload irUpload;
     IRUploadPhase irUploadPhase{IRUploadPhase::Idle};
     int irUploadChunkIndex{0};
+    int hot1FactoryAmpUploadIndex{-1};
+    juce::String hot1FactoryAmpSourceFile;
     double irUploadNextActionMs{0.0};
     juce::String irUploadStatusText{"IR upload: idle"};
     juce::String irUploadLabel{"User IR"};

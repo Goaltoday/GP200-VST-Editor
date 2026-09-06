@@ -236,6 +236,41 @@ bool MidiConnection::startFactoryCabUpload (const juce::File& wavFile,
     return true;
 }
 
+bool MidiConnection::isFactoryAmpDestinationInactiveLocked (int zeroBasedFactoryAmpIndex) const
+{
+    if (!juce::isPositiveAndBelow (zeroBasedFactoryAmpIndex, 71)
+        || !currentPresetDataIsLive
+        || presetRestoreTransactionActive
+        || currentPresetDecodedData.getSize ()
+               < effectBlockStart + effectBlockCount * effectBlockSize)
+        return false;
+
+    const auto ampEffects = GP200EffectDatabase::getEffectsForModule ("AMP");
+    juce::uint32 targetEffectId = 0;
+    int factoryIndex = 0;
+    for (const auto& effect : ampEffects)
+    {
+        if ((effect.effectId & 0xFF000000u) == 0x0F000000u)
+            continue;
+        if (factoryIndex++ == zeroBasedFactoryAmpIndex)
+        {
+            targetEffectId = effect.effectId;
+            break;
+        }
+    }
+    if (targetEffectId == 0)
+        return false;
+
+    const auto* data = static_cast<const juce::uint8*> (currentPresetDecodedData.getData ());
+    for (std::size_t block = 0; block < effectBlockCount; ++block)
+    {
+        const auto offset = effectBlockStart + block * effectBlockSize + effectIdOffset;
+        if (juce::ByteOrder::littleEndianInt (data + offset) == targetEffectId)
+            return false;
+    }
+    return true;
+}
+
 bool MidiConnection::startFactoryAmpUpload (const juce::File& cloFile,
                                             int zeroBasedFactoryAmpIndex)
 {
@@ -254,6 +289,13 @@ bool MidiConnection::startFactoryAmpUpload (const juce::File& cloFile,
         return false;
     }
 
+    if (!isFactoryAmpDestinationInactiveLocked (zeroBasedFactoryAmpIndex))
+    {
+        irUploadStatusText = "HOT1: select a different AMP and wait for the live preset before uploading; bypass is not enough";
+        lastMessageText = irUploadStatusText;
+        return false;
+    }
+
     GP200IRUpload prepared;
     const auto result = GP200SoundClone::buildFactoryAmpUpload (cloFile,
                                                                 zeroBasedFactoryAmpIndex,
@@ -266,6 +308,8 @@ bool MidiConnection::startFactoryAmpUpload (const juce::File& cloFile,
     }
 
     irUpload = std::move (prepared);
+    hot1FactoryAmpUploadIndex = zeroBasedFactoryAmpIndex;
+    hot1FactoryAmpSourceFile = cloFile.getFileName ();
     irUploadLabel = "Factory AMP " + juce::String (zeroBasedFactoryAmpIndex + 1);
     irUploadChunkIndex = 0;
     midiOutput->sendMessageNow (irUpload.prepareMessage);
@@ -316,6 +360,18 @@ void MidiConnection::processIRUpload ()
 
     if (irUploadPhase == IRUploadPhase::WaitingBeforeCommit)
     {
+        if (isFactoryAmpUpload
+            && !isFactoryAmpDestinationInactiveLocked (hot1FactoryAmpUploadIndex))
+        {
+            irUploadPhase = IRUploadPhase::Idle;
+            hot1FactoryAmpUploadIndex = -1;
+            hot1FactoryAmpSourceFile.clear ();
+            irUpload = {};
+            irUploadStatusText = "HOT1 cancelled before commit: destination selected or live preset unavailable; no Factory AMP write requested";
+            lastMessageText = irUploadStatusText;
+            return;
+        }
+
         midiOutput->sendMessageNow (irUpload.commitMessage);
         irUploadPhase = IRUploadPhase::WaitingAfterCommit;
         irUploadNextActionMs = now + postCommitDelayMs;
@@ -328,8 +384,12 @@ void MidiConnection::processIRUpload ()
     {
         const auto uploadedName = irUpload.displayName;
         const bool wasFactoryAmpUpload = irUploadLabel.startsWith ("Factory AMP ");
+        const auto completedFactoryAmpIndex = hot1FactoryAmpUploadIndex;
+        const auto completedFactoryAmpSourceFile = hot1FactoryAmpSourceFile;
 
         irUploadPhase = IRUploadPhase::Idle;
+        hot1FactoryAmpUploadIndex = -1;
+        hot1FactoryAmpSourceFile.clear ();
         irUploadStatusText = irUploadLabel + " completed: " + uploadedName;
         lastMessageText = irUploadStatusText;
         irUpload = {};
@@ -337,7 +397,24 @@ void MidiConnection::processIRUpload ()
         // Avoid immediate extra MIDI traffic after the custom Factory AMP
         // flash/readback/hot-activation transaction.
         if (wasFactoryAmpUpload)
+        {
+            const auto ampEffects = GP200EffectDatabase::getEffectsForModule ("AMP");
+            int factoryIndex = 0;
+            for (const auto& effect : ampEffects)
+            {
+                if ((effect.effectId & 0xFF000000u) == 0x0F000000u)
+                    continue;
+                if (factoryIndex++ == completedFactoryAmpIndex)
+                {
+                    GP200ModSync::recordFactoryAmpOverride (effect.effectId, uploadedName, completedFactoryAmpSourceFile);
+                    break;
+                }
+            }
+            irUploadStatusText = irUploadLabel
+                               + ": transfer sent (no activation ACK); select the destination AMP now";
+            lastMessageText = irUploadStatusText;
             return;
+        }
 
         pendingAssignmentNameQueries.clear ();
 
