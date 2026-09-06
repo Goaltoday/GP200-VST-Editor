@@ -335,4 +335,25 @@ juce::Result GP200SoundClone::buildFactoryAmpUpload (const juce::File& cloFile,
     return juce::Result::ok ();
 }
 
+bool GP200SoundClone::factoryAmpUploadHasHot1Marker (const GP200IRUpload& upload) noexcept
+{
+    if (upload.chunks.empty ())
+        return false;
+
+    const auto& firstChunk = upload.chunks.front ();
+    const auto* raw = firstChunk.getRawData ();
+    const auto size = firstChunk.getRawDataSize ();
+
+    // Full SysEx positions: 0=F0, 8=0x12, 11..12=raw offset,
+    // 13=first nibble. Wrapper byte 11 is encoded at 35..36.
+    return raw != nullptr
+        && size > 37
+        && raw[0] == 0xf0
+        && raw[8] == 0x12
+        && raw[11] == 0x00
+        && raw[12] == 0x00
+        && raw[35] == 0x0a
+        && raw[36] == 0x01;
+}
+
 } // namespace gp200

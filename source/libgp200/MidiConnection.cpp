@@ -307,6 +307,13 @@ bool MidiConnection::startFactoryAmpUpload (const juce::File& cloFile,
         return false;
     }
 
+    if (!GP200SoundClone::factoryAmpUploadHasHot1Marker (prepared))
+    {
+        irUploadStatusText = "HOT1 build mismatch: the encoded activation marker is missing; clean-rebuild the VST with all HOT1 files";
+        lastMessageText = irUploadStatusText;
+        return false;
+    }
+
     irUpload = std::move (prepared);
     hot1FactoryAmpUploadIndex = zeroBasedFactoryAmpIndex;
     hot1FactoryAmpSourceFile = cloFile.getFileName ();

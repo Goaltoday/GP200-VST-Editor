@@ -1,0 +1,33 @@
+{
+  "base_zip": {
+    "name": "GP200-VST-Editor-Experimental-firmware (4).zip",
+    "sha256": "d54022126700a271a755d3f57af2d932477793e41ea97d7dcff5997dc55e1e74"
+  },
+  "capture_evidence": {
+    "pcap_sha256": "c9b5a74df23d53d1f70e226df0385b62a5101b2243e94d9604192f4db8daee01",
+    "observed_wrapper_byte_11": "0x00",
+    "required": "0xA1"
+  },
+  "files": {
+    "source/GP200Plugin/PluginEditor.cpp": {
+      "base_sha256": "c3a7731ed6db95c99701400ebb5daabd96f92082a762c7d5ab9c3e7241f505b0",
+      "hot1_v2_sha256": "5c60f18fefa7e336087a2edad5710a6ef84451023ae4466941838f7807c6a885"
+    },
+    "source/libgp200/GP200SoundClone.cpp": {
+      "base_sha256": "7fff1f110dcf512312f5d33a6070bff1d05cd1136ccf0889d63dd4de6e1388fb",
+      "hot1_v2_sha256": "a1b53b4aa2762ef41e0feeaaa545207d6c3e80a69f145a7edec2cf594e3c426a"
+    },
+    "source/libgp200/GP200SoundClone.h": {
+      "base_sha256": "12452c4b3a99a21a5180d5fe9d8762a9f4a8359900aa87242cdffa61cb6e3cf6",
+      "hot1_v2_sha256": "cfa6abee7a1d261efb6d4aabe0a5d31c9614611b82fe2107993b1309c4367507"
+    },
+    "source/libgp200/MidiConnection.cpp": {
+      "base_sha256": "ebdecf94071dbb47dae49d527dccc83c30d369aa4b32bd3c3214a33a4e5d0caa",
+      "hot1_v2_sha256": "cd81a82df1270042bdef33fd4da46f419043d8912718ad8d51c99504278c0386"
+    },
+    "source/libgp200/MidiConnection.h": {
+      "base_sha256": "7fa4cb195249fdb55de1092f3ba05edd56897261bcecbe543c259d75529f9f53",
+      "hot1_v2_sha256": "10868065f2f3a53606c89f9b33af7b64f2f53736d7b912f1325fb11c57430362"
+    }
+  }
+}

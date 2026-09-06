@@ -28,5 +28,9 @@ public:
     static juce::Result buildFactoryAmpUpload (const juce::File& cloFile,
                                                int zeroBasedFactoryAmpIndex,
                                                GP200IRUpload& result);
+
+    // Verifies the actual encoded first chunk, so mixed/stale builds cannot
+    // silently fall back to the pre-HOT1 protocol.
+    static bool factoryAmpUploadHasHot1Marker (const GP200IRUpload& upload) noexcept;
 };
 } // namespace gp200
