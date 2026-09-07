@@ -30,6 +30,12 @@ public:
                                                const juce::String& requestedDisplayName,
                                                GP200IRUpload& result);
 
+    // HOT rename path. Only the persistent 16-byte display name is sent;
+    // the firmware preserves and rewrites the second flash page itself.
+    static juce::Result buildFactoryAmpRename (int zeroBasedFactoryAmpIndex,
+                                               const juce::String& requestedDisplayName,
+                                               GP200IRUpload& result);
+
     // Verifies the actual encoded first chunk, so mixed/stale builds cannot
     // silently fall back to the pre-HOT1 protocol.
     static bool factoryAmpUploadHasHot1Marker (const GP200IRUpload& upload) noexcept;

@@ -64,6 +64,8 @@ class MidiConnection final : private juce::MidiInputCallback, private juce::Time
     bool startFactoryAmpUpload (const juce::File& cloFile,
                                 int zeroBasedFactoryAmpIndex,
                                 const juce::String& requestedDisplayName);
+    bool startFactoryAmpRename (int zeroBasedFactoryAmpIndex,
+                                const juce::String& requestedDisplayName);
     void processIRUpload ();
     bool isIRUploadInProgress () const;
     juce::String getIRUploadStatusText () const;
@@ -263,6 +265,7 @@ class MidiConnection final : private juce::MidiInputCallback, private juce::Time
     int irUploadChunkIndex{0};
     int hot1FactoryAmpUploadIndex{-1};
     juce::String hot1FactoryAmpSourceFile;
+    bool hot2FactoryAmpRename{false};
     double irUploadNextActionMs{0.0};
     juce::String irUploadStatusText{"IR upload: idle"};
     juce::String irUploadLabel{"User IR"};
