@@ -338,6 +338,56 @@ juce::Result GP200SoundClone::buildFactoryAmpUpload (const juce::File& cloFile,
     return juce::Result::ok ();
 }
 
+juce::Result GP200SoundClone::buildFactoryAmpRename (
+    int zeroBasedFactoryAmpIndex,
+    const juce::String& requestedDisplayName,
+    GP200IRUpload& result)
+{
+    if (!juce::isPositiveAndBelow (zeroBasedFactoryAmpIndex, 71))
+        return juce::Result::fail ("The Factory AMP destination must be between 1 and 71.");
+
+    const auto displayName = requestedDisplayName.trim ().substring (0, 16);
+    if (displayName.isEmpty ())
+        return juce::Result::fail ("Enter a Factory AMP name (maximum 16 ASCII characters).");
+
+    std::array<juce::uint8, wrapperBytes> blob{};
+    blob[0] = 0x0a;
+    blob[1] = 0x10;
+    blob[2] = 0x18;
+    blob[3] = 0x20;
+    blob[6] = 0x43; // Existing CR command family.
+    blob[7] = 0x52;
+    blob[10] = static_cast<juce::uint8> (zeroBasedFactoryAmpIndex);
+    blob[11] = 0xa2; // HOT2: rename only; preserve the CLO and its CRC.
+
+    const auto* nameBytes = displayName.toRawUTF8 ();
+    for (int i = 0; i < 16 && nameBytes[i] != 0; ++i)
+    {
+        const auto byte = static_cast<unsigned char> (nameBytes[i]);
+        if (byte < 0x20 || byte > 0x7e)
+            return juce::Result::fail ("Factory AMP names currently support ASCII characters only.");
+        blob[12 + i] = static_cast<juce::uint8> (byte);
+    }
+
+    result = {};
+    result.displayName = displayName;
+    result.prepareMessage = makeSysEx (makeUserIRStagePrepare ());
+    result.commitMessage = makeSysEx (makeUserIRStageCommit ());
+
+    std::vector<juce::uint8> full {
+        0xf0,0x21,0x25,0x7e,0x47,0x50,0x2d,0x32,
+        0x12,
+        static_cast<juce::uint8> (wrapperBytes & 0x7f),
+        static_cast<juce::uint8> ((wrapperBytes >> 7) & 0x7f),
+        0x00,0x00
+    };
+    auto encoded = nibbleEncode (blob.data (), static_cast<int> (blob.size ()));
+    full.insert (full.end (), encoded.begin (), encoded.end ());
+    full.push_back (0xf7);
+    result.chunks.push_back (makeSysEx (full));
+    return juce::Result::ok ();
+}
+
 bool GP200SoundClone::factoryAmpUploadHasHot1Marker (const GP200IRUpload& upload) noexcept
 {
     if (upload.chunks.empty ())

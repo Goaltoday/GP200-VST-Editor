@@ -765,17 +765,20 @@ public:
     using BusyCallback = std::function<bool ()>;
     using SnapToneNameCallback = std::function<juce::String (int)>;
     using RenameCallback = std::function<bool (int, const juce::String&)>;
+    using FactoryAmpRenameCallback = std::function<bool (int, const juce::String&)>;
 
     SoundCloneImportComponent (ImportCallback callback,
                                StatusCallback statusCallback,
                                BusyCallback busyCallback,
                                SnapToneNameCallback snapToneNameCallback,
-                               RenameCallback renameCallback)
+                               RenameCallback renameCallback,
+                               FactoryAmpRenameCallback factoryAmpRenameCallback)
         : onImport (std::move (callback)),
           getUploadStatus (std::move (statusCallback)),
           isUploadBusy (std::move (busyCallback)),
           getSnapToneDisplayName (std::move (snapToneNameCallback)),
-          onRename (std::move (renameCallback))
+          onRename (std::move (renameCallback)),
+          onFactoryAmpRename (std::move (factoryAmpRenameCallback))
     {
         setLookAndFeel (&spaceGroteskLookAndFeel);
 
@@ -975,7 +978,7 @@ private:
         const bool isSnapTone = selectedId >= 1 && selectedId <= 10;
         const bool isFactoryAmp = selectedId >= 1001 && selectedId <= 1071;
         renameEditor.setEnabled (isSnapTone || isFactoryAmp);
-        renameButton.setEnabled (isSnapTone && !isCurrentlyBusy ());
+        renameButton.setEnabled ((isSnapTone || isFactoryAmp) && !isCurrentlyBusy ());
         if (isFactoryAmp)
         {
             const auto selectedRow = fileList.getSelectedRow ();
@@ -1016,13 +1019,30 @@ private:
 
         const auto selectedId = destinationBox.getSelectedId ();
         const auto newName = renameEditor.getText ().trim ().substring (0, 16);
-        if (selectedId < 1 || selectedId > 10)
+        if (selectedId >= 1001 && selectedId <= 1071)
         {
-            statusLabel.setColour (juce::Label::textColourId, mutedTextColour);
-            statusLabel.setText ("The Factory AMP name is applied when the CLO is imported.",
+            if (newName.isEmpty () || onFactoryAmpRename == nullptr)
+            {
+                statusLabel.setColour (juce::Label::textColourId, statusOffColour);
+                statusLabel.setText ("Enter a Factory AMP name (maximum 16 ASCII characters).",
+                                     juce::dontSendNotification);
+                return;
+            }
+            if (!onFactoryAmpRename (selectedId - 1001, newName))
+            {
+                statusLabel.setColour (juce::Label::textColourId, statusOffColour);
+                statusLabel.setText ("Factory AMP rename could not be started.",
+                                     juce::dontSendNotification);
+                return;
+            }
+            uploadWasBusy = true;
+            statusLabel.setColour (juce::Label::textColourId, panelOutlineColour);
+            statusLabel.setText ("Renaming Factory AMP to: " + newName,
                                  juce::dontSendNotification);
             return;
         }
+        if (selectedId < 1 || selectedId > 10)
+            return;
         if (newName.isEmpty () || onRename == nullptr)
         {
             statusLabel.setColour (juce::Label::textColourId, statusOffColour);
@@ -1271,6 +1291,7 @@ private:
             const auto status = getUploadStatus != nullptr ? getUploadStatus() : juce::String();
             statusLabel.setText (status.isNotEmpty() ? status : juce::String ("Sound Clone import completed."),
                                  juce::dontSendNotification);
+            refreshDestinationItems ();
         }
 
         const auto selectedRow = fileList.getSelectedRow ();
@@ -1279,7 +1300,8 @@ private:
             && !entries[static_cast<std::size_t> (selectedRow)].isDirectory;
         importButton.setEnabled (selectedFile);
         const auto selectedId = destinationBox.getSelectedId ();
-        renameButton.setEnabled (selectedId >= 1 && selectedId <= 10);
+        renameButton.setEnabled ((selectedId >= 1 && selectedId <= 10)
+                                 || (selectedId >= 1001 && selectedId <= 1071));
     }
 
     gp200ui::SpaceGroteskLookAndFeel spaceGroteskLookAndFeel;
@@ -1288,6 +1310,7 @@ private:
     BusyCallback isUploadBusy;
     SnapToneNameCallback getSnapToneDisplayName;
     RenameCallback onRename;
+    FactoryAmpRenameCallback onFactoryAmpRename;
     juce::Label pathLabel;
     juce::TextEditor pathEditor;
     juce::TextButton browseButton;
@@ -2869,6 +2892,12 @@ void AudioPluginAudioProcessorEditor::openSoundCloneWindow ()
         {
             return safeThis != nullptr
                        && safeThis->midiConnection.renameSnapToneOnGP200 (zeroBasedIndex, newName);
+        },
+        [safeThis = juce::Component::SafePointer<AudioPluginAudioProcessorEditor> (this)]
+        (int zeroBasedIndex, const juce::String& newName)
+        {
+            return safeThis != nullptr
+                       && safeThis->renameFactoryAmpOnGP200 (zeroBasedIndex, newName);
         }));
 
     options.launchAsync ();
@@ -2942,6 +2971,23 @@ void AudioPluginAudioProcessorEditor::importSoundCloneFile (
         " -> " + destination;
 
     repaint ();
+}
+
+bool AudioPluginAudioProcessorEditor::renameFactoryAmpOnGP200 (
+    int zeroBasedFactoryAmpIndex,
+    const juce::String& requestedName)
+{
+    if (!midiConnection.startFactoryAmpRename (zeroBasedFactoryAmpIndex, requestedName))
+    {
+        effectsStatusText = midiConnection.getIRUploadStatusText ();
+        repaint ();
+        return false;
+    }
+
+    effectsStatusText = "Factory AMP rename started: "
+                      + requestedName.trim ().substring (0, 16);
+    repaint ();
+    return true;
 }
 
 void AudioPluginAudioProcessorEditor::refreshUserIRSlotItems ()

@@ -56,6 +56,8 @@ class AudioPluginAudioProcessorEditor final : public juce::AudioProcessorEditor,
     void importSoundCloneFile (const juce::File& file,
                                int globalSlot,
                                const juce::String& requestedName);
+    bool renameFactoryAmpOnGP200 (int zeroBasedFactoryAmpIndex,
+                                  const juce::String& requestedName);
 	void syncUserIRSlotBoxFromCabEffectId(juce::uint32 effectId);
 	
 	void selectCompareSnapshot (CompareSnapshot snapshot);
