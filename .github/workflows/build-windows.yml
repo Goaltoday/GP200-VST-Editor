@@ -41,6 +41,10 @@ jobs:
               $cloneSource -notmatch '0xa2') {
             throw "HOT2 Factory AMP rename support is missing"
           }
+          if ($cloneSource -notmatch 'container\[crcOffset\].*crc >> 8' -or
+              $cloneSource -notmatch 'container\[crcOffset \+ 1\].*crc & 0xff') {
+            throw "CRCBE Sound Clone conversion fix is missing"
+          }
 
       - name: Configure CMake
         run: cmake -S . -B build -A x64
@@ -57,7 +61,7 @@ jobs:
       - name: Upload VST3
         uses: actions/upload-artifact@v7
         with:
-          name: GP200-VST3-Windows-HOT2-V5
+          name: GP200-VST3-Windows-HOT2-V6-CRCBE
           path: |
             build/**/*_artefacts/Release/VST3/*.vst3/**
             build/**/*_artefacts/Release/VST3/*.vst3

@@ -78,3 +78,13 @@ bytes de nombre, regraba la página y verifica todos sus bytes.
 El modelo CLO y su CRC no se modifican. No hace falta seleccionar otro AMP ni
 volver a enviar el fichero CLO. MOD_SYNC recupera el nombre persistente en la
 siguiente conexión.
+
+## HOT2 / V6 CRCBE: carga hot de CLO 2048 convertidos
+
+V6 corrige el orden de los dos bytes del CRC que el VST recalcula al convertir
+un CLO de 2048 a 1024. V5 guardaba `CRC low, high`, mientras que el firmware
+STEP11 CRCBE y los CLO oficiales usan `CRC high, low`. El error permitía enviar
+todos los bloques y el commit, pero el firmware rechazaba silenciosamente el
+slot. V6 normaliza también los dos bytes CRC de los CLO nativos 1024 sin tocar
+su payload, para admitir archivos válidos producidos por herramientas que los
+guardaron en orden inverso.

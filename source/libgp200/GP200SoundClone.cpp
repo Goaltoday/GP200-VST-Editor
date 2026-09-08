@@ -70,9 +70,11 @@ void updateInternalCrc (std::array<juce::uint8, physicalContainerBytes>& contain
     const auto crc = crc16Modbus (container.data () + crcDataOffset,
                                   static_cast<std::size_t> (declared) - crcDataOffset);
 
-    // Stored little-endian in the VTSI header.
-    container[crcOffset] = static_cast<juce::uint8> (crc & 0xff);
-    container[crcOffset + 1] = static_cast<juce::uint8> ((crc >> 8) & 0xff);
+    // GP-200 VTSI stores this CRC high byte first. This must match the
+    // CRCBE firmware validator; otherwise a converted 2048 -> 1024 CLO is
+    // transferred completely but rejected when the Factory AMP slot commits.
+    container[crcOffset] = static_cast<juce::uint8> ((crc >> 8) & 0xff);
+    container[crcOffset + 1] = static_cast<juce::uint8> (crc & 0xff);
 }
 
 juce::Result prepareSoundCloneModelForGP200 (
@@ -118,7 +120,10 @@ juce::Result prepareSoundCloneModelForGP200 (
 
     if (isVtsi && isGp2001024)
     {
-        // Already in the native GP-200 representation. Do not alter it.
+        // Preserve the native model payload, but normalize the CRC byte order
+        // as well. This accepts otherwise valid 1024 CLO files produced by
+        // tools that stored the two CRC bytes little-endian.
+        updateInternalCrc (prepared);
         return juce::Result::ok ();
     }
 
