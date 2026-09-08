@@ -320,55 +320,12 @@ bool MidiConnection::startFactoryAmpUpload (const juce::File& cloFile,
     irUpload = std::move (prepared);
     hot1FactoryAmpUploadIndex = zeroBasedFactoryAmpIndex;
     hot1FactoryAmpSourceFile = cloFile.getFileName ();
-    hot2FactoryAmpRename = false;
     irUploadLabel = "Factory AMP " + juce::String (zeroBasedFactoryAmpIndex + 1);
     irUploadChunkIndex = 0;
     midiOutput->sendMessageNow (irUpload.prepareMessage);
     irUploadPhase = IRUploadPhase::WaitingAfterPrepare;
 
     // v1.3 robustness test: only Factory AMP/CLO gets relaxed timing.
-    irUploadNextActionMs = juce::Time::getMillisecondCounterHiRes () + 250.0;
-    irUploadStatusText = irUploadLabel + ": preparing";
-    lastMessageText = irUploadStatusText;
-    return true;
-}
-
-bool MidiConnection::startFactoryAmpRename (int zeroBasedFactoryAmpIndex,
-                                            const juce::String& requestedDisplayName)
-{
-    const juce::ScopedLock lock (stateLock);
-    if (midiOutput == nullptr)
-    {
-        irUploadStatusText = "Factory AMP rename failed: MIDI output not open";
-        lastMessageText = irUploadStatusText;
-        return false;
-    }
-    if (irUploadPhase != IRUploadPhase::Idle ||
-        soundCloneUploadPhase != SoundCloneUploadPhase::Idle)
-    {
-        irUploadStatusText = "Factory AMP rename unavailable: another transfer is in progress";
-        lastMessageText = irUploadStatusText;
-        return false;
-    }
-
-    GP200IRUpload prepared;
-    const auto result = GP200SoundClone::buildFactoryAmpRename (
-        zeroBasedFactoryAmpIndex, requestedDisplayName, prepared);
-    if (result.failed ())
-    {
-        irUploadStatusText = "Factory AMP rename failed: " + result.getErrorMessage ();
-        lastMessageText = irUploadStatusText;
-        return false;
-    }
-
-    irUpload = std::move (prepared);
-    hot1FactoryAmpUploadIndex = zeroBasedFactoryAmpIndex;
-    hot1FactoryAmpSourceFile.clear ();
-    hot2FactoryAmpRename = true;
-    irUploadLabel = "Factory AMP rename " + juce::String (zeroBasedFactoryAmpIndex + 1);
-    irUploadChunkIndex = 0;
-    midiOutput->sendMessageNow (irUpload.prepareMessage);
-    irUploadPhase = IRUploadPhase::WaitingAfterPrepare;
     irUploadNextActionMs = juce::Time::getMillisecondCounterHiRes () + 250.0;
     irUploadStatusText = irUploadLabel + ": preparing";
     lastMessageText = irUploadStatusText;
@@ -385,10 +342,10 @@ void MidiConnection::processIRUpload ()
     if (now < irUploadNextActionMs)
         return;
 
-    const bool isFactoryAmpOperation = hot1FactoryAmpUploadIndex >= 0;
-    const double chunkDelayMs      = isFactoryAmpOperation ? 40.0   : 30.0;
-    const double preCommitDelayMs  = isFactoryAmpOperation ? 400.0  : 300.0;
-    const double postCommitDelayMs = isFactoryAmpOperation ? 1200.0 : 1000.0;
+    const bool isFactoryAmpUpload = irUploadLabel.startsWith ("Factory AMP ");
+    const double chunkDelayMs      = isFactoryAmpUpload ? 40.0   : 30.0;
+    const double preCommitDelayMs  = isFactoryAmpUpload ? 400.0  : 300.0;
+    const double postCommitDelayMs = isFactoryAmpUpload ? 1200.0 : 1000.0;
 
     if (irUploadPhase == IRUploadPhase::WaitingAfterPrepare ||
         irUploadPhase == IRUploadPhase::SendingChunks)
@@ -413,13 +370,12 @@ void MidiConnection::processIRUpload ()
 
     if (irUploadPhase == IRUploadPhase::WaitingBeforeCommit)
     {
-        if (isFactoryAmpOperation && !hot2FactoryAmpRename
+        if (isFactoryAmpUpload
             && !isFactoryAmpDestinationInactiveLocked (hot1FactoryAmpUploadIndex))
         {
             irUploadPhase = IRUploadPhase::Idle;
             hot1FactoryAmpUploadIndex = -1;
             hot1FactoryAmpSourceFile.clear ();
-            hot2FactoryAmpRename = false;
             irUpload = {};
             irUploadStatusText = "HOT1 cancelled before commit: destination selected or live preset unavailable; no Factory AMP write requested";
             lastMessageText = irUploadStatusText;
@@ -437,22 +393,20 @@ void MidiConnection::processIRUpload ()
     if (irUploadPhase == IRUploadPhase::WaitingAfterCommit)
     {
         const auto uploadedName = irUpload.displayName;
-        const bool wasFactoryAmpOperation = hot1FactoryAmpUploadIndex >= 0;
-        const bool wasFactoryAmpRename = hot2FactoryAmpRename;
+        const bool wasFactoryAmpUpload = irUploadLabel.startsWith ("Factory AMP ");
         const auto completedFactoryAmpIndex = hot1FactoryAmpUploadIndex;
         const auto completedFactoryAmpSourceFile = hot1FactoryAmpSourceFile;
 
         irUploadPhase = IRUploadPhase::Idle;
         hot1FactoryAmpUploadIndex = -1;
         hot1FactoryAmpSourceFile.clear ();
-        hot2FactoryAmpRename = false;
         irUploadStatusText = irUploadLabel + " completed: " + uploadedName;
         lastMessageText = irUploadStatusText;
         irUpload = {};
 
         // Avoid immediate extra MIDI traffic after the custom Factory AMP
         // flash/readback/hot-activation transaction.
-        if (wasFactoryAmpOperation)
+        if (wasFactoryAmpUpload)
         {
             const auto ampEffects = GP200EffectDatabase::getEffectsForModule ("AMP");
             int factoryIndex = 0;
@@ -462,16 +416,12 @@ void MidiConnection::processIRUpload ()
                     continue;
                 if (factoryIndex++ == completedFactoryAmpIndex)
                 {
-                    auto sourceFile = completedFactoryAmpSourceFile;
-                    if (wasFactoryAmpRename && sourceFile.isEmpty ())
-                        sourceFile = GP200ModSync::getSourceFile (effect.effectId);
-                    GP200ModSync::recordFactoryAmpOverride (effect.effectId, uploadedName, sourceFile);
+                    GP200ModSync::recordFactoryAmpOverride (effect.effectId, uploadedName, completedFactoryAmpSourceFile);
                     break;
                 }
             }
-            irUploadStatusText = wasFactoryAmpRename
-                ? irUploadLabel + ": name written; MOD_SYNC will confirm it on the next connection"
-                : irUploadLabel + ": transfer sent (no activation ACK); select the destination AMP now";
+            irUploadStatusText = irUploadLabel
+                               + ": transfer sent (no activation ACK); select the destination AMP now";
             lastMessageText = irUploadStatusText;
             return;
         }

@@ -66,15 +66,3 @@ Para cambiar el nombre de un CLO ya importado, selecciona el mismo archivo CLO,
 escribe el nombre nuevo y vuelve a importarlo en el mismo slot. Esa sustitución
 es hot porque el slot ya está convertido. El botón `Rename` continúa reservado
 para SnapTone; Factory AMP aplica el nombre mediante la importación.
-
-## HOT2 / V5: renombrado sin reenviar el CLO
-
-Con `GP200_STEP11_HOT2_FACTORY_AMP_RENAME_ADDON.html`, el botón **Rename** queda
-habilitado también para los 71 Factory AMP. Escribe un nombre ASCII de hasta 16
-caracteres y pulsa **Rename**. El VST envía únicamente la cabecera HOT2 (`CR`,
-modo `A2`). El firmware conserva la segunda página en RAM, sustituye sus 16
-bytes de nombre, regraba la página y verifica todos sus bytes.
-
-El modelo CLO y su CRC no se modifican. No hace falta seleccionar otro AMP ni
-volver a enviar el fichero CLO. MOD_SYNC recupera el nombre persistente en la
-siguiente conexión.

@@ -36,10 +36,8 @@ jobs:
           if ($midiSource -notmatch 'HOT1 build mismatch') {
             throw "HOT1 runtime verifier is missing from MidiConnection.cpp"
           }
-          if ($cloneSource -notmatch 'requestedDisplayName' -or
-              $cloneSource -notmatch 'buildFactoryAmpRename' -or
-              $cloneSource -notmatch '0xa2') {
-            throw "HOT2 Factory AMP rename support is missing"
+          if ($cloneSource -notmatch 'requestedDisplayName') {
+            throw "Editable Factory AMP name support is missing"
           }
 
       - name: Configure CMake
@@ -57,7 +55,7 @@ jobs:
       - name: Upload VST3
         uses: actions/upload-artifact@v7
         with:
-          name: GP200-VST3-Windows-HOT2-V5
+          name: GP200-VST3-Windows-HOT1-V4
           path: |
             build/**/*_artefacts/Release/VST3/*.vst3/**
             build/**/*_artefacts/Release/VST3/*.vst3
