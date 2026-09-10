@@ -83,6 +83,16 @@ juce::String cleanAssignmentDisplayText (const juce::String& text)
 }
 
 static constexpr int delaySyncTimeLabelCount = 11;
+static constexpr juce::uint32 pure2ModEffectId = 0x04000021u;
+
+bool usesDelayTimeControls (const gp200::GP200EffectSlot& effect,
+                            const juce::String& blockName)
+{
+    // Pure 2 keeps a MOD-family ID so that the GP-200 accepts it in the MOD
+    // slot, but its parameter ABI is the same as the Pure delay. Treat only
+    // this relocated algorithm as a delay for the Time/Sync presentation.
+    return blockName.equalsIgnoreCase ("DLY") || effect.effectId == pure2ModEffectId;
+}
 
 juce::String getDelaySyncTimeLabel (int index)
 {
@@ -503,7 +513,7 @@ void EffectBlockComponent::setParameterValueForDisplay (int paramIndex, float va
 
     const auto* paramSet = gp200::GP200EffectParamDatabase::findParamsForEffect (effect.effectId);
 
-    if (getBlockName ().equalsIgnoreCase ("DLY") && paramSet != nullptr)
+    if (usesDelayTimeControls (effect, getBlockName ()) && paramSet != nullptr)
     {
         const auto syncParamIndex = findDelayTimeSyncParamIndex (*paramSet);
 
@@ -665,9 +675,9 @@ void EffectBlockComponent::rebuildParameterControls ()
         control.slider->setColour (juce::Slider::trackColourId, getBlockColour ().withAlpha (0.45f));
         control.slider->setColour (juce::Slider::backgroundColourId, juce::Colour (0xff151515));
 
-        const auto isDelayBlock = getBlockName ().equalsIgnoreCase ("DLY");
+        const auto usesDelayControls = usesDelayTimeControls (effect, getBlockName ());
         const auto isSyncedDelayTime =
-            isDelayBlock && isDelayTimeParameter (param) && isDelayTimeSyncEnabled (effect, *paramSet);
+            usesDelayControls && isDelayTimeParameter (param) && isDelayTimeSyncEnabled (effect, *paramSet);
 
         if (isSyncedDelayTime)
         {
@@ -719,7 +729,7 @@ void EffectBlockComponent::rebuildParameterControls ()
                 control.slider->setRange (minimum, maximum, step);
                 control.slider->setDoubleClickReturnValue (true, param.defaultValue);
 
-                if (isDelayBlock && isDelayTimeParameter (param))
+                if (usesDelayControls && isDelayTimeParameter (param))
                 {
                     control.slider->textFromValueFunction = [] (double value)
                     { return juce::String (static_cast<int> (std::round (value))) + " ms"; };

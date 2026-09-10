@@ -9,6 +9,9 @@ Cambios:
 - `O-Trem` pasa a mostrarse como `Pure 2`.
 - Usa los cinco controles de Pure: Mix, Time, Feedback, Sync y Trail.
 - Time queda limitado a 20-500 ms, acorde con la arena de RAM disponible.
+- Corrección Sync: aunque Pure 2 esté alojado en MOD, al activar `Sync` el
+  control `Time` cambia al rango rítmico 0-10 y muestra `1/1` ... `1/16`, igual
+  que los delays del bloque DLY. Al desactivar `Sync`, vuelve a 20-500 ms.
 
 No se añade el ID `0x0B000000` al catálogo MOD. La prueba anterior demostró que
 el hardware rechaza IDs DLY en ese bloque.
