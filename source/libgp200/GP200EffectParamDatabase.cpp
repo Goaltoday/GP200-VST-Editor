@@ -840,6 +840,16 @@ constexpr GP200EffectParamInfo paramLayout_109[] = {
     {4, "Trail", GP200ParamKind::toggle, 0.0f, 0.0f, 0.0f, 0.0f},
 };
 
+// Experimental Pure 2 in the MOD slot. It uses the Pure parameter ABI but the
+// relocated MOD buffer holds only 500 ms of stereo audio.
+constexpr GP200EffectParamInfo paramLayout_133[] = {
+    {0, "Mix", GP200ParamKind::continuous, 20.0f, 0.0f, 100.0f, 1.0f},
+    {1, "Time", GP200ParamKind::continuous, 500.0f, 20.0f, 500.0f, 1.0f},
+    {2, "Feedback", GP200ParamKind::continuous, 50.0f, 0.0f, 100.0f, 1.0f},
+    {3, "Sync", GP200ParamKind::toggle, 0.0f, 0.0f, 0.0f, 0.0f},
+    {4, "Trail", GP200ParamKind::toggle, 0.0f, 0.0f, 0.0f, 0.0f},
+};
+
 constexpr GP200EffectParamInfo paramLayout_110[] = {
     {0, "Mix A", GP200ParamKind::continuous, 20.0f, 0.0f, 100.0f, 1.0f},
     {1, "Time A", GP200ParamKind::continuous, 500.0f, 20.0f, 4000.0f, 1.0f},
@@ -1097,7 +1107,7 @@ constexpr GP200EffectParamSet paramSets[] = {
     {0X04000016u, paramLayout_059, 4},  {0X04000017u, paramLayout_059, 4}, {0X04000018u, paramLayout_065, 4},
     {0X04000019u, paramLayout_066, 2},  {0X0400001Au, paramLayout_064, 3}, {0X0400001Bu, paramLayout_067, 3},
     {0X0400001Eu, paramLayout_068, 6},  {0X0400001Fu, paramLayout_064, 3}, {0X04000020u, paramLayout_069, 5},
-    {0X04000021u, paramLayout_064, 3},  {0X04000026u, paramLayout_059, 4}, {0X04000027u, paramLayout_059, 4},
+    {0X04000021u, paramLayout_133, 5},  {0X04000026u, paramLayout_059, 4}, {0X04000027u, paramLayout_059, 4},
     {0X04000028u, paramLayout_070, 5},  {0X0400002Du, paramLayout_071, 2}, {0X0400002Fu, paramLayout_072, 2},
     {0X04000030u, paramLayout_073, 4},  {0X05000001u, paramLayout_074, 4}, {0X05000006u, paramLayout_074, 4},
     {0X05000007u, paramLayout_074, 4},  {0X05000008u, paramLayout_074, 4}, {0X0500000Au, paramLayout_075, 5},
@@ -1457,8 +1467,10 @@ constexpr DiscreteOptionEntry discreteOptionEntries[] = {
     {0x04000020u, 3, 1, "Vibrato"},
     {0x04000020u, 4, 0, "OFF"},
     {0x04000020u, 4, 1, "ON"},
-    {0x04000021u, 2, 0, "OFF"},
-    {0x04000021u, 2, 1, "ON"},
+    {0x04000021u, 3, 0, "OFF"},
+    {0x04000021u, 3, 1, "ON"},
+    {0x04000021u, 4, 0, "OFF"},
+    {0x04000021u, 4, 1, "ON"},
     {0x04000026u, 3, 0, "OFF"},
     {0x04000026u, 3, 1, "ON"},
     {0x04000027u, 3, 0, "OFF"},
