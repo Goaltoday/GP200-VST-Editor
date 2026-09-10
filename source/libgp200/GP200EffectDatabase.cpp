@@ -34,12 +34,6 @@ constexpr GP200EffectAdditionalModule additionalModules[] = {
     {0X0400002Du, "MOD"}, // Auto Swell
     {0X0400002Fu, "MOD"}, // Hold
     {0X04000030u, "MOD"}, // Freeze
-
-    // Experimental cross-slot reuse test. Keep Pure in its normal DLY
-    // catalogue and expose the same Effect ID in MOD as well. Blocks 7 and 8
-    // retain separate parameter arrays; the hardware test determines whether
-    // their internal DSP state and delay buffers are also independent.
-    {0X0B000000u, "MOD"}, // Pure delay (experimental second instance)
 };
 
 constexpr GP200EffectInfo effectMap[] = {
