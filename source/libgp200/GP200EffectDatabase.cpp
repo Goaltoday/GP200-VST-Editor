@@ -34,6 +34,12 @@ constexpr GP200EffectAdditionalModule additionalModules[] = {
     {0X0400002Du, "MOD"}, // Auto Swell
     {0X0400002Fu, "MOD"}, // Hold
     {0X04000030u, "MOD"}, // Freeze
+
+    // Experimental cross-slot reuse test. Keep Pure in its normal DLY
+    // catalogue and expose the same Effect ID in MOD as well. Blocks 7 and 8
+    // retain separate parameter arrays; the hardware test determines whether
+    // their internal DSP state and delay buffers are also independent.
+    {0X0B000000u, "MOD"}, // Pure delay (experimental second instance)
 };
 
 constexpr GP200EffectInfo effectMap[] = {
@@ -121,7 +127,7 @@ constexpr GP200EffectInfo effectMap[] = {
     {0X0400001Eu, "Pan Phase", "MOD"},
     {0X0400001Fu, "M-Vibe", "MOD"},
     {0X04000020u, "Vibe", "MOD"},
-    {0X04000021u, "Pure 2", "MOD"},
+    {0X04000021u, "O-Trem", "MOD"},
     {0X04000026u, "Sine Trem", "MOD"},
     {0X04000027u, "Triangle Trem", "MOD"},
     {0X04000028u, "Bias Trem", "MOD"},
@@ -436,7 +442,7 @@ constexpr GP200EffectDescription effectDescriptions[] = {
     {0X0400001Eu, "A special, subtle phaser combining tremolo/pan variations"},
     {0X0400001Fu, "Voodoo Lab Micro Vibe"},
     {0X04000020u, "Shin-Ei Uni-Vibe classic phase shifter (chorus)"},
-    {0X04000021u, "Second Pure delay in MOD (experimental, 20-500 ms)"},
+    {0X04000021u, "Demeter TRM-1 Tremulator"},
     {0X04000026u, "Sine tremolo waveform with super wide tonal range"},
     {0X04000027u, "Triangle tremolo waveform with super wide tonal range"},
     {0X04000028u, "Bias tremolo waveform with super wide tonal range"},
