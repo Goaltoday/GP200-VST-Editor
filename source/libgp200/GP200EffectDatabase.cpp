@@ -121,7 +121,7 @@ constexpr GP200EffectInfo effectMap[] = {
     {0X0400001Eu, "Pan Phase", "MOD"},
     {0X0400001Fu, "M-Vibe", "MOD"},
     {0X04000020u, "Vibe", "MOD"},
-    {0X04000021u, "Pure 2", "MOD"},
+    {0X04000021u, "O-Trem", "MOD"},
     {0X04000026u, "Sine Trem", "MOD"},
     {0X04000027u, "Triangle Trem", "MOD"},
     {0X04000028u, "Bias Trem", "MOD"},
@@ -342,6 +342,7 @@ constexpr GP200EffectInfo effectMap[] = {
     {0X0F000007u, "SnapTone", "DST"},
     {0X0F000008u, "SnapTone", "DST"},
     {0X0F000009u, "SnapTone", "DST"},
+    {0XF2000002u, "Pure PRE UI", "INTERNAL"},
 };
 
 struct GP200EffectDescription
@@ -436,7 +437,7 @@ constexpr GP200EffectDescription effectDescriptions[] = {
     {0X0400001Eu, "A special, subtle phaser combining tremolo/pan variations"},
     {0X0400001Fu, "Voodoo Lab Micro Vibe"},
     {0X04000020u, "Shin-Ei Uni-Vibe classic phase shifter (chorus)"},
-    {0X04000021u, "Second Pure delay in MOD (experimental, 20-500 ms)"},
+    {0X04000021u, "Optical tremolo"},
     {0X04000026u, "Sine tremolo waveform with super wide tonal range"},
     {0X04000027u, "Triangle tremolo waveform with super wide tonal range"},
     {0X04000028u, "Bias tremolo waveform with super wide tonal range"},
@@ -651,6 +652,23 @@ juce::String GP200EffectDatabase::getEffectName (juce::uint32 effectId)
     return "Unknown " + effectIdToHex (effectId);
 }
 
+juce::String GP200EffectDatabase::getEffectName (juce::uint32 effectId, const juce::String& moduleName)
+{
+    if (moduleName.equalsIgnoreCase ("PRE"))
+    {
+        switch (effectId)
+        {
+            case 0x0000000Eu: return "Jet";
+            case 0x0000001Au: return "C-Chorus";
+            case 0x03000001u: return "G-Chorus";
+            case 0x0000000Cu: return "S-Phase";
+            case 0x03000002u: return "Pure";
+            default: break;
+        }
+    }
+    return getEffectName (effectId);
+}
+
 juce::String GP200EffectDatabase::getEffectDescription (juce::uint32 effectId)
 {
     const auto modDescription = GP200ModSync::getDescription (effectId);
@@ -669,6 +687,24 @@ juce::String GP200EffectDatabase::getEffectDescription (juce::uint32 effectId)
     }
 
     return {};
+}
+
+juce::String GP200EffectDatabase::getEffectDescription (juce::uint32 effectId,
+                                                         const juce::String& moduleName)
+{
+    if (moduleName.equalsIgnoreCase ("PRE"))
+    {
+        switch (effectId)
+        {
+            case 0x0000000Eu: return getEffectDescription (0x04000011u);
+            case 0x0000001Au: return getEffectDescription (0x04000002u);
+            case 0x03000001u: return getEffectDescription (0x04000001u);
+            case 0x0000000Cu: return getEffectDescription (0x0400001Bu);
+            case 0x03000002u: return "Pure delay adapted to PRE (experimental, 20-500 ms)";
+            default: break;
+        }
+    }
+    return getEffectDescription (effectId);
 }
 
 juce::String GP200EffectDatabase::getModuleName (juce::uint32 effectId)
@@ -703,7 +739,22 @@ std::vector<GP200EffectInfo> GP200EffectDatabase::getEffectsForModule (const juc
         }
 
         if (isAvailable)
-            result.push_back (effect);
+        {
+            auto visibleEffect = effect;
+            if (wantedModule == "PRE")
+            {
+                switch (effect.effectId)
+                {
+                    case 0x0000000Eu: visibleEffect.name = "Jet"; break;
+                    case 0x0000001Au: visibleEffect.name = "C-Chorus"; break;
+                    case 0x03000001u: visibleEffect.name = "G-Chorus"; break;
+                    case 0x0000000Cu: visibleEffect.name = "S-Phase"; break;
+                    case 0x03000002u: visibleEffect.name = "Pure"; break;
+                    default: break;
+                }
+            }
+            result.push_back (visibleEffect);
+        }
     }
 
     return result;

@@ -36,6 +36,10 @@ class GP200EffectParamDatabase
 {
   public:
     static const GP200EffectParamSet* findParamsForEffect (juce::uint32 effectId);
+    static const GP200EffectParamSet* findParamsForEffect (juce::uint32 effectId,
+                                                           const juce::String& moduleName);
+    static juce::uint32 resolveEffectIdForModule (juce::uint32 effectId,
+                                                   const juce::String& moduleName);
     static const GP200EffectParamInfo* findParam (juce::uint32 effectId, int paramIndex);
 
     static juce::String getParamName (juce::uint32 effectId, int paramIndex);

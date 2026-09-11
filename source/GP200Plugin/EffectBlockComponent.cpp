@@ -83,15 +83,16 @@ juce::String cleanAssignmentDisplayText (const juce::String& text)
 }
 
 static constexpr int delaySyncTimeLabelCount = 11;
-static constexpr juce::uint32 pure2ModEffectId = 0x04000021u;
+static constexpr juce::uint32 purePreEffectId = 0x03000002u;
 
 bool usesDelayTimeControls (const gp200::GP200EffectSlot& effect,
                             const juce::String& blockName)
 {
-    // Pure 2 keeps a MOD-family ID so that the GP-200 accepts it in the MOD
-    // slot, but its parameter ABI is the same as the Pure delay. Treat only
-    // this relocated algorithm as a delay for the Time/Sync presentation.
-    return blockName.equalsIgnoreCase ("DLY") || effect.effectId == pure2ModEffectId;
+    // Pure keeps the PRE target ID accepted by the hardware, but its adapted
+    // parameter ABI is the same as the Pure delay. Treat only this relocated
+    // algorithm as a delay for the Time/Sync presentation.
+    return blockName.equalsIgnoreCase ("DLY")
+           || (blockName.equalsIgnoreCase ("PRE") && effect.effectId == purePreEffectId);
 }
 
 juce::String getDelaySyncTimeLabel (int index)
@@ -511,7 +512,7 @@ void EffectBlockComponent::setParameterValueForDisplay (int paramIndex, float va
 
     effect.params[static_cast<std::size_t> (paramIndex)] = value;
 
-    const auto* paramSet = gp200::GP200EffectParamDatabase::findParamsForEffect (effect.effectId);
+    const auto* paramSet = gp200::GP200EffectParamDatabase::findParamsForEffect (effect.effectId, getBlockName ());
 
     if (usesDelayTimeControls (effect, getBlockName ()) && paramSet != nullptr)
     {
@@ -643,7 +644,7 @@ void EffectBlockComponent::rebuildParameterControls ()
 {
     parameterControls.clear ();
 
-    const auto* paramSet = gp200::GP200EffectParamDatabase::findParamsForEffect (effect.effectId);
+    const auto* paramSet = gp200::GP200EffectParamDatabase::findParamsForEffect (effect.effectId, getBlockName ());
 
     if (paramSet == nullptr || paramSet->count <= 0)
         return;
@@ -697,15 +698,17 @@ void EffectBlockComponent::rebuildParameterControls ()
         }
         else
         {
+            const auto displayEffectId = gp200::GP200EffectParamDatabase::resolveEffectIdForModule (
+                effect.effectId, getBlockName ());
             control.usesDiscreteOptions =
-                gp200::GP200EffectParamDatabase::hasDiscreteOptions (effect.effectId, param.idx);
+                gp200::GP200EffectParamDatabase::hasDiscreteOptions (displayEffectId, param.idx);
 
             if (control.usesDiscreteOptions)
             {
                 const auto minimum =
-                    gp200::GP200EffectParamDatabase::getDiscreteOptionMinimum (effect.effectId, param.idx);
+                    gp200::GP200EffectParamDatabase::getDiscreteOptionMinimum (displayEffectId, param.idx);
                 const auto maximum =
-                    gp200::GP200EffectParamDatabase::getDiscreteOptionMaximum (effect.effectId, param.idx);
+                    gp200::GP200EffectParamDatabase::getDiscreteOptionMaximum (displayEffectId, param.idx);
 
                 control.slider->setRange (minimum, maximum, 1.0);
                 control.slider->setDoubleClickReturnValue (true, param.defaultValue);
@@ -743,7 +746,7 @@ void EffectBlockComponent::rebuildParameterControls ()
             {
                 control.valueLabel->setText (
                     gp200::GP200EffectParamDatabase::getDiscreteOptionLabel (
-                        effect.effectId,
+                        displayEffectId,
                         param.idx,
                         effect.params[static_cast<std::size_t> (param.idx)]),
                     juce::dontSendNotification);
@@ -768,7 +771,8 @@ void EffectBlockComponent::rebuildParameterControls ()
                 {
                     parameterControl.valueLabel->setText (
                         gp200::GP200EffectParamDatabase::getDiscreteOptionLabel (
-                            effect.effectId, paramIndex, value),
+                            gp200::GP200EffectParamDatabase::resolveEffectIdForModule (
+                                effect.effectId, getBlockName ()), paramIndex, value),
                         juce::dontSendNotification);
                     break;
                 }
@@ -816,7 +820,7 @@ void EffectBlockComponent::updateParameterControlsVisibility ()
 void EffectBlockComponent::updateEffectDescriptionLabel ()
 {
     auto name = getEffectName ().trim ();
-    auto description = gp200::GP200EffectDatabase::getEffectDescription (effect.effectId).trim ();
+    auto description = gp200::GP200EffectDatabase::getEffectDescription (effect.effectId, getBlockName ()).trim ();
 
     const auto separatorIndex = name.indexOf (" - ");
 
@@ -917,8 +921,10 @@ void EffectBlockComponent::rebuildEffectChoices ()
     {
         effectChoiceIds.push_back (info.effectId);
 
-        auto menuName = getEffectDisplayName (info.effectId, gp200::GP200EffectDatabase::getEffectName (info.effectId)).trim ();
-        auto menuDescription = gp200::GP200EffectDatabase::getEffectDescription (info.effectId).trim ();
+        auto menuName = gp200::GP200EffectDatabase::getEffectName (info.effectId, moduleName).trim ();
+        if (menuName == gp200::GP200EffectDatabase::getEffectName (info.effectId))
+            menuName = getEffectDisplayName (info.effectId, menuName).trim ();
+        auto menuDescription = gp200::GP200EffectDatabase::getEffectDescription (info.effectId, moduleName).trim ();
 
         const auto separatorIndex = menuName.indexOf (" - ");
 
@@ -974,7 +980,11 @@ juce::String EffectBlockComponent::getBlockName () const
 
 juce::String EffectBlockComponent::getEffectName () const
 {
-    return getEffectDisplayName (effect.effectId, gp200::GP200PresetCodec::effectNameForId (effect.effectId));
+    const auto moduleAwareName = gp200::GP200EffectDatabase::getEffectName (effect.effectId, getBlockName ());
+    if (getBlockName ().equalsIgnoreCase ("PRE")
+        && moduleAwareName != gp200::GP200EffectDatabase::getEffectName (effect.effectId))
+        return moduleAwareName;
+    return getEffectDisplayName (effect.effectId, moduleAwareName);
 }
 
 juce::String EffectBlockComponent::getEffectDisplayName (juce::uint32 effectId,

@@ -49,7 +49,7 @@ gp200::GP200Preset makeDefaultOfflinePreset()
         if (!effects.empty ())
             slot.effectId = effects.front ().effectId;
 
-        if (const auto* paramSet = gp200::GP200EffectParamDatabase::findParamsForEffect (slot.effectId))
+        if (const auto* paramSet = gp200::GP200EffectParamDatabase::findParamsForEffect (slot.effectId, modules[blockIndex]))
         {
             for (int i = 0; i < paramSet->count; ++i)
             {

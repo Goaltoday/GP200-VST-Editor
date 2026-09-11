@@ -113,7 +113,7 @@ gp200::GP200Preset makeDefaultOfflinePreset ()
         if (!effects.empty ())
             slot.effectId = effects.front ().effectId;
 
-        if (const auto* paramSet = gp200::GP200EffectParamDatabase::findParamsForEffect (slot.effectId))
+        if (const auto* paramSet = gp200::GP200EffectParamDatabase::findParamsForEffect (slot.effectId, modules[blockIndex]))
         {
             for (int i = 0; i < paramSet->count; ++i)
             {
@@ -3448,7 +3448,8 @@ void AudioPluginAudioProcessorEditor::buildFullPresetRestoreSteps (const gp200::
             if (effect.blockIndex < 0 || effect.blockIndex >= static_cast<int> (gp200::effectBlockCount))
                 continue;
 
-            const auto* paramSet = gp200::GP200EffectParamDatabase::findParamsForEffect (effect.effectId);
+            const auto* paramSet = gp200::GP200EffectParamDatabase::findParamsForEffect (
+                effect.effectId, gp200::GP200PresetCodec::blockNameForSlotIndex (effect.blockIndex));
 
             // Only restore parameters that are known for this effect.
             // Do not send reserved/unused parameter slots from the raw 15-float dump.
@@ -3467,7 +3468,8 @@ void AudioPluginAudioProcessorEditor::buildFullPresetRestoreSteps (const gp200::
             if (effect.blockIndex < 0 || effect.blockIndex >= static_cast<int> (gp200::effectBlockCount))
                 continue;
 
-            const auto* paramSet = gp200::GP200EffectParamDatabase::findParamsForEffect (effect.effectId);
+            const auto* paramSet = gp200::GP200EffectParamDatabase::findParamsForEffect (
+                effect.effectId, gp200::GP200PresetCodec::blockNameForSlotIndex (effect.blockIndex));
 
             if (paramSet == nullptr || paramSet->count <= 0 || paramSet->params == nullptr)
                 continue;
@@ -4525,7 +4527,8 @@ void AudioPluginAudioProcessorEditor::rebuildEffectBlocks (const gp200::GP200Pre
                 auto& effect = offlinePreset.effects[static_cast<std::size_t> (blockIndex)];
                 effect.effectId = effectId;
                 effect.params.fill (0.0f);
-                if (const auto* paramSet = gp200::GP200EffectParamDatabase::findParamsForEffect (effectId))
+                if (const auto* paramSet = gp200::GP200EffectParamDatabase::findParamsForEffect (
+                        effectId, gp200::GP200PresetCodec::blockNameForSlotIndex (blockIndex)))
                 {
                     for (int i = 0; i < paramSet->count; ++i)
                     {
