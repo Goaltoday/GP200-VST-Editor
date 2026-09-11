@@ -92,7 +92,7 @@ bool usesDelayTimeControls (const gp200::GP200EffectSlot& effect,
     // parameter ABI is the same as the Pure delay. Treat only this relocated
     // algorithm as a delay for the Time/Sync presentation.
     if (blockName.equalsIgnoreCase ("DLY")) return true;
-    if (! blockName.equalsIgnoreCase ("PRE") && ! blockName.equalsIgnoreCase ("VOL")) return false;
+    if (! blockName.equalsIgnoreCase ("PRE")) return false;
     const auto dynamicModule = gp200::GP200ModSync::getPreBankSourceModule (effect.effectId);
     return dynamicModule.equalsIgnoreCase ("DLY");
 }
@@ -983,7 +983,7 @@ juce::String EffectBlockComponent::getBlockName () const
 juce::String EffectBlockComponent::getEffectName () const
 {
     const auto moduleAwareName = gp200::GP200EffectDatabase::getEffectName (effect.effectId, getBlockName ());
-    if ((getBlockName ().equalsIgnoreCase ("PRE") || getBlockName ().equalsIgnoreCase ("VOL"))
+    if (getBlockName ().equalsIgnoreCase ("PRE")
         && moduleAwareName != gp200::GP200EffectDatabase::getEffectName (effect.effectId))
         return moduleAwareName;
     return getEffectDisplayName (effect.effectId, moduleAwareName);

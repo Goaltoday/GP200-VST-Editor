@@ -1,28 +1,11 @@
-# PRE CONFIG 8 — WAH/RVB V2
+# PRE CONFIG 8 — prueba experimental
 
-Esta versión amplía PRE CONFIG 8 sin cambiar la arquitectura del VST.
+Esta versión acompaña a `GP200_UNIFIED_STEP11_PRE_CONFIG_8_V1.html`.
 
-## Familias disponibles
+El HTML usa los 8 huecos PRE duplicados de mayor capacidad: Penesas, AC Boost, Hammy, FAT BB, Super OD, Blues OD, B-Boost y OD 9. Al activar el mod, restaura primero el PRE BANK fijo anterior y después aplica las 8 asignaciones elegidas.
 
-- MOD: receta MOD→PRE ya usada por PRE BANK.
-- WAH: nueva receta WAH→PRE. Se reconstruyó usando Hammy, que existe en WAH y PRE. La transformación aplicada a Hammy WAH reproduce byte a byte el package Hammy PRE del BIN estable `0da4482a...`.
-- DLY: experimental, igual que en PRE CONFIG 8 V1.
-- RVB: experimental. Se aplican las traducciones estáticas candidatas de estado, arena alta y callbacks obtenidas del firmware V1.8.0.
+El ZIP de firmware genera `GP200_PRE_BANK.json`. Copiarlo a `Documentos\GP200\GP200_PRE_BANK.json` junto al `GP200_MOD_SYNC.json`. El VST lee ese fichero para resolver nombre, parámetros y presentación DLY por el ID PRE guardado en el preset.
 
-El HTML sigue filtrando por capacidad física de cada uno de los 8 huecos PRE. Un efecto que no cabe no aparece en ese hueco.
+MOD: receta de relocalización validada localmente contra los cuatro packages ya confirmados (Jet, C-Chorus, G-Chorus y S-Phase), con salida byte a byte idéntica al PRE BANK conocido.
 
-## VST
-
-No ha sido necesario cambiar la lógica C++ respecto a PRE CONFIG 8 V1. El VST ya resuelve dinámicamente:
-
-`PRE target ID -> source_effect_id + source_module`
-
-usando `Documents\\GP200\\GP200_PRE_BANK.json`.
-
-Por ello WAH y RVB obtienen nombre y layout de parámetros desde la base normal del VST. El tratamiento especial Time/Sync sigue aplicándose solamente cuando `source_module` es `DLY`.
-
-## Estado de validación
-
-- WAH/Hammy: validación binaria exacta de la receta, falta validar en hardware los otros cinco WAH.
-- RVB: receta estática experimental; falta validación física.
-- Mantener firmware oficial de recuperación y probar inicialmente con PRE apagado.
+DLY: receta general derivada de la relocalización de Pure. Es experimental; Pure tuvo además ajustes específicos de memoria/tiempo en la rama confirmada, por lo que otros delays NO están confirmados en hardware. Probar con PRE/MOD/DLY apagados al seleccionar y conservar firmware oficial de recuperación.
