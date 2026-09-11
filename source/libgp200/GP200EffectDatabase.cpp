@@ -33,8 +33,6 @@ constexpr GP200EffectAdditionalModule additionalModules[] = {
     {0X0400002Du, "NR"},  // Auto Swell
     {0X0400002Du, "MOD"}, // Auto Swell
     {0X0400002Fu, "MOD"}, // Hold
-    {0X04000011u, "PRE"}, // AUX RAW probe: Jet with its original MOD ID
-    {0X0400001Bu, "PRE"}, // AUX RAW probe: S-Phase with its original MOD ID
     {0X04000030u, "MOD"}, // Freeze
 };
 
@@ -660,8 +658,6 @@ juce::String GP200EffectDatabase::getEffectName (juce::uint32 effectId, const ju
     {
         switch (effectId)
         {
-            case 0x04000011u: return "AUX RAW Jet";
-            case 0x0400001Bu: return "AUX RAW S-Phase";
             case 0x0000000Eu: return "Jet";
             case 0x0000001Au: return "C-Chorus";
             case 0x03000001u: return "G-Chorus";
@@ -700,8 +696,6 @@ juce::String GP200EffectDatabase::getEffectDescription (juce::uint32 effectId,
     {
         switch (effectId)
         {
-            case 0x04000011u: return "DIAGNOSTIC: original MOD package requested directly in PRE";
-            case 0x0400001Bu: return "DIAGNOSTIC: original MOD package requested directly in PRE";
             case 0x0000000Eu: return getEffectDescription (0x04000011u);
             case 0x0000001Au: return getEffectDescription (0x04000002u);
             case 0x03000001u: return getEffectDescription (0x04000001u);
