@@ -654,7 +654,7 @@ juce::String GP200EffectDatabase::getEffectName (juce::uint32 effectId)
 
 juce::String GP200EffectDatabase::getEffectName (juce::uint32 effectId, const juce::String& moduleName)
 {
-    if (moduleName.equalsIgnoreCase ("PRE"))
+    if (moduleName.equalsIgnoreCase ("PRE") || moduleName.equalsIgnoreCase ("VOL"))
     {
         const auto dynamicName = GP200ModSync::getPreBankDisplayName (effectId);
         if (dynamicName.isNotEmpty ()) return dynamicName;
@@ -685,7 +685,7 @@ juce::String GP200EffectDatabase::getEffectDescription (juce::uint32 effectId)
 juce::String GP200EffectDatabase::getEffectDescription (juce::uint32 effectId,
                                                          const juce::String& moduleName)
 {
-    if (moduleName.equalsIgnoreCase ("PRE"))
+    if (moduleName.equalsIgnoreCase ("PRE") || moduleName.equalsIgnoreCase ("VOL"))
     {
         const auto sourceId = GP200ModSync::getPreBankSourceEffectId (effectId);
         if (sourceId != 0u)
@@ -709,7 +709,8 @@ juce::String GP200EffectDatabase::getModuleName (juce::uint32 effectId)
 std::vector<GP200EffectInfo> GP200EffectDatabase::getEffectsForModule (const juce::String& moduleName)
 {
     std::vector<GP200EffectInfo> result;
-    const auto wantedModule = moduleName.trim ().toUpperCase ();
+    const auto requestedModule = moduleName.trim ().toUpperCase ();
+    const auto wantedModule = requestedModule == "VOL" ? juce::String ("PRE") : requestedModule;
 
     for (const auto& effect : effectMap)
     {
