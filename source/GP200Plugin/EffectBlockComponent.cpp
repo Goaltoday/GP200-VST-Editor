@@ -9,6 +9,7 @@
 */
 #include "EffectBlockComponent.h"
 #include "GP200Typography.h"
+#include "GP200ModSync.h"
 
 #include <cmath>
 #include <utility>
@@ -83,7 +84,6 @@ juce::String cleanAssignmentDisplayText (const juce::String& text)
 }
 
 static constexpr int delaySyncTimeLabelCount = 11;
-static constexpr juce::uint32 purePreEffectId = 0x03000002u;
 
 bool usesDelayTimeControls (const gp200::GP200EffectSlot& effect,
                             const juce::String& blockName)
@@ -91,8 +91,10 @@ bool usesDelayTimeControls (const gp200::GP200EffectSlot& effect,
     // Pure keeps the PRE target ID accepted by the hardware, but its adapted
     // parameter ABI is the same as the Pure delay. Treat only this relocated
     // algorithm as a delay for the Time/Sync presentation.
-    return blockName.equalsIgnoreCase ("DLY")
-           || (blockName.equalsIgnoreCase ("PRE") && effect.effectId == purePreEffectId);
+    if (blockName.equalsIgnoreCase ("DLY")) return true;
+    if (! blockName.equalsIgnoreCase ("PRE")) return false;
+    const auto dynamicModule = gp200::GP200ModSync::getPreBankSourceModule (effect.effectId);
+    return dynamicModule.equalsIgnoreCase ("DLY");
 }
 
 juce::String getDelaySyncTimeLabel (int index)

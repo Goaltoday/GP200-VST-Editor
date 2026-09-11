@@ -23,6 +23,17 @@ int knownUserIRSamples{0};
 bool deviceSnapshot{false};
 bool unsavedDeviceSnapshot{false};
 
+struct PreBankEntry
+{
+    juce::uint32 sourceEffectId{0};
+    juce::String displayName;
+    juce::String sourceModule;
+    juce::String description;
+};
+std::map<juce::uint32, PreBankEntry> preBankOverrides;
+juce::int64 preBankLastModificationMs{-1};
+bool preBankLoadedOnce{false};
+
 juce::uint32 parseEffectId (const juce::var& value)
 {
     if (value.isInt () || value.isInt64 ())
@@ -62,6 +73,62 @@ void parseOverrideArray (const juce::var& root,
         entry.isCab = isCab;
         overrides[effectId] = std::move (entry);
     }
+}
+
+void loadPreBankUnlocked (const juce::File& file)
+{
+    preBankOverrides.clear ();
+    if (! file.existsAsFile ())
+    {
+        preBankLastModificationMs = -1;
+        preBankLoadedOnce = true;
+        ++revision;
+        return;
+    }
+
+    const auto parsed = juce::JSON::parse (file.loadFileAsString ());
+    if (! parsed.isVoid () && parsed.getDynamicObject () != nullptr)
+    {
+        if (const auto* array = parsed.getProperty ("slots", {}).getArray ())
+        {
+            for (const auto& item : *array)
+            {
+                const auto* object = item.getDynamicObject ();
+                if (object == nullptr) continue;
+                const auto preId = parseEffectId (object->getProperty ("pre_effect_id"));
+                const auto sourceId = parseEffectId (object->getProperty ("source_effect_id"));
+                if (preId == 0 || sourceId == 0) continue;
+                PreBankEntry entry;
+                entry.sourceEffectId = sourceId;
+                entry.displayName = object->getProperty ("display_name").toString ().trim ();
+                entry.sourceModule = object->getProperty ("source_module").toString ().trim ().toUpperCase ();
+                entry.description = object->getProperty ("relocation_profile").toString ().trim ();
+                preBankOverrides[preId] = std::move (entry);
+            }
+        }
+    }
+    preBankLastModificationMs = file.getLastModificationTime ().toMilliseconds ();
+    preBankLoadedOnce = true;
+    ++revision;
+}
+
+void reloadPreBankUnlocked ()
+{
+    const auto file = GP200ModSync::getPreBankFile ();
+    if (! preBankLoadedOnce)
+    {
+        loadPreBankUnlocked (file);
+        return;
+    }
+    if (! file.existsAsFile ())
+    {
+        if (preBankLastModificationMs >= 0 || ! preBankOverrides.empty ())
+            loadPreBankUnlocked (file);
+        return;
+    }
+    const auto ms = file.getLastModificationTime ().toMilliseconds ();
+    if (ms != preBankLastModificationMs)
+        loadPreBankUnlocked (file);
 }
 
 void loadUnlocked (const juce::File& file)
@@ -176,9 +243,17 @@ juce::File GP200ModSync::getManifestFile ()
         .getChildFile ("GP200_MOD_SYNC.json");
 }
 
+juce::File GP200ModSync::getPreBankFile ()
+{
+    return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
+        .getChildFile ("GP200")
+        .getChildFile ("GP200_PRE_BANK.json");
+}
+
 void GP200ModSync::reloadIfChanged ()
 {
     const juce::ScopedLock lock (syncLock);
+    reloadPreBankUnlocked ();
     // A failed disk write must not discard the complete live snapshot on the next getter.
     if (unsavedDeviceSnapshot) return;
     const auto file = getManifestFile ();
@@ -249,6 +324,41 @@ juce::String GP200ModSync::getDescription (juce::uint32 effectId)
     if (entry.isCab)
         return "Modified Factory CAB";
     return {};
+}
+
+juce::uint32 GP200ModSync::getPreBankSourceEffectId (juce::uint32 preEffectId)
+{
+    reloadIfChanged ();
+    const juce::ScopedLock lock (syncLock);
+    const auto it = preBankOverrides.find (preEffectId);
+    return it != preBankOverrides.end () ? it->second.sourceEffectId : 0u;
+}
+
+juce::String GP200ModSync::getPreBankDisplayName (juce::uint32 preEffectId)
+{
+    reloadIfChanged ();
+    const juce::ScopedLock lock (syncLock);
+    const auto it = preBankOverrides.find (preEffectId);
+    return it != preBankOverrides.end () ? it->second.displayName : juce::String{};
+}
+
+juce::String GP200ModSync::getPreBankSourceModule (juce::uint32 preEffectId)
+{
+    reloadIfChanged ();
+    const juce::ScopedLock lock (syncLock);
+    const auto it = preBankOverrides.find (preEffectId);
+    return it != preBankOverrides.end () ? it->second.sourceModule : juce::String{};
+}
+
+juce::String GP200ModSync::getPreBankDescription (juce::uint32 preEffectId)
+{
+    reloadIfChanged ();
+    const juce::ScopedLock lock (syncLock);
+    const auto it = preBankOverrides.find (preEffectId);
+    if (it == preBankOverrides.end ()) return {};
+    auto text = it->second.sourceModule + " effect relocated into PRE";
+    if (it->second.description.isNotEmpty ()) text += " (" + it->second.description + ")";
+    return text;
 }
 
 void GP200ModSync::recordFactoryAmpOverride (juce::uint32 effectId,

@@ -1224,15 +1224,10 @@ juce::uint32 GP200EffectParamDatabase::resolveEffectIdForModule (juce::uint32 ef
     if (! moduleName.equalsIgnoreCase ("PRE"))
         return effectId;
 
-    switch (effectId)
-    {
-        case 0x0000000Eu: return 0x04000011u; // Jet replaces PRE 14 Boost
-        case 0x0000001Au: return 0x04000002u; // C-Chorus replaces PRE Boost
-        case 0x03000001u: return 0x04000001u; // G-Chorus replaces PRE OD9
-        case 0x0000000Cu: return 0x0400001Bu; // S-Phase replaces PRE P-Boost
-        case 0x03000002u: return 0xF2000002u; // Pure PRE, private UI layout
-        default: return effectId;
-    }
+    if (const auto dynamicSource = GP200ModSync::getPreBankSourceEffectId (effectId); dynamicSource != 0u)
+        return dynamicSource;
+
+    return effectId;
 }
 
 const GP200EffectParamSet* GP200EffectParamDatabase::findParamsForEffect (juce::uint32 effectId,

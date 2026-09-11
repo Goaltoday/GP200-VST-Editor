@@ -656,15 +656,8 @@ juce::String GP200EffectDatabase::getEffectName (juce::uint32 effectId, const ju
 {
     if (moduleName.equalsIgnoreCase ("PRE"))
     {
-        switch (effectId)
-        {
-            case 0x0000000Eu: return "Jet";
-            case 0x0000001Au: return "C-Chorus";
-            case 0x03000001u: return "G-Chorus";
-            case 0x0000000Cu: return "S-Phase";
-            case 0x03000002u: return "Pure";
-            default: break;
-        }
+        const auto dynamicName = GP200ModSync::getPreBankDisplayName (effectId);
+        if (dynamicName.isNotEmpty ()) return dynamicName;
     }
     return getEffectName (effectId);
 }
@@ -694,14 +687,12 @@ juce::String GP200EffectDatabase::getEffectDescription (juce::uint32 effectId,
 {
     if (moduleName.equalsIgnoreCase ("PRE"))
     {
-        switch (effectId)
+        const auto sourceId = GP200ModSync::getPreBankSourceEffectId (effectId);
+        if (sourceId != 0u)
         {
-            case 0x0000000Eu: return getEffectDescription (0x04000011u);
-            case 0x0000001Au: return getEffectDescription (0x04000002u);
-            case 0x03000001u: return getEffectDescription (0x04000001u);
-            case 0x0000000Cu: return getEffectDescription (0x0400001Bu);
-            case 0x03000002u: return "Pure delay adapted to PRE (experimental, 20-500 ms)";
-            default: break;
+            const auto sourceDescription = getEffectDescription (sourceId);
+            if (sourceDescription.isNotEmpty ()) return sourceDescription;
+            return GP200ModSync::getPreBankDescription (effectId);
         }
     }
     return getEffectDescription (effectId);
@@ -743,14 +734,11 @@ std::vector<GP200EffectInfo> GP200EffectDatabase::getEffectsForModule (const juc
             auto visibleEffect = effect;
             if (wantedModule == "PRE")
             {
-                switch (effect.effectId)
+                const auto dynamicSource = GP200ModSync::getPreBankSourceEffectId (effect.effectId);
+                if (dynamicSource != 0u)
                 {
-                    case 0x0000000Eu: visibleEffect.name = "Jet"; break;
-                    case 0x0000001Au: visibleEffect.name = "C-Chorus"; break;
-                    case 0x03000001u: visibleEffect.name = "G-Chorus"; break;
-                    case 0x0000000Cu: visibleEffect.name = "S-Phase"; break;
-                    case 0x03000002u: visibleEffect.name = "Pure"; break;
-                    default: break;
+                    if (const auto* sourceEffect = findEffect (dynamicSource))
+                        visibleEffect.name = sourceEffect->name;
                 }
             }
             result.push_back (visibleEffect);
