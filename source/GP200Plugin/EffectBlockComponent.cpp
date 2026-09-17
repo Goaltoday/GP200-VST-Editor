@@ -539,9 +539,13 @@ void EffectBlockComponent::setParameterValueForDisplay (int paramIndex, float va
 
             if (control.usesDiscreteOptions && control.valueLabel != nullptr)
             {
+                const auto displayEffectId =
+                    gp200::GP200EffectParamDatabase::resolveEffectIdForModule (
+                        effect.effectId, getBlockName ());
+
                 control.valueLabel->setText (
                     gp200::GP200EffectParamDatabase::getDiscreteOptionLabel (
-                        effect.effectId, paramIndex, value),
+                        displayEffectId, paramIndex, value),
                     juce::dontSendNotification);
             }
 

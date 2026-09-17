@@ -1703,6 +1703,12 @@ const DiscreteOptionEntry* findDiscreteOptionEntry (juce::uint32 effectId,
 
 bool GP200EffectParamDatabase::hasDiscreteOptions (juce::uint32 effectId, int paramIndex)
 {
+    // A Factory AMP converted to an embedded CLO retains the stock effect ID,
+    // but its five visible controls always use the continuous CLO5 layout.
+    // Ignore OFF/ON or choice metadata belonging to the replaced stock AMP.
+    if (GP200ModSync::isCustomCloAmp (effectId))
+        return false;
+
     for (const auto& entry : discreteOptionEntries)
         if (entry.effectId == effectId && entry.paramIndex == paramIndex)
             return true;
@@ -1712,6 +1718,9 @@ bool GP200EffectParamDatabase::hasDiscreteOptions (juce::uint32 effectId, int pa
 
 float GP200EffectParamDatabase::getDiscreteOptionMinimum (juce::uint32 effectId, int paramIndex)
 {
+    if (GP200ModSync::isCustomCloAmp (effectId))
+        return 0.0f;
+
     int result = 0;
     bool found = false;
 
@@ -1729,6 +1738,9 @@ float GP200EffectParamDatabase::getDiscreteOptionMinimum (juce::uint32 effectId,
 
 float GP200EffectParamDatabase::getDiscreteOptionMaximum (juce::uint32 effectId, int paramIndex)
 {
+    if (GP200ModSync::isCustomCloAmp (effectId))
+        return 100.0f;
+
     int result = 0;
     bool found = false;
 
@@ -1748,6 +1760,9 @@ juce::String GP200EffectParamDatabase::getDiscreteOptionLabel (juce::uint32 effe
                                                                int paramIndex,
                                                                float value)
 {
+    if (GP200ModSync::isCustomCloAmp (effectId))
+        return juce::String (juce::roundToInt (value));
+
     const auto integerValue = juce::roundToInt (value);
 
     if (const auto* entry = findDiscreteOptionEntry (effectId, paramIndex, integerValue))
