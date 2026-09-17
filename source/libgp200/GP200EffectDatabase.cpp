@@ -659,6 +659,11 @@ juce::String GP200EffectDatabase::getEffectName (juce::uint32 effectId, const ju
         const auto dynamicName = GP200ModSync::getPreBankDisplayName (effectId);
         if (dynamicName.isNotEmpty ()) return dynamicName;
     }
+    if (moduleName.equalsIgnoreCase ("WAH"))
+    {
+        const auto dynamicName = GP200ModSync::getWahConfigDisplayName (effectId);
+        if (dynamicName.isNotEmpty ()) return dynamicName;
+    }
     return getEffectName (effectId);
 }
 
@@ -693,6 +698,16 @@ juce::String GP200EffectDatabase::getEffectDescription (juce::uint32 effectId,
             const auto sourceDescription = getEffectDescription (sourceId);
             if (sourceDescription.isNotEmpty ()) return sourceDescription;
             return GP200ModSync::getPreBankDescription (effectId);
+        }
+    }
+    if (moduleName.equalsIgnoreCase ("WAH"))
+    {
+        const auto sourceId = GP200ModSync::getWahConfigSourceEffectId (effectId);
+        if (sourceId != 0u)
+        {
+            const auto sourceDescription = getEffectDescription (sourceId);
+            if (sourceDescription.isNotEmpty ()) return sourceDescription;
+            return GP200ModSync::getWahConfigDescription (effectId);
         }
     }
     return getEffectDescription (effectId);
@@ -735,6 +750,15 @@ std::vector<GP200EffectInfo> GP200EffectDatabase::getEffectsForModule (const juc
             if (wantedModule == "PRE")
             {
                 const auto dynamicSource = GP200ModSync::getPreBankSourceEffectId (effect.effectId);
+                if (dynamicSource != 0u)
+                {
+                    if (const auto* sourceEffect = findEffect (dynamicSource))
+                        visibleEffect.name = sourceEffect->name;
+                }
+            }
+            else if (wantedModule == "WAH")
+            {
+                const auto dynamicSource = GP200ModSync::getWahConfigSourceEffectId (effect.effectId);
                 if (dynamicSource != 0u)
                 {
                     if (const auto* sourceEffect = findEffect (dynamicSource))

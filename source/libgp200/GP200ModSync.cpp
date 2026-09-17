@@ -33,6 +33,9 @@ struct PreBankEntry
 std::map<juce::uint32, PreBankEntry> preBankOverrides;
 juce::int64 preBankLastModificationMs{-1};
 bool preBankLoadedOnce{false};
+std::map<juce::uint32, PreBankEntry> wahConfigOverrides;
+juce::int64 wahConfigLastModificationMs{-1};
+bool wahConfigLoadedOnce{false};
 
 juce::uint32 parseEffectId (const juce::var& value)
 {
@@ -129,6 +132,62 @@ void reloadPreBankUnlocked ()
     const auto ms = file.getLastModificationTime ().toMilliseconds ();
     if (ms != preBankLastModificationMs)
         loadPreBankUnlocked (file);
+}
+
+void loadWahConfigUnlocked (const juce::File& file)
+{
+    wahConfigOverrides.clear ();
+    if (! file.existsAsFile ())
+    {
+        wahConfigLastModificationMs = -1;
+        wahConfigLoadedOnce = true;
+        ++revision;
+        return;
+    }
+
+    const auto parsed = juce::JSON::parse (file.loadFileAsString ());
+    if (! parsed.isVoid () && parsed.getDynamicObject () != nullptr)
+    {
+        if (const auto* array = parsed.getProperty ("slots", {}).getArray ())
+        {
+            for (const auto& item : *array)
+            {
+                const auto* object = item.getDynamicObject ();
+                if (object == nullptr) continue;
+                const auto wahId = parseEffectId (object->getProperty ("wah_effect_id"));
+                const auto sourceId = parseEffectId (object->getProperty ("source_effect_id"));
+                if (wahId == 0 || sourceId == 0) continue;
+                PreBankEntry entry;
+                entry.sourceEffectId = sourceId;
+                entry.displayName = object->getProperty ("display_name").toString ().trim ();
+                entry.sourceModule = object->getProperty ("source_module").toString ().trim ().toUpperCase ();
+                entry.description = object->getProperty ("relocation_profile").toString ().trim ();
+                wahConfigOverrides[wahId] = std::move (entry);
+            }
+        }
+    }
+    wahConfigLastModificationMs = file.getLastModificationTime ().toMilliseconds ();
+    wahConfigLoadedOnce = true;
+    ++revision;
+}
+
+void reloadWahConfigUnlocked ()
+{
+    const auto file = GP200ModSync::getWahConfigFile ();
+    if (! wahConfigLoadedOnce)
+    {
+        loadWahConfigUnlocked (file);
+        return;
+    }
+    if (! file.existsAsFile ())
+    {
+        if (wahConfigLastModificationMs >= 0 || ! wahConfigOverrides.empty ())
+            loadWahConfigUnlocked (file);
+        return;
+    }
+    const auto ms = file.getLastModificationTime ().toMilliseconds ();
+    if (ms != wahConfigLastModificationMs)
+        loadWahConfigUnlocked (file);
 }
 
 void loadUnlocked (const juce::File& file)
@@ -250,10 +309,18 @@ juce::File GP200ModSync::getPreBankFile ()
         .getChildFile ("GP200_PRE_BANK.json");
 }
 
+juce::File GP200ModSync::getWahConfigFile ()
+{
+    return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
+        .getChildFile ("GP200")
+        .getChildFile ("GP200_WAH_CONFIG.json");
+}
+
 void GP200ModSync::reloadIfChanged ()
 {
     const juce::ScopedLock lock (syncLock);
     reloadPreBankUnlocked ();
+    reloadWahConfigUnlocked ();
     // A failed disk write must not discard the complete live snapshot on the next getter.
     if (unsavedDeviceSnapshot) return;
     const auto file = getManifestFile ();
@@ -357,6 +424,41 @@ juce::String GP200ModSync::getPreBankDescription (juce::uint32 preEffectId)
     const auto it = preBankOverrides.find (preEffectId);
     if (it == preBankOverrides.end ()) return {};
     auto text = it->second.sourceModule + " effect relocated into PRE";
+    if (it->second.description.isNotEmpty ()) text += " (" + it->second.description + ")";
+    return text;
+}
+
+juce::uint32 GP200ModSync::getWahConfigSourceEffectId (juce::uint32 wahEffectId)
+{
+    reloadIfChanged ();
+    const juce::ScopedLock lock (syncLock);
+    const auto it = wahConfigOverrides.find (wahEffectId);
+    return it != wahConfigOverrides.end () ? it->second.sourceEffectId : 0u;
+}
+
+juce::String GP200ModSync::getWahConfigDisplayName (juce::uint32 wahEffectId)
+{
+    reloadIfChanged ();
+    const juce::ScopedLock lock (syncLock);
+    const auto it = wahConfigOverrides.find (wahEffectId);
+    return it != wahConfigOverrides.end () ? it->second.displayName : juce::String{};
+}
+
+juce::String GP200ModSync::getWahConfigSourceModule (juce::uint32 wahEffectId)
+{
+    reloadIfChanged ();
+    const juce::ScopedLock lock (syncLock);
+    const auto it = wahConfigOverrides.find (wahEffectId);
+    return it != wahConfigOverrides.end () ? it->second.sourceModule : juce::String{};
+}
+
+juce::String GP200ModSync::getWahConfigDescription (juce::uint32 wahEffectId)
+{
+    reloadIfChanged ();
+    const juce::ScopedLock lock (syncLock);
+    const auto it = wahConfigOverrides.find (wahEffectId);
+    if (it == wahConfigOverrides.end ()) return {};
+    auto text = it->second.sourceModule + " effect relocated into WAH";
     if (it->second.description.isNotEmpty ()) text += " (" + it->second.description + ")";
     return text;
 }

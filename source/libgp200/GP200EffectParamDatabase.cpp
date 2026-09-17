@@ -1221,11 +1221,16 @@ const GP200EffectParamSet* GP200EffectParamDatabase::findParamsForEffect (juce::
 juce::uint32 GP200EffectParamDatabase::resolveEffectIdForModule (juce::uint32 effectId,
                                                                  const juce::String& moduleName)
 {
-    if (! moduleName.equalsIgnoreCase ("PRE"))
-        return effectId;
-
-    if (const auto dynamicSource = GP200ModSync::getPreBankSourceEffectId (effectId); dynamicSource != 0u)
-        return dynamicSource;
+    if (moduleName.equalsIgnoreCase ("PRE"))
+    {
+        if (const auto dynamicSource = GP200ModSync::getPreBankSourceEffectId (effectId); dynamicSource != 0u)
+            return dynamicSource;
+    }
+    else if (moduleName.equalsIgnoreCase ("WAH"))
+    {
+        if (const auto dynamicSource = GP200ModSync::getWahConfigSourceEffectId (effectId); dynamicSource != 0u)
+            return dynamicSource;
+    }
 
     return effectId;
 }
