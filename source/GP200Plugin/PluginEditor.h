@@ -222,6 +222,7 @@ CompareSnapshot selectedCompareSnapshot{
 
         void setItems (std::vector<Item> newItems);
         void setLoopPositions (int sendPosition, int returnPosition);
+        void setParallelMode (bool shouldBeParallel);
         void setSelectedBlockIndex (int blockIndex);
         void setBlockEnabled (int blockIndex, bool enabled);
         void paint (juce::Graphics& g) override;
@@ -240,12 +241,17 @@ CompareSnapshot selectedCompareSnapshot{
         int getLoopMarkerAt (juce::Point<int> position) const;
         int getLoopPositionAtX (int x) const;
         int getLoopMarkerX (int position) const;
+        int getAmplifierItemIndex () const;
+        int getEffectiveSendPosition () const;
+        int getEffectiveReturnPosition () const;
+        int getParallelGroupForItem (const Item& item) const;
 
         std::vector<Item> items;
         int selectedBlockIndex{-1};
         int pressedItemIndex{-1};
         int dragTargetPosition{-1};
         bool dragging{false};
+        bool parallelMode{false};
         int fxLoopSendPosition{4};
         int fxLoopReturnPosition{4};
         int draggedLoopMarker{-1};
