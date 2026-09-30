@@ -109,6 +109,7 @@ void updateSnapshotNameEditor ();
     void scheduleEditorHeightUpdate ();
     void updateEditorHeight ();
     void updateEffectChainRibbon (const gp200::GP200Preset& preset);
+    void setFxLoopPositions (int sendPosition, int returnPosition);
     void applyInterfaceTypography ();
     void clearInterfaceTypography ();
 
@@ -220,6 +221,7 @@ CompareSnapshot selectedCompareSnapshot{
         };
 
         void setItems (std::vector<Item> newItems);
+        void setLoopPositions (int sendPosition, int returnPosition);
         void setSelectedBlockIndex (int blockIndex);
         void setBlockEnabled (int blockIndex, bool enabled);
         void paint (juce::Graphics& g) override;
@@ -229,17 +231,25 @@ CompareSnapshot selectedCompareSnapshot{
 
         std::function<void (int blockIndex)> onBlockSelected;
         std::function<void (int blockIndex, int targetPosition)> onBlockReordered;
+        std::function<void (int sendPosition, int returnPosition)> onLoopPositionsChanged;
 
       private:
         juce::Rectangle<int> getTileBounds (int itemIndex) const;
         int getItemIndexAt (juce::Point<int> position) const;
         int getTargetPositionAtX (int x) const;
+        int getLoopMarkerAt (juce::Point<int> position) const;
+        int getLoopPositionAtX (int x) const;
+        int getLoopMarkerX (int position) const;
 
         std::vector<Item> items;
         int selectedBlockIndex{-1};
         int pressedItemIndex{-1};
         int dragTargetPosition{-1};
         bool dragging{false};
+        int fxLoopSendPosition{4};
+        int fxLoopReturnPosition{4};
+        int draggedLoopMarker{-1};
+        int draggedLoopPosition{-1};
         juce::Point<int> mouseDownPosition;
     };
 

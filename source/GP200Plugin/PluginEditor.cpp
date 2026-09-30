@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <map>
 #include <vector>
 
@@ -1341,6 +1342,13 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::setItems (std:
     repaint ();
 }
 
+void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::setLoopPositions (int sendPosition, int returnPosition)
+{
+    fxLoopSendPosition = juce::jlimit (1, 10, sendPosition);
+    fxLoopReturnPosition = juce::jlimit (1, 10, returnPosition);
+    repaint ();
+}
+
 void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::setSelectedBlockIndex (int blockIndex)
 {
     if (selectedBlockIndex != blockIndex)
@@ -1391,6 +1399,38 @@ int AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getTargetPositi
         if (x < getTileBounds (i).getCentreX ())
             return i;
     return static_cast<int> (items.size ());
+}
+
+int AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getLoopMarkerX (int position) const
+{
+    if (items.empty ()) return getWidth () / 2;
+    const auto itemIndex = juce::jlimit (0, static_cast<int> (items.size ()) - 1, position - 1);
+    return getTileBounds (itemIndex).getRight () + 5;
+}
+
+int AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getLoopPositionAtX (int x) const
+{
+    auto bestPosition = 1;
+    auto bestDistance = std::numeric_limits<int>::max ();
+    for (int position = 1; position <= 10; ++position)
+    {
+        const auto distance = std::abs (x - getLoopMarkerX (position));
+        if (distance < bestDistance)
+        {
+            bestDistance = distance;
+            bestPosition = position;
+        }
+    }
+    return bestPosition;
+}
+
+int AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getLoopMarkerAt (juce::Point<int> position) const
+{
+    const auto sendX = getLoopMarkerX (fxLoopSendPosition);
+    const auto returnX = getLoopMarkerX (fxLoopReturnPosition);
+    if (std::abs (position.x - sendX) <= 10 && position.y <= 18) return 0;
+    if (std::abs (position.x - returnX) <= 10 && position.y >= getHeight () - 18) return 1;
+    return -1;
 }
 
 void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::paint (juce::Graphics& g)
@@ -1454,6 +1494,41 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::paint (juce::G
         }
     }
 
+    const auto sendMarkerPosition = draggedLoopMarker == 0 ? draggedLoopPosition : fxLoopSendPosition;
+    const auto returnMarkerPosition = draggedLoopMarker == 1 ? draggedLoopPosition : fxLoopReturnPosition;
+    auto drawLoopMarker = [&] (int loopPosition, int y, juce::Colour colour, const juce::String& label, bool pointsUp)
+    {
+        const auto x = static_cast<float> (getLoopMarkerX (loopPosition));
+        juce::Path arrow;
+        if (pointsUp)
+        {
+            arrow.startNewSubPath (x, static_cast<float> (y));
+            arrow.lineTo (x - 6.0f, static_cast<float> (y + 7));
+            arrow.lineTo (x + 6.0f, static_cast<float> (y + 7));
+        }
+        else
+        {
+            arrow.startNewSubPath (x, static_cast<float> (y));
+            arrow.lineTo (x - 6.0f, static_cast<float> (y - 7));
+            arrow.lineTo (x + 6.0f, static_cast<float> (y - 7));
+        }
+        arrow.closeSubPath ();
+        g.setColour (colour);
+        g.fillPath (arrow);
+        g.setFont (gp200ui::semibold (9.5f));
+        g.drawText (label, juce::Rectangle<int> (static_cast<int> (x) - 16, pointsUp ? 1 : getHeight () - 13, 32, 12),
+                    juce::Justification::centred);
+    };
+    drawLoopMarker (sendMarkerPosition, 15, juce::Colour (0xff32a8ff), "SEND", true);
+    drawLoopMarker (returnMarkerPosition, getHeight () - 14, juce::Colour (0xffbd5cff), "RETURN", false);
+
+    if (draggedLoopMarker >= 0 && draggedLoopPosition > 0)
+    {
+        const auto x = getLoopMarkerX (draggedLoopPosition);
+        g.setColour (juce::Colours::white.withAlpha (0.35f));
+        g.drawLine (static_cast<float> (x), 19.0f, static_cast<float> (x), static_cast<float> (getHeight () - 19), 1.0f);
+    }
+
     if (dragging && dragTargetPosition >= 0)
     {
         const auto count = static_cast<int> (items.size ());
@@ -1467,6 +1542,14 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::paint (juce::G
 
 void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::mouseDown (const juce::MouseEvent& event)
 {
+    draggedLoopMarker = getLoopMarkerAt (event.getPosition ());
+    if (draggedLoopMarker >= 0)
+    {
+        draggedLoopPosition = draggedLoopMarker == 0 ? fxLoopSendPosition : fxLoopReturnPosition;
+        pressedItemIndex = -1;
+        dragging = false;
+        return;
+    }
     pressedItemIndex = getItemIndexAt (event.getPosition ());
     mouseDownPosition = event.getPosition ();
     dragTargetPosition = -1;
@@ -1475,6 +1558,12 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::mouseDown (con
 
 void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::mouseDrag (const juce::MouseEvent& event)
 {
+    if (draggedLoopMarker >= 0)
+    {
+        draggedLoopPosition = getLoopPositionAtX (event.x);
+        repaint ();
+        return;
+    }
     if (pressedItemIndex < 0) return;
     if (!dragging && event.getPosition ().getDistanceFrom (mouseDownPosition) >= 6.0f)
         dragging = true;
@@ -1487,6 +1576,16 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::mouseDrag (con
 
 void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::mouseUp (const juce::MouseEvent&)
 {
+    if (draggedLoopMarker >= 0)
+    {
+        if (draggedLoopMarker == 0) fxLoopSendPosition = draggedLoopPosition;
+        else fxLoopReturnPosition = draggedLoopPosition;
+        if (onLoopPositionsChanged) onLoopPositionsChanged (fxLoopSendPosition, fxLoopReturnPosition);
+        draggedLoopMarker = -1;
+        draggedLoopPosition = -1;
+        repaint ();
+        return;
+    }
     if (pressedItemIndex < 0 || pressedItemIndex >= static_cast<int> (items.size ()))
     {
         dragging = false; dragTargetPosition = -1; return;
@@ -1561,6 +1660,10 @@ tunerDisplay.setVisible(false);
     effectChainRibbon.onBlockReordered = [this] (int blockIndex, int targetPosition)
     {
         moveEffectBlockToPosition (blockIndex, targetPosition);
+    };
+    effectChainRibbon.onLoopPositionsChanged = [this] (int sendPosition, int returnPosition)
+    {
+        setFxLoopPositions (sendPosition, returnPosition);
     };
 
     effectsViewport.setViewedComponent (&effectsContent, false);
@@ -4814,7 +4917,42 @@ void AudioPluginAudioProcessorEditor::updateEffectChainRibbon (const gp200::GP20
         items.push_back (std::move (item));
     }
     effectChainRibbon.setItems (std::move (items));
+    effectChainRibbon.setLoopPositions (preset.fxLoopSend, preset.fxLoopReturn);
     effectChainRibbon.setSelectedBlockIndex (selectedEffectBlockIndex);
+}
+
+void AudioPluginAudioProcessorEditor::setFxLoopPositions (int sendPosition, int returnPosition)
+{
+    sendPosition = juce::jlimit (1, 10, sendPosition);
+    returnPosition = juce::jlimit (1, 10, returnPosition);
+
+    if (!midiConnection.isConnected ())
+    {
+        offlinePreset.fxLoopSend = sendPosition;
+        offlinePreset.fxLoopReturn = returnPosition;
+        offlinePresetDirty = true;
+        ++offlinePresetRevision;
+        updateEffectChainRibbon (offlinePreset);
+        return;
+    }
+
+    const auto currentDump = midiConnection.getCurrentPresetDumpDataCopy ();
+    if (currentDump.getSize () == 0) return;
+    const auto currentPreset = gp200::GP200PresetCodec::decodeLivePresetDump (currentDump);
+    if (!currentPreset.isValid) return;
+
+    if (currentPreset.fxLoopSend == sendPosition && currentPreset.fxLoopReturn == returnPosition)
+        return;
+
+    if (!midiConnection.sendReorderEffects (currentPreset.routingOrder, sendPosition, returnPosition))
+        return;
+
+    effectChainRibbon.setLoopPositions (sendPosition, returnPosition);
+    juce::MessageManager::callAsync ([this]
+    {
+        updateEffectBlocksUI ();
+        repaint ();
+    });
 }
 
 int AudioPluginAudioProcessorEditor::getDropPositionForContentY (int contentY) const

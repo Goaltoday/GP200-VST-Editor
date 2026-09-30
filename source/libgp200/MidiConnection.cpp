@@ -12,6 +12,7 @@
 #include "GP200EffectParamDatabase.h"
 #include "MidiDeviceScanner.h"
 #include "GP200ModSync.h"
+#include "GP200Constants.h"
 
 #include <algorithm>
 #include <array>
@@ -1624,6 +1625,12 @@ bool MidiConnection::sendReorderEffects (const RoutingOrder& routingOrder, int f
         return false;
     }
 
+    if (fxLoopSend < 1 || fxLoopSend > 10 || fxLoopReturn < 1 || fxLoopReturn > 10)
+    {
+        lastMessageText = "Cannot reorder effects: invalid FX Loop position";
+        return false;
+    }
+
     std::array<bool, effectBlockCount> seen{};
     seen.fill (false);
 
@@ -1651,7 +1658,19 @@ bool MidiConnection::sendReorderEffects (const RoutingOrder& routingOrder, int f
 
     midiOutput->sendMessageNow (message);
 
-    updateCurrentPresetRoutingOrder (routingOrder);
+    if (currentPresetDecodedData.getSize () >= routingOrderOffset + effectBlockCount &&
+        currentPresetDecodedData.getSize () > fxLoopReturnOffset)
+    {
+        auto* data = static_cast<juce::uint8*> (currentPresetDecodedData.getData ());
+        if (data != nullptr)
+        {
+            data[fxLoopSendOffset] = static_cast<juce::uint8> (fxLoopSend);
+            data[fxLoopReturnOffset] = static_cast<juce::uint8> (fxLoopReturn);
+            for (std::size_t i = 0; i < effectBlockCount; ++i)
+                data[routingOrderOffset + i] = static_cast<juce::uint8> (routingOrder[i] & 0xFF);
+            ++presetRevision;
+        }
+    }
 
     lastMessageText = "Sent effect chain reorder to GP-200";
 
