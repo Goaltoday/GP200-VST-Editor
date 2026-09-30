@@ -82,6 +82,8 @@ void updateSnapshotNameEditor ();
 
     void toggleTuner ();
     void updateTunerButtonText ();
+    void toggleSeriesParallel ();
+    void updateSeriesParallelButtonText ();
     void toggleAllBlocksOff ();
     bool captureCurrentBlockEnabledStates (BlockEnabledStates& states);
     bool applyBlockEnabledStates (const BlockEnabledStates& states);
@@ -263,6 +265,8 @@ CompareSnapshot selectedCompareSnapshot{
 	juce::TextButton tapTempoButton{"TAP"};
     juce::TextEditor presetNameEditor;
     juce::TextButton tunerButton{"Tuner OFF"};
+	juce::TextButton seriesParallelButton{"ROUTE: SERIES"};
+	bool parallelRoutingSelected{false};
 	TunerDisplayComponent tunerDisplay;
     bool tunerIsOn{false};
 	

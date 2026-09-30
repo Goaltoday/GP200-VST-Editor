@@ -1658,6 +1658,35 @@ bool MidiConnection::sendReorderEffects (const RoutingOrder& routingOrder, int f
     return true;
 }
 
+bool MidiConnection::sendSeriesParallel (bool parallel)
+{
+    const juce::ScopedLock lock (stateLock);
+    if (midiOutput == nullptr)
+    {
+        lastMessageText = "Cannot change routing mode: MIDI output not open";
+        return false;
+    }
+
+    // Captured from the GP-200 editor while switching Series/Parallel.
+    // Only byte 42 differs: 0x00 selects Parallel and 0x01 selects Series.
+    const std::array<juce::uint8, 46> bytes{
+        0xF0, 0x21, 0x25, 0x7E, 0x47, 0x50, 0x2D, 0x32,
+        0x12, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x0D, 0x0B, 0x00, 0x00, 0x00, 0x06, 0x00,
+        0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x05, 0x00,
+        0x00, 0x00, static_cast<juce::uint8> (parallel ? 0x00 : 0x01),
+        0x00, 0x00, 0xF7
+    };
+
+    const auto message = juce::MidiMessage::createSysExMessage (
+        bytes.data () + 1, static_cast<int> (bytes.size () - 2));
+    midiOutput->sendMessageNow (message);
+
+    lastMessageText = parallel ? "Selected Parallel routing" : "Selected Series routing";
+    return true;
+}
+
 bool MidiConnection::storeCurrentPresetToGP200 ()
 {
     const juce::ScopedLock lock (stateLock);

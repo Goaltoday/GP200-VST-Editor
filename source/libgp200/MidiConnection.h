@@ -86,6 +86,7 @@ class MidiConnection final : private juce::MidiInputCallback, private juce::Time
     bool sendEffectChange (int blockIndex, juce::uint32 effectId);
     bool sendAutoCabMatch (bool shouldBeEnabled);
     bool sendParamChange (int blockIndex, int paramIndex, juce::uint32 effectId, float value);
+    bool sendSeriesParallel (bool parallel);
     bool sendReorderEffects (const RoutingOrder& routingOrder, int fxLoopSend, int fxLoopReturn);
     bool storeCurrentPresetToGP200 ();
 

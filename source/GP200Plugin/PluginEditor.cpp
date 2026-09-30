@@ -1542,6 +1542,7 @@ addAndMakeVisible (soundCloneButton);
 	addAndMakeVisible (tapTempoButton);
     addAndMakeVisible (presetNameEditor);
     addAndMakeVisible (tunerButton);
+    addAndMakeVisible (seriesParallelButton);
     addAndMakeVisible (allBlocksOffButton);
     addAndMakeVisible (autoCabButton);
 	addAndMakeVisible (toneMatchButton);
@@ -1595,6 +1596,7 @@ setupButton (exportPrstButton);
 setupButton (importIRButton);
 setupButton (soundCloneButton);
 setupButton (tunerButton);
+setupButton (seriesParallelButton);
 setupButton (tapTempoButton);
 
 tapTempoButton.setColour (
@@ -1647,6 +1649,7 @@ storePresetButton.setColour (
     panelOutlineColour.brighter (0.15f)
 );
     updateTunerButtonText ();
+    updateSeriesParallelButtonText ();
     updateAllBlocksOffButtonText ();
 
     patchVolumeSlider.setSliderStyle (juce::Slider::LinearHorizontal);
@@ -1756,6 +1759,9 @@ storePresetButton.setColour (
     };
 
     tunerButton.onClick = [this] { toggleTuner (); };
+
+    seriesParallelButton.setTooltip ("Switch the GP-200 routing between Series and Parallel");
+    seriesParallelButton.onClick = [this] { toggleSeriesParallel (); };
 
     allBlocksOffButton.onClick = [this] { toggleAllBlocksOff (); };
 
@@ -2239,6 +2245,7 @@ tapTempoButton.setBounds (882, 150, 46, 24);
     tunerButton.setBounds (30, 191, 130, 28);
 allBlocksOffButton.setBounds (170, 191, 120, 28);
 autoCabButton.setBounds (300, 191, 108, 28);
+seriesParallelButton.setBounds (563, 191, 135, 28);
 toneMatchButton.setBounds (708, 191, 110, 28);
 soundCloneButton.setBounds (828, 191, 110, 28);
 
@@ -3909,6 +3916,39 @@ void AudioPluginAudioProcessorEditor::updateTunerButtonText ()
 
     tunerButton.setColour (juce::TextButton::textColourOnId,
                            tunerIsOn ? juce::Colours::black : panelOutlineColour);
+}
+
+void AudioPluginAudioProcessorEditor::toggleSeriesParallel ()
+{
+    const bool newParallelState = !parallelRoutingSelected;
+
+    if (!midiConnection.sendSeriesParallel (newParallelState))
+    {
+        effectsStatusText = midiConnection.getLastMessageText ();
+        repaint ();
+        return;
+    }
+
+    parallelRoutingSelected = newParallelState;
+    updateSeriesParallelButtonText ();
+    effectsStatusText = parallelRoutingSelected
+        ? "GP-200 routing set to Parallel"
+        : "GP-200 routing set to Series";
+    repaint ();
+}
+
+void AudioPluginAudioProcessorEditor::updateSeriesParallelButtonText ()
+{
+    seriesParallelButton.setButtonText (parallelRoutingSelected ? "ROUTE: PARALLEL" : "ROUTE: SERIES");
+    seriesParallelButton.setColour (juce::TextButton::buttonColourId,
+                                    parallelRoutingSelected ? statusOnColour : panelColour);
+    seriesParallelButton.setColour (juce::TextButton::buttonOnColourId,
+                                    parallelRoutingSelected ? statusOnColour.brighter (0.1f)
+                                                            : panelColour.brighter (0.2f));
+    seriesParallelButton.setColour (juce::TextButton::textColourOffId,
+                                    parallelRoutingSelected ? juce::Colours::black : panelOutlineColour);
+    seriesParallelButton.setColour (juce::TextButton::textColourOnId,
+                                    parallelRoutingSelected ? juce::Colours::black : panelOutlineColour);
 }
 
 void AudioPluginAudioProcessorEditor::toggleAllBlocksOff ()
