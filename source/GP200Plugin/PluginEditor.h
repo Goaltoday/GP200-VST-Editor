@@ -83,6 +83,7 @@ void updateSnapshotNameEditor ();
     void toggleTuner ();
     void updateTunerButtonText ();
     void toggleSeriesParallel ();
+    void sendFlexibleRouteFromRibbon ();
     void updateSeriesParallelButtonText ();
     void toggleAllBlocksOff ();
     bool captureCurrentBlockEnabledStates (BlockEnabledStates& states);
@@ -230,6 +231,11 @@ CompareSnapshot selectedCompareSnapshot{
         void mouseDrag (const juce::MouseEvent& event) override;
         void mouseUp (const juce::MouseEvent& event) override;
 
+        gp200::RoutingOrder getLocalOrder () const;
+        int getSend () const { return fxLoopSendPosition; }
+        int getBoundary () const { return localBoundary; }
+        int getReturn () const { return fxLoopReturnPosition; }
+        std::function<void ()> onRoutingChanged;
         std::function<void (int blockIndex)> onBlockSelected;
         std::function<void (int blockIndex, int targetPosition)> onBlockReordered;
         std::function<void (int sendPosition, int returnPosition)> onLoopPositionsChanged;
@@ -241,7 +247,12 @@ CompareSnapshot selectedCompareSnapshot{
         int getLoopMarkerAt (juce::Point<int> position) const;
         int getLoopPositionAtX (int x) const;
         int getLoopMarkerX (int position) const;
-        int getAmplifierItemIndex () const;
+        int getDropGroup (juce::Point<int> position) const;
+        juce::Rectangle<int> getGroupArea (int group) const;
+        void moveLocalItem (int source, int group, int position);
+        int localBoundary{5};
+        bool localInitialised{false};
+        int dragTargetGroup{0};
         int getEffectiveSendPosition () const;
         int getEffectiveReturnPosition () const;
         int getParallelGroupForItem (const Item& item) const;

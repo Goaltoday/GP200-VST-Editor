@@ -8,6 +8,7 @@
     SPDX-License-Identifier: GPL-3.0-or-later
 */
 #include "MidiConnection.h"
+#include "GP200FlexibleRouting.h"
 #include "GP200EffectDatabase.h"
 #include "GP200EffectParamDatabase.h"
 #include "MidiDeviceScanner.h"
@@ -1625,7 +1626,7 @@ bool MidiConnection::sendReorderEffects (const RoutingOrder& routingOrder, int f
         return false;
     }
 
-    if (fxLoopSend < 1 || fxLoopSend > 10 || fxLoopReturn < 1 || fxLoopReturn > 10)
+    if (fxLoopSend < 0 || fxLoopSend > 11 || fxLoopReturn < 0 || fxLoopReturn > 11)
     {
         lastMessageText = "Cannot reorder effects: invalid FX Loop position";
         return false;
@@ -1679,31 +1680,37 @@ bool MidiConnection::sendReorderEffects (const RoutingOrder& routingOrder, int f
 
 bool MidiConnection::sendSeriesParallel (bool parallel)
 {
+    return sendRoutingModeValue (parallel ? 0 : 1);
+}
+
+bool MidiConnection::sendRoutingModeValue (juce::uint8 value)
+{
     const juce::ScopedLock lock (stateLock);
     if (midiOutput == nullptr)
     {
         lastMessageText = "Cannot change routing mode: MIDI output not open";
         return false;
     }
-
-    // Captured from the GP-200 editor while switching Series/Parallel.
-    // Only byte 42 differs: 0x00 selects Parallel and 0x01 selects Series.
-    const std::array<juce::uint8, 46> bytes{
-        0xF0, 0x21, 0x25, 0x7E, 0x47, 0x50, 0x2D, 0x32,
-        0x12, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x0D, 0x0B, 0x00, 0x00, 0x00, 0x06, 0x00,
-        0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x05, 0x00,
-        0x00, 0x00, static_cast<juce::uint8> (parallel ? 0x00 : 0x01),
-        0x00, 0x00, 0xF7
-    };
-
-    const auto message = juce::MidiMessage::createSysExMessage (
-        bytes.data () + 1, static_cast<int> (bytes.size () - 2));
+    const auto bytes = flexibleRoutingModeMessage (value);
+    const auto message = juce::MidiMessage::createSysExMessage (bytes.data () + 1,
+        static_cast<int> (bytes.size () - 2));
     midiOutput->sendMessageNow (message);
-
-    lastMessageText = parallel ? "Selected Parallel routing" : "Selected Series routing";
+    lastMessageText = "Sent routing mode " + juce::String (static_cast<int> (value));
     return true;
+}
+
+bool MidiConnection::sendFlexibleRouting (const RoutingOrder& order, int send, int boundary, int ret, bool parallel)
+{
+    if (!validFlexibleRouting (order, send, boundary, ret))
+    {
+        lastMessageText = "Invalid SPR routing";
+        return false;
+    }
+    // Move through Series before modifying the list, then select encoded P.
+    // No acknowledgment is assumed from sendMessageNow; device tests are required.
+    if (!sendRoutingModeValue (1)) return false;
+    if (!sendReorderEffects (order, send, ret)) return false;
+    return sendRoutingModeValue (static_cast<juce::uint8> ((parallel ? 0x80 : 0x90) | boundary));
 }
 
 bool MidiConnection::storeCurrentPresetToGP200 ()

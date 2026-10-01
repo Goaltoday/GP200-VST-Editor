@@ -1332,9 +1332,32 @@ private:
 
 
 //==============================================================================
+gp200::RoutingOrder AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getLocalOrder () const
+{
+    gp200::RoutingOrder order{};
+    for (std::size_t i = 0; i < order.size () && i < items.size (); ++i)
+        order[i] = items[i].blockIndex;
+    return order;
+}
+
 void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::setItems (std::vector<Item> newItems)
 {
-    items = std::move (newItems);
+    if (!localInitialised)
+    {
+        items = std::move (newItems);
+        fxLoopSendPosition = juce::jmin (2, static_cast<int> (items.size ()));
+        localBoundary = juce::jmin (5, static_cast<int> (items.size ()));
+        fxLoopReturnPosition = juce::jmin (8, static_cast<int> (items.size ()));
+        localInitialised = true;
+    }
+    else
+    {
+        // MIDI refreshes update appearance, never replace the local routing draft.
+        for (auto& item : items)
+            for (const auto& fresh : newItems)
+                if (item.blockIndex == fresh.blockIndex) item = fresh;
+    }
+
     const auto selectedStillExists = std::any_of (items.begin (), items.end (), [this] (const Item& item)
     { return item.blockIndex == selectedBlockIndex; });
     if (!selectedStillExists)
@@ -1344,9 +1367,9 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::setItems (std:
 
 void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::setLoopPositions (int sendPosition, int returnPosition)
 {
-    fxLoopSendPosition = juce::jlimit (1, 10, sendPosition);
-    fxLoopReturnPosition = juce::jlimit (1, 10, returnPosition);
-    repaint ();
+    juce::ignoreUnused (sendPosition, returnPosition);
+    // S/P/R are local draft data; the device has no independent P field yet.
+
 }
 
 void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::setParallelMode (bool shouldBeParallel)
@@ -1384,19 +1407,16 @@ juce::Rectangle<int> AudioPluginAudioProcessorEditor::EffectChainRibbonComponent
         return {};
     if (parallelMode)
     {
-        constexpr int gap = 8;
-        auto area = getLocalBounds ().reduced (48, 16);
-        const auto columns = static_cast<int> (items.size ());
-        const auto tileWidth = juce::jmax (48, juce::jmin (60, (area.getWidth () - gap * (columns - 1)) / columns));
-        const auto totalWidth = tileWidth * columns + gap * (columns - 1);
-        const auto startX = area.getCentreX () - totalWidth / 2;
         const auto group = getParallelGroupForItem (items[static_cast<std::size_t> (itemIndex)]);
-        const auto centreY = getHeight () / 2;
-        const auto tileHeight = 52;
-        const auto tileCentreY = group == 1 ? centreY - 27
-                                  : group == 2 ? centreY + 27
-                                               : centreY;
-        return {startX + itemIndex * (tileWidth + gap), tileCentreY - tileHeight / 2, tileWidth, tileHeight};
+        const auto area = getGroupArea (group);
+        int rank = 0, count = 0;
+        for (int i = 0; i < static_cast<int> (items.size ()); ++i)
+            if (getParallelGroupForItem (items[static_cast<std::size_t> (i)]) == group)
+            { if (i < itemIndex) ++rank; ++count; }
+        const int step = area.getWidth () / juce::jmax (1, count);
+        const int width = juce::jmin (60, juce::jmax (18, step - 6));
+        return {area.getX () + rank * step + (step - width) / 2,
+                area.getCentreY () - 26, width, 52};
     }
     auto area = getLocalBounds ().reduced (54, 14);
     constexpr int gap = 9;
@@ -1414,35 +1434,56 @@ int AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getParallelGrou
     { return candidate.blockIndex == item.blockIndex; });
     if (itemIterator == items.end ()) return 0;
     const auto itemPosition = static_cast<int> (std::distance (items.begin (), itemIterator));
-    const auto ampPosition = getAmplifierItemIndex ();
-    if (ampPosition < 1) return 0;
-
-    const auto sendBoundary = juce::jlimit (1, ampPosition, fxLoopSendPosition);
-    const auto returnBoundary = juce::jlimit (ampPosition + 1, static_cast<int> (items.size ()), fxLoopReturnPosition);
-    if (itemPosition < sendBoundary || itemPosition >= returnBoundary) return 0;
-    return itemPosition < ampPosition ? 1 : 2;
+    if (itemPosition < fxLoopSendPosition) return 0;
+    if (itemPosition < localBoundary) return 1;
+    if (itemPosition < fxLoopReturnPosition) return 2;
+    return 3;
 }
 
-int AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getAmplifierItemIndex () const
+juce::Rectangle<int> AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getGroupArea (int group) const
 {
+    const int available = juce::jmax (1, getWidth () - 100);
+    const int middleCount = juce::jmax (1, juce::jmax (localBoundary - fxLoopSendPosition,
+                                                     fxLoopReturnPosition - localBoundary));
+    const int total = juce::jmax (1, fxLoopSendPosition) + middleCount
+                    + juce::jmax (1, static_cast<int> (items.size ()) - fxLoopReturnPosition);
+    const int unit = available / total;
+    const int split = 50 + unit * juce::jmax (1, fxLoopSendPosition);
+    const int merge = split + unit * middleCount;
+    const int y = getHeight () / 2;
+    if (group == 0) return {50, y - 26, split - 54, 52};
+    if (group == 3) return {merge + 4, y - 26, getWidth () - 50 - merge - 4, 52};
+    return {split + 4, y + (group == 1 ? -53 : 1), merge - split - 8, 52};
+}
+
+int AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getDropGroup (juce::Point<int> position) const
+{
+    const auto middle = getGroupArea (1);
+    if (position.x < middle.getX ()) return 0;
+    if (position.x > middle.getRight ()) return 3;
+    return position.y < getHeight () / 2 ? 1 : 2;
+}
+
+void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::moveLocalItem (int source, int group, int position)
+{
+    std::vector<Item> groups[4];
+    const auto moved = items[static_cast<std::size_t> (source)];
     for (int i = 0; i < static_cast<int> (items.size ()); ++i)
-        if (items[static_cast<std::size_t> (i)].blockName == "AMP") return i;
-    return -1;
+        if (i != source) groups[getParallelGroupForItem (items[static_cast<std::size_t> (i)])].push_back (items[static_cast<std::size_t> (i)]);
+    auto& destination = groups[group];
+    destination.insert (destination.begin () + juce::jlimit (0, static_cast<int> (destination.size ()), position), moved);
+    items.clear ();
+    for (const auto& list : groups) items.insert (items.end (), list.begin (), list.end ());
+    fxLoopSendPosition = static_cast<int> (groups[0].size ());
+    localBoundary = fxLoopSendPosition + static_cast<int> (groups[1].size ());
+    fxLoopReturnPosition = localBoundary + static_cast<int> (groups[2].size ());
 }
 
 int AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getEffectiveSendPosition () const
-{
-    const auto ampPosition = getAmplifierItemIndex ();
-    return ampPosition < 1 ? juce::jlimit (1, 10, fxLoopSendPosition)
-                           : juce::jlimit (1, ampPosition, fxLoopSendPosition);
-}
+{ return fxLoopSendPosition; }
 
 int AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getEffectiveReturnPosition () const
-{
-    const auto ampPosition = getAmplifierItemIndex ();
-    return ampPosition < 0 ? juce::jlimit (1, 10, fxLoopReturnPosition)
-                           : juce::jlimit (ampPosition + 1, static_cast<int> (items.size ()), fxLoopReturnPosition);
-}
+{ return fxLoopReturnPosition; }
 
 int AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getItemIndexAt (juce::Point<int> position) const
 {
@@ -1463,28 +1504,23 @@ int AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getTargetPositi
 int AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getLoopMarkerX (int position) const
 {
     if (items.empty ()) return getWidth () / 2;
-    const auto itemIndex = juce::jlimit (0, static_cast<int> (items.size ()) - 1, position - 1);
-    return getTileBounds (itemIndex).getRight () + 5;
+    if (parallelMode)
+        return position == fxLoopSendPosition ? getGroupArea (1).getX () - 4
+                                             : getGroupArea (1).getRight () + 4;
+    if (position == 0) return getTileBounds (0).getX () - 5;
+    return getTileBounds (juce::jlimit (0, static_cast<int> (items.size ()) - 1, position - 1)).getRight () + 5;
 }
 
 int AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getLoopPositionAtX (int x) const
 {
-    auto minimumPosition = 1;
-    auto maximumPosition = 10;
-    if (parallelMode)
-    {
-        const auto ampPosition = getAmplifierItemIndex ();
-        if (ampPosition > 0)
-        {
-            if (draggedLoopMarker == 0) maximumPosition = juce::jmin (10, ampPosition);
-            if (draggedLoopMarker == 1) minimumPosition = juce::jmin (10, ampPosition + 1);
-        }
-    }
+    const int minimumPosition = draggedLoopMarker == 0 ? 0 : localBoundary;
+    const int maximumPosition = draggedLoopMarker == 0 ? localBoundary : static_cast<int> (items.size ());
     auto bestPosition = minimumPosition;
     auto bestDistance = std::numeric_limits<int>::max ();
     for (int position = minimumPosition; position <= maximumPosition; ++position)
     {
-        const auto distance = std::abs (x - getLoopMarkerX (position));
+        const auto boundaryX = parallelMode ? 50 + position * (getWidth () - 100) / juce::jmax (1, static_cast<int> (items.size ())) : getLoopMarkerX (position);
+        const auto distance = std::abs (x - boundaryX);
         if (distance < bestDistance)
         {
             bestDistance = distance;
@@ -1512,8 +1548,23 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::paint (juce::G
     g.drawRoundedRectangle (bounds, 7.0f, 1.0f);
     if (items.empty ()) return;
 
+    g.setColour (juce::Colour (0xffb9bdc0));
+    g.setFont (gp200ui::regular (10.0f));
+    g.drawText ("SPR S=" + juce::String (fxLoopSendPosition) + " P=" + juce::String (localBoundary)
+                + " R=" + juce::String (fxLoopReturnPosition), 8, 0, 220, 13, juce::Justification::centredLeft);
+    if (parallelMode)
+    {
+        const char* labels[] = {"IN COMMON", "A", "B", "OUT COMMON"};
+        for (int group = 0; group < 4; ++group)
+        {
+            const auto area = getGroupArea (group);
+            g.setColour (juce::Colour (0xff444a50));
+            g.drawRoundedRectangle (area.toFloat (), 4.0f, 1.0f);
+            g.drawText (labels[group], area.withHeight (12), juce::Justification::centred);
+        }
+    }
     const auto first = getTileBounds (0);
-    const auto chainY = first.getCentreY ();
+    const auto chainY = parallelMode ? getHeight () / 2 : first.getCentreY ();
     g.setColour (juce::Colour (0xff7b8083));
     if (parallelMode)
     {
@@ -1589,7 +1640,9 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::paint (juce::G
         : parallelMode ? getEffectiveReturnPosition () : fxLoopReturnPosition;
     auto drawLoopMarker = [&] (int loopPosition, int y, juce::Colour colour, const juce::String& label, bool pointsUp)
     {
-        const auto x = static_cast<float> (getLoopMarkerX (loopPosition));
+        const auto x = static_cast<float> (parallelMode && draggedLoopMarker >= 0
+            ? 50 + loopPosition * (getWidth () - 100) / juce::jmax (1, static_cast<int> (items.size ()))
+            : getLoopMarkerX (loopPosition));
         juce::Path arrow;
         if (pointsUp)
         {
@@ -1613,7 +1666,7 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::paint (juce::G
     drawLoopMarker (sendMarkerPosition, 15, juce::Colour (0xff32a8ff), "SEND", true);
     drawLoopMarker (returnMarkerPosition, getHeight () - 14, juce::Colour (0xffbd5cff), "RETURN", false);
 
-    if (draggedLoopMarker >= 0 && draggedLoopPosition > 0)
+    if (draggedLoopMarker >= 0 && draggedLoopPosition >= 0)
     {
         const auto x = getLoopMarkerX (draggedLoopPosition);
         g.setColour (juce::Colours::white.withAlpha (0.35f));
@@ -1623,11 +1676,16 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::paint (juce::G
     if (dragging && dragTargetPosition >= 0)
     {
         const auto count = static_cast<int> (items.size ());
-        const auto lineX = dragTargetPosition >= count ? getTileBounds (count - 1).getRight () + 5
+        int destinationCount = 0;
+        for (int i = 0; i < count; ++i)
+            if (i != pressedItemIndex && getParallelGroupForItem (items[static_cast<std::size_t> (i)]) == dragTargetGroup)
+                ++destinationCount;
+        const auto targetArea = parallelMode ? getGroupArea (dragTargetGroup) : first;
+        const auto lineX = parallelMode ? targetArea.getX () + dragTargetPosition * targetArea.getWidth () / juce::jmax (1, destinationCount + 1) : dragTargetPosition >= count ? getTileBounds (count - 1).getRight () + 5
                                                        : getTileBounds (dragTargetPosition).getX () - 5;
         g.setColour (juce::Colour (0xffffa42a));
-        g.fillRoundedRectangle (static_cast<float> (lineX - 2), static_cast<float> (first.getY () - 4),
-                                4.0f, static_cast<float> (first.getHeight () + 8), 2.0f);
+        g.fillRoundedRectangle (static_cast<float> (lineX - 2), static_cast<float> (targetArea.getY () - 4),
+                                4.0f, static_cast<float> (targetArea.getHeight () + 8), 2.0f);
     }
 }
 
@@ -1660,7 +1718,15 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::mouseDrag (con
         dragging = true;
     if (dragging)
     {
-        dragTargetPosition = getTargetPositionAtX (event.x);
+        dragTargetGroup = getDropGroup (event.getPosition ());
+        dragTargetPosition = 0;
+        if (parallelMode)
+        {
+            for (int i = 0; i < static_cast<int> (items.size ()); ++i)
+                if (i != pressedItemIndex && getParallelGroupForItem (items[static_cast<std::size_t> (i)]) == dragTargetGroup
+                    && event.x >= getTileBounds (i).getCentreX ()) ++dragTargetPosition;
+        }
+        else dragTargetPosition = getTargetPositionAtX (event.x);
         repaint ();
     }
 }
@@ -1671,7 +1737,7 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::mouseUp (const
     {
         if (draggedLoopMarker == 0) fxLoopSendPosition = draggedLoopPosition;
         else fxLoopReturnPosition = draggedLoopPosition;
-        if (onLoopPositionsChanged) onLoopPositionsChanged (fxLoopSendPosition, fxLoopReturnPosition);
+        if (onRoutingChanged) onRoutingChanged ();
         draggedLoopMarker = -1;
         draggedLoopPosition = -1;
         repaint ();
@@ -1684,10 +1750,18 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::mouseUp (const
     const auto blockIndex = items[static_cast<std::size_t> (pressedItemIndex)].blockIndex;
     if (dragging && dragTargetPosition >= 0)
     {
-        if (onBlockReordered) onBlockReordered (blockIndex, dragTargetPosition);
+        if (parallelMode) moveLocalItem (pressedItemIndex, dragTargetGroup, dragTargetPosition);
+        else
+        {
+            auto moved = items[static_cast<std::size_t> (pressedItemIndex)];
+            items.erase (items.begin () + pressedItemIndex);
+            const int target = dragTargetPosition - (dragTargetPosition > pressedItemIndex ? 1 : 0);
+            items.insert (items.begin () + juce::jlimit (0, static_cast<int> (items.size ()), target), moved);
+        }
     }
     else if (onBlockSelected)
         onBlockSelected (blockIndex);
+    if (dragging && onRoutingChanged) onRoutingChanged ();
     dragging = false;
     dragTargetPosition = -1;
     pressedItemIndex = -1;
@@ -1743,6 +1817,7 @@ tunerDisplay.setVisible(false);
     addAndMakeVisible (effectChainRibbon);
     addAndMakeVisible (effectsViewport);
 
+    effectChainRibbon.onRoutingChanged = [this] { sendFlexibleRouteFromRibbon (); };
     effectChainRibbon.onBlockSelected = [this] (int blockIndex)
     {
         // Clicking the selected block again closes the parameter editor.
@@ -1750,7 +1825,9 @@ tunerDisplay.setVisible(false);
     };
     effectChainRibbon.onBlockReordered = [this] (int blockIndex, int targetPosition)
     {
-        moveEffectBlockToPosition (blockIndex, targetPosition);
+        juce::ignoreUnused (blockIndex, targetPosition);
+        effectsStatusText = "Edit local S/P/R routing by dragging tiles in the ribbon";
+        repaint ();
     };
     effectChainRibbon.onLoopPositionsChanged = [this] (int sendPosition, int returnPosition)
     {
@@ -1954,7 +2031,7 @@ storePresetButton.setColour (
 
     tunerButton.onClick = [this] { toggleTuner (); };
 
-    seriesParallelButton.setTooltip ("Switch the GP-200 routing between Series and Parallel");
+    seriesParallelButton.setTooltip ("SPR experimental routing: requires R15 SPR firmware. Sends S/P/R to the GP-200.");
     seriesParallelButton.onClick = [this] { toggleSeriesParallel (); };
 
     allBlocksOffButton.onClick = [this] { toggleAllBlocksOff (); };
@@ -4118,26 +4195,33 @@ void AudioPluginAudioProcessorEditor::toggleSeriesParallel ()
 {
     const bool newParallelState = !parallelRoutingSelected;
 
-    if (!midiConnection.sendSeriesParallel (newParallelState))
-    {
-        effectsStatusText = midiConnection.getLastMessageText ();
-        repaint ();
-        return;
-    }
-
     parallelRoutingSelected = newParallelState;
     effectChainRibbon.setParallelMode (parallelRoutingSelected);
     updateSeriesParallelButtonText ();
     effectsStatusText = parallelRoutingSelected
-        ? "GP-200 routing set to Parallel"
-        : "GP-200 routing set to Series";
+        ? "SPR Parallel"
+        : "SPR Series";
     repaint ();
+    sendFlexibleRouteFromRibbon ();
     scheduleEditorHeightUpdate ();
+}
+
+void AudioPluginAudioProcessorEditor::sendFlexibleRouteFromRibbon ()
+{
+    if (!midiConnection.isConnected ())
+        effectsStatusText = "SPR draft only: GP-200 disconnected, routing NOT SENT";
+    else if (midiConnection.sendFlexibleRouting (effectChainRibbon.getLocalOrder (),
+                 effectChainRibbon.getSend (), effectChainRibbon.getBoundary (),
+                 effectChainRibbon.getReturn (), parallelRoutingSelected))
+        effectsStatusText = "SPR routing messages sent to GP-200 (R15 required)";
+    else
+        effectsStatusText = "SPR routing NOT SENT: " + midiConnection.getLastMessageText ();
+    repaint ();
 }
 
 void AudioPluginAudioProcessorEditor::updateSeriesParallelButtonText ()
 {
-    seriesParallelButton.setButtonText (parallelRoutingSelected ? "ROUTE: PARALLEL" : "ROUTE: SERIES");
+    seriesParallelButton.setButtonText (parallelRoutingSelected ? "SPR: PARALLEL" : "SPR: SERIES");
     seriesParallelButton.setColour (juce::TextButton::buttonColourId,
                                     parallelRoutingSelected ? statusOnColour : panelColour);
     seriesParallelButton.setColour (juce::TextButton::buttonOnColourId,
@@ -4855,7 +4939,9 @@ void AudioPluginAudioProcessorEditor::rebuildEffectBlocks (const gp200::GP200Pre
 
             const auto targetPosition = direction < 0 ? currentPosition - 1 : currentPosition + 2;
 
-            moveEffectBlockToPosition (blockIndex, targetPosition);
+            juce::ignoreUnused (blockIndex, targetPosition);
+        effectsStatusText = "Edit local S/P/R routing by dragging tiles in the ribbon";
+        repaint ();
         };
 
         effectsContent.addAndMakeVisible (*block);
