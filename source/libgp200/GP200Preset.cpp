@@ -377,12 +377,12 @@ GP200Preset GP200PresetCodec::decodePrstFile (
             data[prstFxLoopReturnOffset]);
 
     preset.fxLoopSend =
-        rawFxSend >= 1 && rawFxSend <= 10
+        rawFxSend >= 0 && rawFxSend <= 11
             ? rawFxSend
             : 4;
 
     preset.fxLoopReturn =
-        rawFxReturn >= 1 && rawFxReturn <= 10
+        rawFxReturn >= 0 && rawFxReturn <= 11
             ? rawFxReturn
             : 4;
 
@@ -547,9 +547,9 @@ juce::MemoryBlock GP200PresetCodec::encodePrstFile (
                       preset.author);
 
     data[prstFxLoopSendOffset] = static_cast<juce::uint8> (
-        juce::jlimit (1, 10, preset.fxLoopSend));
+        juce::jlimit (0, 11, preset.fxLoopSend));
     data[prstFxLoopReturnOffset] = static_cast<juce::uint8> (
-        juce::jlimit (1, 10, preset.fxLoopReturn));
+        juce::jlimit (0, 11, preset.fxLoopReturn));
 
     for (std::size_t i = 0; i < effectBlockCount; ++i)
     {
@@ -643,15 +643,15 @@ GP200PresetCodec::makeLivePresetDumpFromPrst (
     data[fxLoopSendOffset] =
         static_cast<juce::uint8> (
             juce::jlimit (
-                1,
-                10,
+                0,
+                11,
                 preset.fxLoopSend));
 
     data[fxLoopReturnOffset] =
         static_cast<juce::uint8> (
             juce::jlimit (
-                1,
-                10,
+                0,
+                11,
                 preset.fxLoopReturn));
 
     std::array<bool, effectBlockCount> routingSeen{};

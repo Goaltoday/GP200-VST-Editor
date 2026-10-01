@@ -40,7 +40,11 @@ inline int routingModeResponse (const std::uint8_t* data, int size)
 {
     if (data == nullptr || (size != 30 && size != 46)) return -1;
     const auto header = flexibleRoutingModeMessage (0);
-    for (int i = 0; i < 13; ++i) if (data[i] != header[static_cast<std::size_t> (i)]) return -1;
+    for (int i = 0; i < 9; ++i) if (data[i] != header[static_cast<std::size_t> (i)]) return -1;
+    // Bytes 9/10 carry decoded payload length, not a fixed 0x10 subcommand.
+    // Native FX Loop notifications contain 8 bytes: header length 08 00.
+    const int payloadBytes = (size - 14) / 2;
+    if (data[9] != payloadBytes || data[10] != 0 || data[11] != 0 || data[12] != 0) return -1;
     if (data[size - 1] != 0xf7) return -1;
     for (int i = 13; i < size - 1; ++i) if (data[i] > 15) return -1;
     const int start = size - 17;

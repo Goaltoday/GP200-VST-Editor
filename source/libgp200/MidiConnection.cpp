@@ -2071,6 +2071,19 @@ juce::MemoryBlock MidiConnection::getCurrentPresetDumpDataCopy () const
     return currentPresetDecodedData;
 }
 
+MidiConnection::RoutingStateSnapshot MidiConnection::getRoutingStateSnapshot () const
+{
+    const juce::ScopedLock lock (stateLock);
+    return { midiInput != nullptr && midiOutput != nullptr, currentSlot, currentPresetDataIsLive,
+        routingModeSnapshot, currentPresetDecodedData, presetRevision, livePresetRevision };
+}
+
+std::uint64_t MidiConnection::getLivePresetRevision () const
+{
+    const juce::ScopedLock lock (stateLock);
+    return livePresetRevision;
+}
+
 std::uint64_t MidiConnection::getPresetRevision () const
 {
     const juce::ScopedLock lock (stateLock);
@@ -2135,11 +2148,9 @@ void MidiConnection::adoptCurrentPresetSnapshot (int slot,
 
     currentPresetDecodedData = presetData;
 
-    // The snapshot has just been applied completely to the current GP-200
-    // edit buffer by Recall from DAW. Treat it as the current live state so
-    // the startup retry timer does not immediately request another dump and
-    // overwrite the state that has just been restored.
-    currentPresetDataIsLive = true;
+    // Local adoption is provisional. Only received preset chunks establish live state.
+    // After Recall ends, the existing retry timer requests the actual device buffer.
+    currentPresetDataIsLive = false;
     ++presetRevision;
 
     currentPresetDumpStatusText = "Current full preset data: restored snapshot, " +
@@ -2428,6 +2439,7 @@ void MidiConnection::collectPresetReadChunk (const juce::uint8* data, int size)
     {
         currentPresetDecodedData = assemblePresetReadChunks (presetReadChunks);
         currentPresetDataIsLive = currentPresetDecodedData.getSize () > 0;
+        if (currentPresetDataIsLive && presetDumpSlot == currentSlot) ++livePresetRevision;
         ++presetRevision;
 
         currentPresetDumpStatusText = "Current full preset data: captured, " +
@@ -3027,6 +3039,10 @@ void MidiConnection::parseGP200SysEx (const juce::uint8* data, int size)
     const auto routeMode = routingModeResponse (data, size);
     if (routeMode >= 0)
     {
+        // The parameter notification carries no preset-slot identifier.
+        // During a slot load, do not relabel a queued old reply as the new slot.
+        // A later query after the complete live read will recover the current mode.
+        if (currentSlot < 0 || !currentPresetDataIsLive) return;
         const bool changed = routingModeSnapshot.mode != routeMode || routingModeSnapshot.slot != currentSlot;
         routingModeSnapshot.mode = routeMode;
         routingModeSnapshot.slot = currentSlot;

@@ -94,6 +94,7 @@ void updateSnapshotNameEditor ();
     double sprModeQueryMs{0};
     double sprConfirmationDeadlineMs{0};
     std::uint64_t sprPresetAfterMode{0};
+    std::uint64_t sprModeAfterSend{0};
     std::uint64_t sprAppliedPresetRevision{0};
     std::uint64_t sprAppliedModeRevision{0};
     int sprSendStage{0};

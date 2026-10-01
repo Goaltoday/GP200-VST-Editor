@@ -4234,35 +4234,51 @@ void AudioPluginAudioProcessorEditor::toggleSeriesParallel ()
 
 void AudioPluginAudioProcessorEditor::sendFlexibleRouteFromRibbon ()
 {
-    sprSendStage = 0; // A new edit replaces any pending route transaction.
-    sprAwaitingMode = false;
-    sprAwaitingPreset = false;
     if (!midiConnection.isConnected ())
     {
         effectsStatusText = "SPR routing NOT SENT: GP-200 disconnected";
         repaint (); return;
     }
-    const auto dump = midiConnection.getCurrentPresetDumpDataCopy ();
-    const auto preset = gp200::GP200PresetCodec::decodeLivePresetDump (dump);
-    if (!preset.isValid)
+    if (presetRestoreInProgress || midiConnection.isIRUploadInProgress () || midiConnection.isSoundCloneUploadInProgress ())
+    {
+        effectsStatusText = "SPR routing NOT SENT: preset restore or upload in progress";
+        repaint (); return;
+    }
+    const auto state = midiConnection.getRoutingStateSnapshot ();
+    const auto preset = gp200::GP200PresetCodec::decodeLivePresetDump (state.data);
+    if (!state.connected || state.slot != midiConnection.getCurrentSlot () || !state.live || !preset.isValid)
     {
         effectsStatusText = "SPR routing NOT SENT: wait for the device preset to load";
         repaint (); return;
     }
-    sprPendingOrder = effectChainRibbon.getLocalOrder ();
-    sprPendingS = effectChainRibbon.getSend ();
-    sprPendingP = effectChainRibbon.getBoundary ();
-    sprPendingR = effectChainRibbon.getReturn ();
-    sprPendingParallel = parallelRoutingSelected;
-    effectChainRibbon.keepRoutingDraft ();
+    const auto order = effectChainRibbon.getLocalOrder ();
+    const int send = effectChainRibbon.getSend ();
+    const int boundary = effectChainRibbon.getBoundary ();
+    const int ret = effectChainRibbon.getReturn ();
+    const bool parallel = parallelRoutingSelected;
+    if (!gp200::validFlexibleRouting (order, send, boundary, ret))
+    {
+        effectsStatusText = "SPR routing NOT SENT: invalid order or S/P/R";
+        repaint (); return;
+    }
+    // Keep the previous transaction intact until the replacement can actually start.
     if (!midiConnection.sendRoutingModeValue (1))
     {
         effectsStatusText = "SPR routing NOT SENT: " + midiConnection.getLastMessageText ();
         repaint (); return;
     }
+    sprSendStage = 0;
+    sprAwaitingMode = false;
+    sprAwaitingPreset = false;
+    sprPendingOrder = order;
+    sprPendingS = send;
+    sprPendingP = boundary;
+    sprPendingR = ret;
+    sprPendingParallel = parallel;
+    effectChainRibbon.keepRoutingDraft ();
     sprSendDeadlineMs = juce::Time::getMillisecondCounterHiRes () + 150.0;
     sprSendStage = 1;
-    sprDeviceSlot = midiConnection.getCurrentSlot ();
+    sprDeviceSlot = state.slot;
     sprWasConnected = true;
     sprAwaitingMode = true;
     sprConfirmationDeadlineMs = juce::Time::getMillisecondCounterHiRes () + 3000.0;
@@ -4273,6 +4289,14 @@ void AudioPluginAudioProcessorEditor::sendFlexibleRouteFromRibbon ()
 void AudioPluginAudioProcessorEditor::processFlexibleRouteTransaction ()
 {
     if (sprSendStage == 0) return;
+    if (presetRestoreInProgress || midiConnection.isIRUploadInProgress () || midiConnection.isSoundCloneUploadInProgress ())
+    {
+        sprSendStage = 0; sprAwaitingMode = false; sprAwaitingPreset = false;
+        effectsStatusText = "SPR transaction cancelled: preset restore or upload started";
+        sprModeQueryMs = juce::Time::getMillisecondCounterHiRes () + 250.0;
+        effectChainRibbon.releaseRoutingDraft ();
+        repaint (); return;
+    }
     if (!midiConnection.isConnected ())
     {
         sprSendStage = 0;
@@ -4299,6 +4323,7 @@ void AudioPluginAudioProcessorEditor::processFlexibleRouteTransaction ()
         sprSendStage = 0;
         sprModeQueryMs = juce::Time::getMillisecondCounterHiRes () + 150.0;
         const auto mode = static_cast<juce::uint8> ((sprPendingParallel ? 0x80 : 0x90) | sprPendingP);
+        sprModeAfterSend = midiConnection.getRoutingModeSnapshot ().revision;
         if (midiConnection.sendRoutingModeValue (mode))
             effectsStatusText = "SPR mode sent: 0x" + juce::String::toHexString (static_cast<int> (mode))
                 + " (waiting for device readback)";
@@ -4314,8 +4339,9 @@ void AudioPluginAudioProcessorEditor::processFlexibleRouteTransaction ()
 void AudioPluginAudioProcessorEditor::syncFlexibleRoutingFromDevice ()
 {
     const auto now = juce::Time::getMillisecondCounterHiRes ();
-    const bool connected = midiConnection.isConnected ();
-    const int slot = midiConnection.getCurrentSlot ();
+    const auto state = midiConnection.getRoutingStateSnapshot ();
+    const bool connected = state.connected;
+    const int slot = state.slot;
     if (!connected || !sprWasConnected || slot != sprDeviceSlot)
     {
         sprWasConnected = connected; sprDeviceSlot = slot;
@@ -4331,14 +4357,15 @@ void AudioPluginAudioProcessorEditor::syncFlexibleRoutingFromDevice ()
         effectsStatusText = "SPR: confirmation timed out; device routing unconfirmed";
         repaint ();
     }
-    if (sprSendStage != 0 || !midiConnection.hasLiveCurrentPresetData ()) return;
-    const bool busy = midiConnection.isIRUploadInProgress () || midiConnection.isSoundCloneUploadInProgress () || midiConnection.isPresetNameScanRunning ();
+    if (sprSendStage != 0 || !state.live) return;
+    const bool busy = presetRestoreInProgress || midiConnection.isIRUploadInProgress () || midiConnection.isSoundCloneUploadInProgress () || midiConnection.isPresetNameScanRunning ();
+    if (busy) return;
     if (!busy && now >= sprModeQueryMs)
     {
         midiConnection.requestRoutingModeFromGP200 ();
         sprModeQueryMs = now + 1200.0;
     }
-    const auto mode = midiConnection.getRoutingModeSnapshot ();
+    const auto mode = state.mode;
     if ((sprAwaitingMode || sprAwaitingPreset) && now >= sprConfirmationDeadlineMs
         && (mode.slot != slot || !gp200::validRoutingModeValue (mode.mode)))
     {
@@ -4349,6 +4376,7 @@ void AudioPluginAudioProcessorEditor::syncFlexibleRoutingFromDevice ()
     if (mode.slot != slot || !gp200::validRoutingModeValue (mode.mode)) return;
     if (sprAwaitingMode)
     {
+        if (mode.revision <= sprModeAfterSend) return;
         const int expected = (sprPendingParallel ? 0x80 : 0x90) | sprPendingP;
         if (mode.mode != expected)
         {
@@ -4360,13 +4388,13 @@ void AudioPluginAudioProcessorEditor::syncFlexibleRoutingFromDevice ()
         {
             sprAwaitingMode = false;
             sprAwaitingPreset = true;
-            sprPresetAfterMode = midiConnection.getPresetRevision ();
+            sprPresetAfterMode = state.liveRevision;
             midiConnection.requestCurrentPresetFromGP200 ();
             return;
         }
     }
-    const auto revision = midiConnection.getPresetRevision ();
-    if (sprAwaitingPreset && revision <= sprPresetAfterMode)
+    const auto revision = state.presetRevision;
+    if (sprAwaitingPreset && state.liveRevision <= sprPresetAfterMode)
     {
         if (now >= sprConfirmationDeadlineMs)
         {
@@ -4376,8 +4404,13 @@ void AudioPluginAudioProcessorEditor::syncFlexibleRoutingFromDevice ()
         }
         return;
     }
-    const auto preset = gp200::GP200PresetCodec::decodeLivePresetDump (midiConnection.getCurrentPresetDumpDataCopy ());
+    const auto preset = gp200::GP200PresetCodec::decodeLivePresetDump (state.data);
     if (!preset.isValid) return;
+    if (preset.fxLoopSend < 0 || preset.fxLoopReturn < preset.fxLoopSend || preset.fxLoopReturn > 11)
+    {
+        effectsStatusText = "SPR: invalid Send/Return received from device";
+        return;
+    }
     const int boundary = gp200::isExtendedRoutingMode (mode.mode) ? mode.mode & 15
         : juce::jlimit (preset.fxLoopSend, preset.fxLoopReturn, effectChainRibbon.getBoundary ());
     if (!gp200::validFlexibleRouting (preset.routingOrder, preset.fxLoopSend, boundary, preset.fxLoopReturn)) return;
@@ -5292,8 +5325,8 @@ void AudioPluginAudioProcessorEditor::updateEffectChainRibbon (const gp200::GP20
 
 void AudioPluginAudioProcessorEditor::setFxLoopPositions (int sendPosition, int returnPosition)
 {
-    sendPosition = juce::jlimit (1, 10, sendPosition);
-    returnPosition = juce::jlimit (1, 10, returnPosition);
+    sendPosition = juce::jlimit (0, 11, sendPosition);
+    returnPosition = juce::jlimit (0, 11, returnPosition);
 
     if (!midiConnection.isConnected ())
     {

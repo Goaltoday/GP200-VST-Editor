@@ -37,6 +37,8 @@ class MidiConnection final : private juce::MidiInputCallback, private juce::Time
     bool requestCurrentPresetFromGP200 ();
     struct RoutingModeSnapshot { int mode{-1}; int slot{-1}; std::uint64_t revision{0}; };
     RoutingModeSnapshot getRoutingModeSnapshot () const;
+    struct RoutingStateSnapshot { bool connected{false}; int slot{-1}; bool live{false}; RoutingModeSnapshot mode; juce::MemoryBlock data; std::uint64_t presetRevision{0}, liveRevision{0}; };
+    RoutingStateSnapshot getRoutingStateSnapshot () const;
     bool requestRoutingModeFromGP200 ();
 
     bool requestAssignmentNamesFromGP200 ();
@@ -116,6 +118,7 @@ class MidiConnection final : private juce::MidiInputCallback, private juce::Time
     juce::MemoryBlock getCurrentPresetDumpDataCopy () const;
 
     std::uint64_t getPresetRevision () const;
+    std::uint64_t getLivePresetRevision () const;
     std::uint64_t getAssignmentNamesRevision () const;
 
     void adoptCurrentPresetSnapshot (int slot,
@@ -264,6 +267,7 @@ class MidiConnection final : private juce::MidiInputCallback, private juce::Time
     juce::String assignmentNamesStatusText{"Assignment names: not requested"};
 
     RoutingModeSnapshot routingModeSnapshot;
+    std::uint64_t livePresetRevision{0};
     std::uint64_t presetRevision{0};
     std::uint64_t assignmentNamesRevision{0};
 
