@@ -8,6 +8,7 @@
     SPDX-License-Identifier: GPL-3.0-or-later
 */
 #include "PluginEditor.h"
+#include "../libgp200/GP200FlexibleRouting.h"
 #include "GP200Typography.h"
 #include "BinaryData.h"
 #include "../libgp200/GP200Preset.h"
@@ -1377,6 +1378,14 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::setLoopPositio
 
 }
 
+void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::setDeviceRouting (int send, int boundary, int ret, bool parallel)
+{
+    if (send < 0 || send > boundary || boundary > ret || ret > static_cast<int> (items.size ())) return;
+    fxLoopSendPosition = send; localBoundary = boundary; fxLoopReturnPosition = ret;
+    parallelMode = parallel;
+    repaint ();
+}
+
 void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::setParallelMode (bool shouldBeParallel)
 {
     if (parallelMode == shouldBeParallel) return;
@@ -2565,6 +2574,7 @@ if (toneMatchPanel != nullptr)
 void AudioPluginAudioProcessorEditor::timerCallback ()
 {
     const auto nowMs = juce::Time::getMillisecondCounterHiRes();
+    syncFlexibleRoutingFromDevice ();
     processFlexibleRouteTransaction ();
 
     const auto modSyncRevision = gp200::GP200ModSync::getRevision ();
@@ -3900,6 +3910,11 @@ void AudioPluginAudioProcessorEditor::finishFullPresetRestore ()
 
 void AudioPluginAudioProcessorEditor::storeCurrentPresetToGP200 ()
 {
+    if (sprSendStage != 0 || sprAwaitingMode || sprAwaitingPreset)
+    {
+        effectsStatusText = "STORE: wait for SPR device confirmation";
+        repaint (); return;
+    }
     auto newName = presetNameEditor.getText ().trim ();
 
     if (newName.isEmpty ())
@@ -4220,6 +4235,8 @@ void AudioPluginAudioProcessorEditor::toggleSeriesParallel ()
 void AudioPluginAudioProcessorEditor::sendFlexibleRouteFromRibbon ()
 {
     sprSendStage = 0; // A new edit replaces any pending route transaction.
+    sprAwaitingMode = false;
+    sprAwaitingPreset = false;
     if (!midiConnection.isConnected ())
     {
         effectsStatusText = "SPR routing NOT SENT: GP-200 disconnected";
@@ -4245,6 +4262,10 @@ void AudioPluginAudioProcessorEditor::sendFlexibleRouteFromRibbon ()
     }
     sprSendDeadlineMs = juce::Time::getMillisecondCounterHiRes () + 150.0;
     sprSendStage = 1;
+    sprDeviceSlot = midiConnection.getCurrentSlot ();
+    sprWasConnected = true;
+    sprAwaitingMode = true;
+    sprConfirmationDeadlineMs = juce::Time::getMillisecondCounterHiRes () + 3000.0;
     effectsStatusText = "SPR sending: Series first, then order and P";
     repaint ();
 }
@@ -4263,7 +4284,7 @@ void AudioPluginAudioProcessorEditor::processFlexibleRouteTransaction ()
     {
         if (!midiConnection.sendReorderEffects (sprPendingOrder, sprPendingS, sprPendingR))
         {
-            sprSendStage = 0;
+            sprSendStage = 0; sprAwaitingMode = false; sprAwaitingPreset = false;
             effectsStatusText = "SPR order NOT SENT: " + midiConnection.getLastMessageText ();
         }
         else
@@ -4276,13 +4297,109 @@ void AudioPluginAudioProcessorEditor::processFlexibleRouteTransaction ()
     else
     {
         sprSendStage = 0;
+        sprModeQueryMs = juce::Time::getMillisecondCounterHiRes () + 150.0;
         const auto mode = static_cast<juce::uint8> ((sprPendingParallel ? 0x80 : 0x90) | sprPendingP);
         if (midiConnection.sendRoutingModeValue (mode))
             effectsStatusText = "SPR mode sent: 0x" + juce::String::toHexString (static_cast<int> (mode))
-                + " (audio confirmation pending)";
+                + " (waiting for device readback)";
         else
+        {
+            sprAwaitingMode = false; sprAwaitingPreset = false;
             effectsStatusText = "SPR mode NOT SENT: " + midiConnection.getLastMessageText ();
+        }
     }
+    repaint ();
+}
+
+void AudioPluginAudioProcessorEditor::syncFlexibleRoutingFromDevice ()
+{
+    const auto now = juce::Time::getMillisecondCounterHiRes ();
+    const bool connected = midiConnection.isConnected ();
+    const int slot = midiConnection.getCurrentSlot ();
+    if (!connected || !sprWasConnected || slot != sprDeviceSlot)
+    {
+        sprWasConnected = connected; sprDeviceSlot = slot;
+        sprSendStage = 0; sprAwaitingMode = false; sprAwaitingPreset = false;
+        sprDeviceMode = -1; sprAppliedModeRevision = 0; sprAppliedPresetRevision = 0;
+        effectChainRibbon.releaseRoutingDraft ();
+        sprModeQueryMs = now + 250.0;
+        if (!connected) return;
+    }
+    if ((sprAwaitingMode || sprAwaitingPreset) && now >= sprConfirmationDeadlineMs)
+    {
+        sprAwaitingMode = false; sprAwaitingPreset = false;
+        effectsStatusText = "SPR: confirmation timed out; device routing unconfirmed";
+        repaint ();
+    }
+    if (sprSendStage != 0 || !midiConnection.hasLiveCurrentPresetData ()) return;
+    const bool busy = midiConnection.isIRUploadInProgress () || midiConnection.isSoundCloneUploadInProgress () || midiConnection.isPresetNameScanRunning ();
+    if (!busy && now >= sprModeQueryMs)
+    {
+        midiConnection.requestRoutingModeFromGP200 ();
+        sprModeQueryMs = now + 1200.0;
+    }
+    const auto mode = midiConnection.getRoutingModeSnapshot ();
+    if ((sprAwaitingMode || sprAwaitingPreset) && now >= sprConfirmationDeadlineMs
+        && (mode.slot != slot || !gp200::validRoutingModeValue (mode.mode)))
+    {
+        sprAwaitingMode = false; sprAwaitingPreset = false;
+        effectsStatusText = "SPR: no routing readback received; device state unconfirmed";
+        repaint ();
+    }
+    if (mode.slot != slot || !gp200::validRoutingModeValue (mode.mode)) return;
+    if (sprAwaitingMode)
+    {
+        const int expected = (sprPendingParallel ? 0x80 : 0x90) | sprPendingP;
+        if (mode.mode != expected)
+        {
+            if (now < sprConfirmationDeadlineMs) return;
+            effectsStatusText = "SPR: device mode differs from requested mode";
+            sprAwaitingMode = false;
+        }
+        else
+        {
+            sprAwaitingMode = false;
+            sprAwaitingPreset = true;
+            sprPresetAfterMode = midiConnection.getPresetRevision ();
+            midiConnection.requestCurrentPresetFromGP200 ();
+            return;
+        }
+    }
+    const auto revision = midiConnection.getPresetRevision ();
+    if (sprAwaitingPreset && revision <= sprPresetAfterMode)
+    {
+        if (now >= sprConfirmationDeadlineMs)
+        {
+            sprAwaitingPreset = false;
+            effectsStatusText = "SPR: preset readback timed out; order unconfirmed";
+            repaint ();
+        }
+        return;
+    }
+    const auto preset = gp200::GP200PresetCodec::decodeLivePresetDump (midiConnection.getCurrentPresetDumpDataCopy ());
+    if (!preset.isValid) return;
+    const int boundary = gp200::isExtendedRoutingMode (mode.mode) ? mode.mode & 15
+        : juce::jlimit (preset.fxLoopSend, preset.fxLoopReturn, effectChainRibbon.getBoundary ());
+    if (!gp200::validFlexibleRouting (preset.routingOrder, preset.fxLoopSend, boundary, preset.fxLoopReturn)) return;
+    if (sprAwaitingPreset && (preset.routingOrder != sprPendingOrder || preset.fxLoopSend != sprPendingS || preset.fxLoopReturn != sprPendingR
+        || mode.mode != ((sprPendingParallel ? 0x80 : 0x90) | sprPendingP)))
+    {
+        if (now < sprConfirmationDeadlineMs) return;
+        sprAwaitingPreset = false;
+        effectsStatusText = "SPR: device routing differs from requested routing";
+    }
+    const bool newlyConfirmed = sprAwaitingPreset;
+    sprAwaitingPreset = false;
+    if (!newlyConfirmed && revision == sprAppliedPresetRevision && mode.mode == sprDeviceMode) return;
+    sprAppliedPresetRevision = revision; sprAppliedModeRevision = mode.revision;
+    sprDeviceMode = mode.mode;
+    effectChainRibbon.releaseRoutingDraft ();
+    updateEffectChainRibbon (preset);
+    parallelRoutingSelected = gp200::routingModeIsParallel (mode.mode);
+    effectChainRibbon.setDeviceRouting (preset.fxLoopSend, boundary, preset.fxLoopReturn, parallelRoutingSelected);
+    updateSeriesParallelButtonText ();
+    scheduleEditorHeightUpdate ();
+    if (newlyConfirmed) effectsStatusText = "SPR routing confirmed by device (audio test pending)";
     repaint ();
 }
 
@@ -5166,6 +5283,10 @@ void AudioPluginAudioProcessorEditor::updateEffectChainRibbon (const gp200::GP20
     }
     effectChainRibbon.setItems (std::move (items));
     effectChainRibbon.setLoopPositions (preset.fxLoopSend, preset.fxLoopReturn);
+    if (midiConnection.isConnected () && sprSendStage == 0 && !sprAwaitingMode && !sprAwaitingPreset
+        && gp200::isExtendedRoutingMode (sprDeviceMode))
+        effectChainRibbon.setDeviceRouting (preset.fxLoopSend, sprDeviceMode & 15, preset.fxLoopReturn,
+            gp200::routingModeIsParallel (sprDeviceMode));
     effectChainRibbon.setSelectedBlockIndex (selectedEffectBlockIndex);
 }
 

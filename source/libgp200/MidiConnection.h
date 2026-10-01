@@ -35,6 +35,10 @@ class MidiConnection final : private juce::MidiInputCallback, private juce::Time
     bool isConnected () const;
 
     bool requestCurrentPresetFromGP200 ();
+    struct RoutingModeSnapshot { int mode{-1}; int slot{-1}; std::uint64_t revision{0}; };
+    RoutingModeSnapshot getRoutingModeSnapshot () const;
+    bool requestRoutingModeFromGP200 ();
+
     bool requestAssignmentNamesFromGP200 ();
     void processStartupHandshake ();
     void processPendingLivePresetRefresh ();
@@ -259,6 +263,7 @@ class MidiConnection final : private juce::MidiInputCallback, private juce::Time
     std::array<juce::String, snapToneCount> snapToneNames{};
     juce::String assignmentNamesStatusText{"Assignment names: not requested"};
 
+    RoutingModeSnapshot routingModeSnapshot;
     std::uint64_t presetRevision{0};
     std::uint64_t assignmentNamesRevision{0};
 

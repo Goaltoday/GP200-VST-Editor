@@ -115,6 +115,8 @@ void MidiConnection::disconnect ()
     presetNameScanner.cancel ();
 
     statusText = "Not connected";
+    routingModeSnapshot.mode = -1; routingModeSnapshot.slot = -1;
+    ++routingModeSnapshot.revision;
     currentSlot = -1;
     currentPresetName = "unknown";
 
@@ -1678,6 +1680,22 @@ bool MidiConnection::sendReorderEffects (const RoutingOrder& routingOrder, int f
     return true;
 }
 
+MidiConnection::RoutingModeSnapshot MidiConnection::getRoutingModeSnapshot () const
+{
+    const juce::ScopedLock lock (stateLock);
+    return routingModeSnapshot;
+}
+
+bool MidiConnection::requestRoutingModeFromGP200 ()
+{
+    const juce::ScopedLock lock (stateLock);
+    if (midiOutput == nullptr || modSyncActive || presetRestoreTransactionActive) return false;
+    const auto bytes = routingModeQueryMessage ();
+    midiOutput->sendMessageNow (juce::MidiMessage::createSysExMessage (bytes.data () + 1,
+        static_cast<int> (bytes.size () - 2)));
+    return true;
+}
+
 bool MidiConnection::sendSeriesParallel (bool parallel)
 {
     return sendRoutingModeValue (parallel ? 0 : 1);
@@ -2366,6 +2384,11 @@ void MidiConnection::scheduleLivePresetRefresh ()
 
 void MidiConnection::resetPresetDumpCaptureForSlot (int slot)
 {
+    if (routingModeSnapshot.slot != slot)
+    {
+        routingModeSnapshot.mode = -1; routingModeSnapshot.slot = slot;
+        ++routingModeSnapshot.revision;
+    }
     presetDumpSlot = slot;
     presetReadChunks.clear ();
     currentPresetDecodedData.setSize (0);
@@ -3000,6 +3023,17 @@ void MidiConnection::parseGP200SysEx (const juce::uint8* data, int size)
         return;
 
     if (handleModSyncResponse (data, size)) return;
+
+    const auto routeMode = routingModeResponse (data, size);
+    if (routeMode >= 0)
+    {
+        const bool changed = routingModeSnapshot.mode != routeMode || routingModeSnapshot.slot != currentSlot;
+        routingModeSnapshot.mode = routeMode;
+        routingModeSnapshot.slot = currentSlot;
+        ++routingModeSnapshot.revision;
+        if (changed) scheduleLivePresetRefresh ();
+        return;
+    }
 
     const auto command = data[8];
     const auto subCommand = data[9];

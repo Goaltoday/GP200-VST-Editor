@@ -85,6 +85,17 @@ void updateSnapshotNameEditor ();
     void toggleSeriesParallel ();
     void sendFlexibleRouteFromRibbon ();
     void processFlexibleRouteTransaction ();
+    void syncFlexibleRoutingFromDevice ();
+    int sprDeviceSlot{-2};
+    int sprDeviceMode{-1};
+    bool sprWasConnected{false};
+    bool sprAwaitingMode{false};
+    bool sprAwaitingPreset{false};
+    double sprModeQueryMs{0};
+    double sprConfirmationDeadlineMs{0};
+    std::uint64_t sprPresetAfterMode{0};
+    std::uint64_t sprAppliedPresetRevision{0};
+    std::uint64_t sprAppliedModeRevision{0};
     int sprSendStage{0};
     double sprSendDeadlineMs{0};
     gp200::RoutingOrder sprPendingOrder{};
@@ -239,6 +250,9 @@ CompareSnapshot selectedCompareSnapshot{
 
         gp200::RoutingOrder getLocalOrder () const;
         void keepRoutingDraft () { routingDraftEdited = true; }
+        void releaseRoutingDraft () { routingDraftEdited = false; }
+        void setDeviceRouting (int send, int boundary, int ret, bool parallel);
+
         int getSend () const { return fxLoopSendPosition; }
         int getBoundary () const { return localBoundary; }
         int getReturn () const { return fxLoopReturnPosition; }
