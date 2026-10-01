@@ -84,6 +84,12 @@ void updateSnapshotNameEditor ();
     void updateTunerButtonText ();
     void toggleSeriesParallel ();
     void sendFlexibleRouteFromRibbon ();
+    void processFlexibleRouteTransaction ();
+    int sprSendStage{0};
+    double sprSendDeadlineMs{0};
+    gp200::RoutingOrder sprPendingOrder{};
+    int sprPendingS{0}, sprPendingP{0}, sprPendingR{0};
+    bool sprPendingParallel{false};
     void updateSeriesParallelButtonText ();
     void toggleAllBlocksOff ();
     bool captureCurrentBlockEnabledStates (BlockEnabledStates& states);
@@ -232,6 +238,7 @@ CompareSnapshot selectedCompareSnapshot{
         void mouseUp (const juce::MouseEvent& event) override;
 
         gp200::RoutingOrder getLocalOrder () const;
+        void keepRoutingDraft () { routingDraftEdited = true; }
         int getSend () const { return fxLoopSendPosition; }
         int getBoundary () const { return localBoundary; }
         int getReturn () const { return fxLoopReturnPosition; }
@@ -252,6 +259,7 @@ CompareSnapshot selectedCompareSnapshot{
         void moveLocalItem (int source, int group, int position);
         int localBoundary{5};
         bool localInitialised{false};
+        bool routingDraftEdited{false};
         int dragTargetGroup{0};
         int getEffectiveSendPosition () const;
         int getEffectiveReturnPosition () const;
