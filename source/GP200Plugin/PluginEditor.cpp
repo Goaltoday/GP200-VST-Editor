@@ -1454,7 +1454,6 @@ int AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getItemIndexAt 
 
 int AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getTargetPositionAtX (int x) const
 {
-    if (parallelMode) return -1; // Keep branch placement stable while displaying parallel topology.
     for (int i = 0; i < static_cast<int> (items.size ()); ++i)
         if (x < getTileBounds (i).getCentreX ())
             return i;
@@ -1527,13 +1526,6 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::paint (juce::G
         g.drawLine (splitX, upperY, mergeX, upperY, 2.0f);
         g.drawLine (splitX, lowerY, mergeX, lowerY, 2.0f);
         g.drawLine (mergeX, upperY, mergeX, lowerY, 2.0f);
-        const auto ampPosition = getAmplifierItemIndex ();
-        if (ampPosition >= 0)
-        {
-            const auto ampBounds = getTileBounds (ampPosition);
-            const auto ampX = static_cast<float> (ampBounds.getCentreX ());
-            g.drawLine (ampX, upperY, ampX, lowerY, 1.4f);
-        }
         g.drawLine (mergeX, static_cast<float> (chainY), static_cast<float> (getWidth () - 36),
                     static_cast<float> (chainY), 2.0f);
         g.fillEllipse (splitX - 3.0f, static_cast<float> (chainY) - 3.0f, 6.0f, 6.0f);
@@ -1663,7 +1655,6 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::mouseDrag (con
         repaint ();
         return;
     }
-    if (parallelMode) return;
     if (pressedItemIndex < 0) return;
     if (!dragging && event.getPosition ().getDistanceFrom (mouseDownPosition) >= 6.0f)
         dragging = true;
@@ -5125,6 +5116,31 @@ void AudioPluginAudioProcessorEditor::hideDragDropIndicator ()
 
 void AudioPluginAudioProcessorEditor::moveEffectBlockToPosition (int blockIndex, int targetPosition)
 {
+    auto keepLoopMarkersAroundAmp = [] (const gp200::GP200Preset& preset,
+                                        const gp200::RoutingOrder& order,
+                                        int& sendPosition,
+                                        int& returnPosition)
+    {
+        auto ampPosition = -1;
+        for (int i = 0; i < static_cast<int> (order.size ()); ++i)
+        {
+            const auto index = order[static_cast<std::size_t> (i)];
+            if (juce::isPositiveAndBelow (index, static_cast<int> (preset.effects.size ())) &&
+                gp200::GP200PresetCodec::blockNameForSlotIndex (
+                    preset.effects[static_cast<std::size_t> (index)].slotIndex) == "AMP")
+            {
+                ampPosition = i;
+                break;
+            }
+        }
+
+        if (ampPosition > 0 && ampPosition < 10)
+        {
+            sendPosition = juce::jlimit (1, ampPosition, sendPosition);
+            returnPosition = juce::jlimit (ampPosition + 1, 10, returnPosition);
+        }
+    };
+
     if (!midiConnection.isConnected ())
     {
         std::vector<int> order (offlinePreset.routingOrder.begin (), offlinePreset.routingOrder.end ());
@@ -5145,6 +5161,10 @@ void AudioPluginAudioProcessorEditor::moveEffectBlockToPosition (int blockIndex,
         order.insert (order.begin () + adjustedTargetPosition, movedBlock);
         for (std::size_t i = 0; i < offlinePreset.routingOrder.size (); ++i)
             offlinePreset.routingOrder[i] = order[i];
+
+        if (parallelRoutingSelected)
+            keepLoopMarkersAroundAmp (offlinePreset, offlinePreset.routingOrder,
+                                      offlinePreset.fxLoopSend, offlinePreset.fxLoopReturn);
 
         offlinePresetDirty = true;
         ++offlinePresetRevision;
@@ -5213,7 +5233,12 @@ void AudioPluginAudioProcessorEditor::moveEffectBlockToPosition (int blockIndex,
     for (int i = 0; i < static_cast<int> (newOrder.size ()) && i < static_cast<int> (order.size ()); ++i)
         newOrder[static_cast<std::size_t> (i)] = order[static_cast<std::size_t> (i)];
 
-    if (!midiConnection.sendReorderEffects (newOrder, currentPreset.fxLoopSend, currentPreset.fxLoopReturn))
+    auto newFxLoopSend = currentPreset.fxLoopSend;
+    auto newFxLoopReturn = currentPreset.fxLoopReturn;
+    if (parallelRoutingSelected)
+        keepLoopMarkersAroundAmp (currentPreset, newOrder, newFxLoopSend, newFxLoopReturn);
+
+    if (!midiConnection.sendReorderEffects (newOrder, newFxLoopSend, newFxLoopReturn))
     {
         repaint ();
         return;
