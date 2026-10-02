@@ -1,0 +1,164 @@
+--- SPR_REAL/GP200-VST-SPR-TEST/source/GP200Plugin/PluginEditor.cpp	2026-10-01 18:41:38.429019654 +0200
++++ SPR_FIX1/GP200-VST-SPR-TEST/source/GP200Plugin/PluginEditor.cpp	2026-10-01 19:45:04.806653346 +0200
+@@ -1342,7 +1342,7 @@
+ 
+ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::setItems (std::vector<Item> newItems)
+ {
+-    if (!localInitialised)
++    if (!localInitialised || !routingDraftEdited)
+     {
+         items = std::move (newItems);
+         fxLoopSendPosition = juce::jmin (2, static_cast<int> (items.size ()));
+@@ -1352,7 +1352,7 @@
+     }
+     else
+     {
+-        // MIDI refreshes update appearance, never replace the local routing draft.
++        // Keep an edited routing draft; before editing, import the actual device order.
+         for (auto& item : items)
+             for (const auto& fresh : newItems)
+                 if (item.blockIndex == fresh.blockIndex) item = fresh;
+@@ -1367,8 +1367,13 @@
+ 
+ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::setLoopPositions (int sendPosition, int returnPosition)
+ {
+-    juce::ignoreUnused (sendPosition, returnPosition);
+-    // S/P/R are local draft data; the device has no independent P field yet.
++    if (routingDraftEdited) return;
++    const int count = static_cast<int> (items.size ());
++    if (sendPosition < 0 || returnPosition < sendPosition || returnPosition > count) return;
++    fxLoopSendPosition = sendPosition;
++    fxLoopReturnPosition = returnPosition;
++    localBoundary = juce::jlimit (sendPosition, returnPosition, localBoundary);
++    repaint ();
+ 
+ }
+ 
+@@ -1552,6 +1557,11 @@
+     g.setFont (gp200ui::regular (10.0f));
+     g.drawText ("SPR S=" + juce::String (fxLoopSendPosition) + " P=" + juce::String (localBoundary)
+                 + " R=" + juce::String (fxLoopReturnPosition), 8, 0, 220, 13, juce::Justification::centredLeft);
++    const auto vol = std::find_if (items.begin (), items.end (), [] (const Item& item) { return item.blockIndex == 10; });
++    const int volPosition = static_cast<int> (std::distance (items.begin (), vol));
++    const auto volText = vol == items.end () || !vol->enabled ? "VOL: OFF"
++        : parallelMode && volPosition >= fxLoopReturnPosition ? "VOL: BLEND" : "VOL: LEVEL";
++    g.drawText (volText, 225, 0, 150, 13, juce::Justification::centredLeft);
+     if (parallelMode)
+     {
+         const char* labels[] = {"IN COMMON", "A", "B", "OUT COMMON"};
+@@ -2555,6 +2565,7 @@
+ void AudioPluginAudioProcessorEditor::timerCallback ()
+ {
+     const auto nowMs = juce::Time::getMillisecondCounterHiRes();
++    processFlexibleRouteTransaction ();
+ 
+     const auto modSyncRevision = gp200::GP200ModSync::getRevision ();
+     if (modSyncRevision != lastModSyncRevision)
+@@ -4208,14 +4219,70 @@
+ 
+ void AudioPluginAudioProcessorEditor::sendFlexibleRouteFromRibbon ()
+ {
++    sprSendStage = 0; // A new edit replaces any pending route transaction.
+     if (!midiConnection.isConnected ())
+-        effectsStatusText = "SPR draft only: GP-200 disconnected, routing NOT SENT";
+-    else if (midiConnection.sendFlexibleRouting (effectChainRibbon.getLocalOrder (),
+-                 effectChainRibbon.getSend (), effectChainRibbon.getBoundary (),
+-                 effectChainRibbon.getReturn (), parallelRoutingSelected))
+-        effectsStatusText = "SPR routing messages sent to GP-200 (R15 required)";
+-    else
++    {
++        effectsStatusText = "SPR routing NOT SENT: GP-200 disconnected";
++        repaint (); return;
++    }
++    const auto dump = midiConnection.getCurrentPresetDumpDataCopy ();
++    const auto preset = gp200::GP200PresetCodec::decodeLivePresetDump (dump);
++    if (!preset.isValid)
++    {
++        effectsStatusText = "SPR routing NOT SENT: wait for the device preset to load";
++        repaint (); return;
++    }
++    sprPendingOrder = effectChainRibbon.getLocalOrder ();
++    sprPendingS = effectChainRibbon.getSend ();
++    sprPendingP = effectChainRibbon.getBoundary ();
++    sprPendingR = effectChainRibbon.getReturn ();
++    sprPendingParallel = parallelRoutingSelected;
++    effectChainRibbon.keepRoutingDraft ();
++    if (!midiConnection.sendRoutingModeValue (1))
++    {
+         effectsStatusText = "SPR routing NOT SENT: " + midiConnection.getLastMessageText ();
++        repaint (); return;
++    }
++    sprSendDeadlineMs = juce::Time::getMillisecondCounterHiRes () + 150.0;
++    sprSendStage = 1;
++    effectsStatusText = "SPR sending: Series first, then order and P";
++    repaint ();
++}
++
++void AudioPluginAudioProcessorEditor::processFlexibleRouteTransaction ()
++{
++    if (sprSendStage == 0) return;
++    if (!midiConnection.isConnected ())
++    {
++        sprSendStage = 0;
++        effectsStatusText = "SPR transaction cancelled: disconnected";
++        repaint (); return;
++    }
++    if (juce::Time::getMillisecondCounterHiRes () < sprSendDeadlineMs) return;
++    if (sprSendStage == 1)
++    {
++        if (!midiConnection.sendReorderEffects (sprPendingOrder, sprPendingS, sprPendingR))
++        {
++            sprSendStage = 0;
++            effectsStatusText = "SPR order NOT SENT: " + midiConnection.getLastMessageText ();
++        }
++        else
++        {
++            sprSendStage = 2;
++            sprSendDeadlineMs = juce::Time::getMillisecondCounterHiRes () + 150.0;
++            effectsStatusText = "SPR sending: order sent, waiting before P";
++        }
++    }
++    else
++    {
++        sprSendStage = 0;
++        const auto mode = static_cast<juce::uint8> ((sprPendingParallel ? 0x80 : 0x90) | sprPendingP);
++        if (midiConnection.sendRoutingModeValue (mode))
++            effectsStatusText = "SPR mode sent: 0x" + juce::String::toHexString (static_cast<int> (mode))
++                + " (audio confirmation pending)";
++        else
++            effectsStatusText = "SPR mode NOT SENT: " + midiConnection.getLastMessageText ();
++    }
+     repaint ();
+ }
+ 
+--- SPR_REAL/GP200-VST-SPR-TEST/source/GP200Plugin/PluginEditor.h	2026-10-01 18:37:58.742651648 +0200
++++ SPR_FIX1/GP200-VST-SPR-TEST/source/GP200Plugin/PluginEditor.h	2026-10-01 19:40:50.993680473 +0200
+@@ -84,6 +84,12 @@
+     void updateTunerButtonText ();
+     void toggleSeriesParallel ();
+     void sendFlexibleRouteFromRibbon ();
++    void processFlexibleRouteTransaction ();
++    int sprSendStage{0};
++    double sprSendDeadlineMs{0};
++    gp200::RoutingOrder sprPendingOrder{};
++    int sprPendingS{0}, sprPendingP{0}, sprPendingR{0};
++    bool sprPendingParallel{false};
+     void updateSeriesParallelButtonText ();
+     void toggleAllBlocksOff ();
+     bool captureCurrentBlockEnabledStates (BlockEnabledStates& states);
+@@ -232,6 +238,7 @@
+         void mouseUp (const juce::MouseEvent& event) override;
+ 
+         gp200::RoutingOrder getLocalOrder () const;
++        void keepRoutingDraft () { routingDraftEdited = true; }
+         int getSend () const { return fxLoopSendPosition; }
+         int getBoundary () const { return localBoundary; }
+         int getReturn () const { return fxLoopReturnPosition; }
+@@ -252,6 +259,7 @@
+         void moveLocalItem (int source, int group, int position);
+         int localBoundary{5};
+         bool localInitialised{false};
++        bool routingDraftEdited{false};
+         int dragTargetGroup{0};
+         int getEffectiveSendPosition () const;
+         int getEffectiveReturnPosition () const;

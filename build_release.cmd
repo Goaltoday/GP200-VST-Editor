@@ -9,7 +9,7 @@ if not exist "external\JUCE\CMakeLists.txt" if not exist "JUCE\CMakeLists.txt" i
 )
 
 set CMAKE_JUCE_ARG=
-if not "%JUCE_SOURCE_DIR%"=="" set CMAKE_JUCE_ARG=-DJUCE_SOURCE_DIR=%JUCE_SOURCE_DIR%
+if not "%JUCE_SOURCE_DIR%"=="" set CMAKE_JUCE_ARG="-DJUCE_SOURCE_DIR=%JUCE_SOURCE_DIR%"
 
 cmake -S . -B build %CMAKE_JUCE_ARG%
 if errorlevel 1 exit /b %errorlevel%

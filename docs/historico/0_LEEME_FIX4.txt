@@ -1,0 +1,15 @@
+GP200 VST R15 SPR FIX4 — recepción del modo corregida
+
+Conserva el firmware FIX3 que ya responde a los cambios del VST. Esta revisión cambia únicamente el decodificador VST; no requiere reinstalar firmware.
+
+Causa: FIX3 comparaba los 13 bytes de cabecera recibidos con los del mensaje de escritura. En la respuesta corta nativa, el byte 9 es 08 (ocho bytes de datos decodificados). La escritura tiene 10 (dieciséis bytes). La comparación fija rechazaba las notificaciones y respuestas válidas del modo. Los tests anteriores creaban respuestas cortas con la cabecera de escritura, por lo que no detectaban el error.
+
+FIX4 valida el fabricante/comando, la longitud real, el offset y la ruta del parámetro por separado. Reconoce la trama nativa de 30 bytes con cabecera 12 08 00 00 00 y las tramas completas de 46 bytes. El formato corto se reconstruyó desde el serializador del firmware V1.8.0 (offset de archivo 0x48C8D..0x48CEB), que escribe longitud y offset en los bytes 9..12. El receptor de modo escribe el payload 06 00 04 00 05 00 MODE 00.
+
+Uso:
+1. Compila estos fuentes con JUCE en tu entorno habitual y reemplaza el VST anterior. No se incluye un VST3 compilado.
+2. Cierra y vuelve a abrir el editor conectado al pedal para reiniciar la lectura.
+3. Carga los presets Series y Parallel que guardaste: el botón y P deben reflejar el estado recibido. Comprueba también un cambio del modo desde la GP-200 sin tocar el botón del VST.
+4. Mantén el firmware FIX3. VOL y EXP no se modifican.
+
+Verificación: 512 tramas cortas/completas para los 256 valores de byte; rechazo de longitud, ruta, offset y consulta saliente incorrectos. También se verificaron los métodos de sincronización del editor con una respuesta corta generada independientemente según el serializador nativo. No se ha compilado el plugin completo por falta de JUCE en este entorno, ni se ha comprobado FIX4 en hardware.

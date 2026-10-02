@@ -37,7 +37,7 @@ class MidiConnection final : private juce::MidiInputCallback, private juce::Time
     bool requestCurrentPresetFromGP200 ();
     struct RoutingModeSnapshot { int mode{-1}; int slot{-1}; std::uint64_t revision{0}; };
     RoutingModeSnapshot getRoutingModeSnapshot () const;
-    struct RoutingStateSnapshot { bool connected{false}; int slot{-1}; bool live{false}; RoutingModeSnapshot mode; juce::MemoryBlock data; std::uint64_t presetRevision{0}, liveRevision{0}; };
+    struct RoutingStateSnapshot { bool connected{false}; int slot{-1}; bool live{false}; RoutingModeSnapshot mode; juce::MemoryBlock data; std::uint64_t presetRevision{0}, liveRevision{0}; bool canSave{false}, modeFresh{false}; };
     RoutingStateSnapshot getRoutingStateSnapshot () const;
     bool requestRoutingModeFromGP200 ();
 
@@ -94,7 +94,12 @@ class MidiConnection final : private juce::MidiInputCallback, private juce::Time
     bool sendParamChange (int blockIndex, int paramIndex, juce::uint32 effectId, float value);
     bool sendSeriesParallel (bool parallel);
     bool sendRoutingModeValue (juce::uint8 value);
-    bool sendFlexibleRouting (const RoutingOrder& order, int send, int boundary, int ret, bool parallel);
+    bool sendFlexibleRouting (const RoutingOrder& order, int send, int boundary, int ret, bool parallel, int expectedSlot = -1);
+    bool canSaveCurrentPreset () const;
+    bool isRoutingTransactionBusy () const;
+    juce::String getRoutingTransactionStatus () const;
+    struct RoutingRequestSnapshot { bool active{false}; int slot{-1}; RoutingOrder order{}; int send{0}, boundary{0}, ret{0}, mode{1}; };
+    RoutingRequestSnapshot getRoutingRequestSnapshot () const;
     bool sendReorderEffects (const RoutingOrder& routingOrder, int fxLoopSend, int fxLoopReturn);
     bool storeCurrentPresetToGP200 ();
 
@@ -134,6 +139,18 @@ class MidiConnection final : private juce::MidiInputCallback, private juce::Time
 
   private:
     void timerCallback () override;
+    void processRoutingTransaction ();
+    void failRoutingTransaction (const juce::String& reason);
+    void processPresetReadRecovery ();
+    int routingStage{0}; // 1 order, 2 final mode, 3 mode reply, 4 preset, 5 final query, 6 recovery
+    int routingSlot{-1}, routingSend{0}, routingBoundary{0}, routingReturn{0}, routingValue{1};
+    RoutingOrder routingOrder{};
+    std::uint64_t routingGeneration{0}, slotGeneration{0}, routingModeBaseline{0}, routingLiveBaseline{0}, presetModeBaseline{0};
+    double routingNextMs{0}, routingDeadlineMs{0}, routingQueryMs{0};
+    juce::String routingTransactionStatus{"SPR: idle"};
+    double presetReadStartedMs{0}, presetReadResumeMs{0}, modePollMs{0};
+    int presetReadRetries{0};
+    bool presetReadIsLive{false};
     bool isFactoryAmpDestinationInactiveLocked (int zeroBasedFactoryAmpIndex) const;
     bool processModSyncStartup (double nowMs);
     bool handleModSyncResponse (const juce::uint8* data, int size);

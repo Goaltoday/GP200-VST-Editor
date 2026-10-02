@@ -9,7 +9,7 @@ if not exist "external\JUCE\CMakeLists.txt" if not exist "JUCE\CMakeLists.txt" i
 )
 
 set CMAKE_JUCE_ARG=
-if not "%JUCE_SOURCE_DIR%"=="" set CMAKE_JUCE_ARG=-DJUCE_SOURCE_DIR=%JUCE_SOURCE_DIR%
+if not "%JUCE_SOURCE_DIR%"=="" set CMAKE_JUCE_ARG="-DJUCE_SOURCE_DIR=%JUCE_SOURCE_DIR%"
 
 rem A separate build directory prevents reuse of a pre-HOT1 GP200SoundClone.obj.
 cmake -S . -B build_hot1 %CMAKE_JUCE_ARG%
