@@ -3282,6 +3282,19 @@ void MidiConnection::handleIncomingSysEx (const juce::MidiMessage& message)
     parseGP200SysEx (fullMessage.data (), static_cast<int> (fullMessage.size ()));
 }
 
+bool MidiConnection::handleRoutingChangeNotification (const juce::uint8* data, int size)
+{
+    const int slot = routingChangeNotificationSlot (data, size);
+    if (slot < 0) return false;
+    // Only refresh the current live slot. A delayed notification from another
+    // slot must not replace the displayed preset, or interrupt DAW recall.
+    // Queue edits arriving during a live read: the refresh waits for that read
+    // to finish, so the final encoder movement cannot be lost.
+    if (slot == currentSlot && !presetRestoreTransactionActive && routingStage == 0)
+        scheduleLivePresetRefresh ();
+    return true;
+}
+
 void MidiConnection::parseGP200SysEx (const juce::uint8* data, int size)
 {
     if (size < 15)
@@ -3294,6 +3307,8 @@ void MidiConnection::parseGP200SysEx (const juce::uint8* data, int size)
         return;
 
     if (handleModSyncResponse (data, size)) return;
+
+    if (handleRoutingChangeNotification (data, size)) return;
 
     const auto routeMode = routingModeResponse (data, size);
     if (routeMode >= 0)

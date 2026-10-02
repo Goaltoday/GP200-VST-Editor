@@ -57,4 +57,32 @@ inline int routingModeResponse (const std::uint8_t* data, int size)
     return validRoutingModeValue (mode) ? mode : -1;
 }
 
+// V180 native setter 0x95e4 sends [8,0,16,0,slotLE,S,R,order(11),spare].
+// Header bytes 9/10 are the decoded payload length (20), not an opcode.
+inline int routingChangeNotificationSlot (const std::uint8_t* data, int size)
+{
+    if (data == nullptr || size != 54) return -1;
+    const auto header = flexibleRoutingModeMessage (0);
+    for (int i = 0; i < 9; ++i)
+        if (data[i] != header[static_cast<std::size_t> (i)]) return -1;
+    if (data[9] != 20 || data[10] != 0 || data[11] != 0 || data[12] != 0
+        || data[53] != 0xf7) return -1;
+    std::array<int, 20> decoded{};
+    for (int i = 0; i < 20; ++i)
+    {
+        const int hi = data[13 + 2 * i], lo = data[14 + 2 * i];
+        if (hi > 15 || lo > 15) return -1;
+        decoded[static_cast<std::size_t> (i)] = (hi << 4) | lo;
+    }
+    if (decoded[0] != 8 || decoded[1] != 0 || decoded[2] != 16 || decoded[3] != 0)
+        return -1;
+    const int slot = decoded[4] | (decoded[5] << 8);
+    if (slot > 255 || decoded[6] > decoded[7] || decoded[7] > 11) return -1;
+    std::array<int, 11> order{};
+    for (int i = 0; i < 11; ++i) order[static_cast<std::size_t> (i)] = decoded[8 + i];
+    if (!validFlexibleRouting (order, decoded[6], decoded[6], decoded[7])) return -1;
+    // The native sender does not initialise its last spare byte.
+    return slot;
+}
+
 }

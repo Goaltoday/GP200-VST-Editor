@@ -177,6 +177,7 @@ class MidiConnection final : private juce::MidiInputCallback, private juce::Time
     void handleIncomingMidiMessage (juce::MidiInput* source, const juce::MidiMessage& message) override;
 
     void handleIncomingSysEx (const juce::MidiMessage& message);
+    bool handleRoutingChangeNotification (const juce::uint8* data, int size);
     void parseGP200SysEx (const juce::uint8* data, int size);
     bool handleSoundCloneUploadAck (const juce::uint8* data, int size);
     void completeSoundCloneUpload ();
