@@ -1604,13 +1604,20 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::paint (juce::G
 
     if (parallelMode)
     {
-        const char* labels[] = {"IN COMMON", "A", "B", "OUT COMMON"};
         for (int group = 0; group < 4; ++group)
         {
             const auto area = getGroupArea (group);
             g.setColour (juce::Colour (0xff444a50));
             g.drawRoundedRectangle (area.toFloat (), 4.0f, 1.0f);
-            g.drawText (labels[group], area.withHeight (12), juce::Justification::centred);
+            if (group == 1 || group == 2)
+            {
+                const int labelY = group == 1 ? area.getY () - 16 : area.getBottom () + 2;
+                g.setColour (juce::Colour (0xffb9bdc0));
+                g.setFont (gp200ui::semibold (12.5f));
+                g.drawText (group == 1 ? "A" : "B",
+                            juce::Rectangle<int> (area.getX (), labelY, area.getWidth (), 14),
+                            juce::Justification::centred);
+            }
         }
     }
     const auto first = getTileBounds (0);
