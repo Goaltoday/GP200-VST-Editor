@@ -1,3 +1,4 @@
+#include <set>
 /*
     GP200 VST
 
@@ -96,6 +97,7 @@ bool MidiConnection::connectToGP200 ()
 
     {
         const juce::ScopedLock lock (stateLock);
+        modSyncAttempted = false; modSyncTargetPages = 19;
         midiInput = std::move (newInput);
         midiOutput = std::move (newOutput);
         statusText = "Connected to GP-200: IN=" + selectedInput.name + " OUT=" + selectedOutput.name;
@@ -918,7 +920,7 @@ bool MidiConnection::processModSyncStartup (double nowMs)
         ++modSyncRetries;
         modSyncWaiting = false;
     }
-    if (modSyncPage == modsync::pageCount)
+    if (modSyncPage == modSyncTargetPages)
     {
         applyModSyncSnapshot ();
         modSyncActive = false;
@@ -928,7 +930,7 @@ bool MidiConnection::processModSyncStartup (double nowMs)
     const auto bytes = modsync::request (modSyncPage, modSyncNonce);
     modSyncWaiting = true;
     modSyncSentMs = nowMs;
-    modSyncStatus = "MOD_SYNC page " + juce::String (modSyncPage + 1) + "/19, retry " + juce::String (modSyncRetries);
+    modSyncStatus = "MOD_SYNC page " + juce::String (modSyncPage + 1) + "/" + juce::String (modSyncTargetPages) + ", retry " + juce::String (modSyncRetries);
     midiOutput->sendMessageNow (juce::MidiMessage::createSysExMessage (bytes.data ()+1, static_cast<int> (bytes.size ()-2)));
     return false;
 }
@@ -951,6 +953,7 @@ bool MidiConnection::handleModSyncResponse (const juce::uint8* data, int size)
         finishModSyncFailure ("capabilities changed during snapshot");
         return true;
     }
+    if (modSyncPage == 0) modSyncTargetPages = (page.bytes[19]&8) ? modsync::pageCount : 19;
     modSyncPages[static_cast<std::size_t> (modSyncPage)] = page;
     ++modSyncPage;
     modSyncWaiting = false;
@@ -961,7 +964,7 @@ bool MidiConnection::handleModSyncResponse (const juce::uint8* data, int size)
 void MidiConnection::applyModSyncSnapshot ()
 {
     juce::Array<juce::var> amps, cabs;
-    for (int page = 1; page < modsync::pageCount; ++page)
+    for (int page = 1; page < 19; ++page)
     {
         const auto& bytes = modSyncPages[static_cast<std::size_t> (page)].bytes;
         const bool isAmp = page >= 10;
@@ -983,8 +986,39 @@ void MidiConnection::applyModSyncSnapshot ()
     auto* root = new juce::DynamicObject ();
     root->setProperty ("factory_amp_overrides", amps);
     root->setProperty ("factory_cab_overrides", cabs);
+    bool preSaved = true;
+    if (modSyncTargetPages == modsync::pageCount)
+    {
+        juce::Array<juce::var> pre;
+        std::set<std::uint32_t> seen;
+        for (int page = 19; page < modsync::pageCount; ++page)
+        {
+            const auto& bytes = modSyncPages[static_cast<std::size_t> (page)].bytes;
+            for (int i = 0; i < bytes[18]; ++i)
+            {
+                const auto* rec = bytes.data () + 24 + i*32;
+                const auto id = modsync::read32 (rec);
+                if (!seen.insert (id).second) { finishModSyncFailure ("duplicate PRE slot"); return; }
+                if (rec[9] == 0) continue;
+                auto* entry = new juce::DynamicObject ();
+                entry->setProperty ("pre_effect_id", static_cast<juce::int64> (id));
+                entry->setProperty ("source_effect_id", static_cast<juce::int64> (modsync::read32 (rec+4)));
+                const char* modules[] = {"", "MOD", "DLY", "RVB", "WAH"};
+                entry->setProperty ("source_module", modules[rec[8]]);
+                entry->setProperty ("display_name", juce::String::fromUTF8 (reinterpret_cast<const char*> (rec+12),20).trim ());
+                entry->setProperty ("parameter_count", rec[10]);
+                entry->setProperty ("relocation_profile", "Imported automatically from GP-200");
+                pre.add (juce::var (entry));
+            }
+        }
+        if (seen.size () != 15) { finishModSyncFailure ("incomplete PRE bank"); return; }
+        auto* preRoot = new juce::DynamicObject ();
+        preRoot->setProperty ("schema", "gp200-pre-bank/v1");
+        preRoot->setProperty ("slots", pre);
+        preSaved = GP200ModSync::replacePreBankFromDevice (juce::var (preRoot));
+    }
     const bool saved = GP200ModSync::replaceFromDevice (juce::var(root), (modSyncPages[0].bytes[19]&2) ? 2048 : 1024);
-    modSyncStatus = saved ? "MOD_SYNC OK: 70 CAB, " + juce::String (amps.size ()) + " AMP overrides" : "MOD_SYNC applied; cache save failed";
+    modSyncStatus = saved && preSaved ? "MOD_SYNC OK: 70 CAB, " + juce::String (amps.size ()) + " AMP overrides" + (modSyncTargetPages == modsync::pageCount ? ", PRE synchronized" : ", PRE requires updated firmware") : "MOD_SYNC applied; cache save failed";
     lastMessageText = modSyncStatus;
 }
 

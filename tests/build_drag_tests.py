@@ -47,6 +47,15 @@ void start(Ribbon&x,int index){x.mouseDown(at(centre(x.getTileBounds(index))));}
 void verifyPaint(Ribbon&x){auto order=x.getLocalOrder();auto s=x.getSend(),p=x.getBoundary(),r=x.getReturn();juce::Graphics g;x.paint(g);assert(!x.paintingDragPreview);assert(order==x.getLocalOrder()&&s==x.getSend()&&p==x.getBoundary()&&r==x.getReturn());for(auto m:g.marks)for(auto t:g.tiles)assert(!m.intersects(t));assert(g.ghostOpacity.size()>=1&&g.ghostOpacity.back()==0.65f);cases++;}
 int main(){
 for(bool parallel:{false,true}){
+ auto split=make(parallel);int sent=0;split.onRoutingChanged=[&]{sent++;};split.draggedLoopMarker=0;
+ const int sx=parallel?50+7*(split.getWidth()-100)/11:split.getLoopMarkerX(7);
+ split.mouseUp({sx,10});assert(split.getSend()==7&&split.getBoundary()==7&&split.getReturn()==8&&sent==1);cases++;
+ auto mix=make(parallel);mix.onRoutingChanged=[&]{sent++;};mix.draggedLoopMarker=1;
+ const int rx=parallel?50+3*(mix.getWidth()-100)/11:mix.getLoopMarkerX(3);
+ mix.mouseUp({rx,150});assert(mix.getSend()==2&&mix.getBoundary()==3&&mix.getReturn()==3&&sent==2);cases++;
+}
+
+for(bool parallel:{false,true}){
  for(int source=0;source<11;source++){
   auto x=make(parallel);int sends=0;x.onRoutingChanged=[&]{sends++;};auto initial=x.getLocalOrder();start(x,source);auto c=centre(x.getTileBounds(source));x.mouseDrag({c.x,c.y+7});verifyPaint(x);x.mouseUp({c.x,c.y+7});assert(sends==0&&x.getLocalOrder()==initial);cases++;
   for(auto outside:{juce::Point<int>{-1,80},{960,80},{300,-1},{300,160}}){start(x,source);x.mouseDrag(at(outside));assert(x.dragTargetPosition==-1);x.mouseUp(at(outside));assert(sends==0&&x.getLocalOrder()==initial);cases++;}

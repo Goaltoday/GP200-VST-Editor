@@ -312,8 +312,8 @@ int AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getLoopMarkerX 
 
 int AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getLoopPositionAtX (int x) const
 {
-    const int minimumPosition = draggedLoopMarker == 0 ? 0 : localBoundary;
-    const int maximumPosition = draggedLoopMarker == 0 ? localBoundary : static_cast<int> (items.size ());
+    const int minimumPosition = draggedLoopMarker == 0 ? 0 : fxLoopSendPosition;
+    const int maximumPosition = draggedLoopMarker == 0 ? fxLoopReturnPosition : static_cast<int> (items.size ());
     auto bestPosition = minimumPosition;
     auto bestDistance = std::numeric_limits<int>::max ();
     for (int position = minimumPosition; position <= maximumPosition; ++position)
@@ -376,15 +376,6 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::paint (juce::G
         }
     }
 
-    g.setColour (juce::Colour (0xffb9bdc0));
-    g.setFont (gp200ui::regular (10.0f));
-    g.drawText ("SPR S=" + juce::String (fxLoopSendPosition) + " P=" + juce::String (localBoundary)
-                + " R=" + juce::String (fxLoopReturnPosition), 8, 0, 220, 13, juce::Justification::centredLeft);
-    const auto vol = std::find_if (items.begin (), items.end (), [] (const Item& item) { return item.blockIndex == 10; });
-    const int volPosition = static_cast<int> (std::distance (items.begin (), vol));
-    const auto volText = vol == items.end () || !vol->enabled ? "VOL: OFF"
-        : parallelMode && volPosition >= fxLoopReturnPosition ? "VOL: BLEND" : "VOL: LEVEL";
-    g.drawText (volText, 225, 0, 150, 13, juce::Justification::centredLeft);
     if (parallelMode)
     {
         const char* labels[] = {"IN COMMON", "A", "B", "OUT COMMON"};
@@ -463,7 +454,8 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::paint (juce::G
 
         g.setColour (displayColour);
         g.setFont (gp200ui::semibold (parallelMode ? 10.5f : 14.25f));
-        g.drawText (item.blockName,
+        g.drawText (parallelMode && item.blockIndex == 10 && item.enabled
+                    && i >= fxLoopReturnPosition ? "BLEND" : item.blockName,
                     tile.withTrimmedTop (tile.getHeight() - (parallelMode ? 18 : 24)).reduced (3, 1),
                     juce::Justification::centred);
 
@@ -506,12 +498,12 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::paint (juce::G
         arrow.closeSubPath ();
         g.setColour (colour);
         g.fillPath (arrow);
-        g.setFont (gp200ui::semibold (9.5f));
-        g.drawText (label, juce::Rectangle<int> (static_cast<int> (x) - 16, pointsUp ? 1 : getHeight () - 13, 32, 12),
+        g.setFont (gp200ui::semibold (11.0f));
+        g.drawText (label, juce::Rectangle<int> (static_cast<int> (x) - 25, pointsUp ? 1 : getHeight () - 14, 50, 13),
                     juce::Justification::centred);
     };
-    drawLoopMarker (sendMarkerPosition, 15, juce::Colour (0xff32a8ff), "SEND", true);
-    drawLoopMarker (returnMarkerPosition, getHeight () - 14, juce::Colour (0xffbd5cff), "RETURN", false);
+    drawLoopMarker (sendMarkerPosition, 15, juce::Colour (0xff32a8ff), parallelMode ? "SPLIT" : "SEND", true);
+    drawLoopMarker (returnMarkerPosition, getHeight () - 14, juce::Colour (0xffbd5cff), parallelMode ? "MIX" : "RETURN", false);
 
     if (draggedLoopMarker >= 0 && draggedLoopPosition >= 0)
     {
@@ -628,6 +620,7 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::mouseUp (const
         int& marker = draggedLoopMarker == 0 ? fxLoopSendPosition : fxLoopReturnPosition;
         const bool changed = marker != position;
         marker = position;
+        localBoundary = juce::jlimit (fxLoopSendPosition, fxLoopReturnPosition, localBoundary);
         cancelDrag ();
         if (changed && onRoutingChanged) onRoutingChanged ();
         return;
@@ -664,6 +657,15 @@ juce::Point<int> centre(juce::Rectangle<int>r){return {r.getCentreX(),r.getCentr
 void start(Ribbon&x,int index){x.mouseDown(at(centre(x.getTileBounds(index))));}
 void verifyPaint(Ribbon&x){auto order=x.getLocalOrder();auto s=x.getSend(),p=x.getBoundary(),r=x.getReturn();juce::Graphics g;x.paint(g);assert(!x.paintingDragPreview);assert(order==x.getLocalOrder()&&s==x.getSend()&&p==x.getBoundary()&&r==x.getReturn());for(auto m:g.marks)for(auto t:g.tiles)assert(!m.intersects(t));assert(g.ghostOpacity.size()>=1&&g.ghostOpacity.back()==0.65f);cases++;}
 int main(){
+for(bool parallel:{false,true}){
+ auto split=make(parallel);int sent=0;split.onRoutingChanged=[&]{sent++;};split.draggedLoopMarker=0;
+ const int sx=parallel?50+7*(split.getWidth()-100)/11:split.getLoopMarkerX(7);
+ split.mouseUp({sx,10});assert(split.getSend()==7&&split.getBoundary()==7&&split.getReturn()==8&&sent==1);cases++;
+ auto mix=make(parallel);mix.onRoutingChanged=[&]{sent++;};mix.draggedLoopMarker=1;
+ const int rx=parallel?50+3*(mix.getWidth()-100)/11:mix.getLoopMarkerX(3);
+ mix.mouseUp({rx,150});assert(mix.getSend()==2&&mix.getBoundary()==3&&mix.getReturn()==3&&sent==2);cases++;
+}
+
 for(bool parallel:{false,true}){
  for(int source=0;source<11;source++){
   auto x=make(parallel);int sends=0;x.onRoutingChanged=[&]{sends++;};auto initial=x.getLocalOrder();start(x,source);auto c=centre(x.getTileBounds(source));x.mouseDrag({c.x,c.y+7});verifyPaint(x);x.mouseUp({c.x,c.y+7});assert(sends==0&&x.getLocalOrder()==initial);cases++;

@@ -33,6 +33,7 @@ struct PreBankEntry
 std::map<juce::uint32, PreBankEntry> preBankOverrides;
 juce::int64 preBankLastModificationMs{-1};
 bool preBankLoadedOnce{false};
+bool livePreSnapshot{false};
 std::map<juce::uint32, PreBankEntry> wahConfigOverrides;
 juce::int64 wahConfigLastModificationMs{-1};
 bool wahConfigLoadedOnce{false};
@@ -284,6 +285,28 @@ void recordOverrideUnlocked (juce::uint32 effectId,
 
 } // namespace
 
+bool GP200ModSync::replacePreBankFromDevice (const juce::var& snapshot)
+{
+    const juce::ScopedLock lock (syncLock);
+    preBankOverrides.clear ();
+    if (const auto* rows = snapshot.getProperty ("slots", {}).getArray ())
+        for (const auto& row : *rows)
+        {
+            PreBankEntry entry;
+            entry.sourceEffectId = parseEffectId (row.getProperty ("source_effect_id", {}));
+            entry.displayName = row.getProperty ("display_name", {}).toString ();
+            entry.sourceModule = row.getProperty ("source_module", {}).toString ();
+            entry.description = row.getProperty ("relocation_profile", {}).toString ();
+            preBankOverrides[parseEffectId (row.getProperty ("pre_effect_id", {}))] = std::move (entry);
+        }
+    livePreSnapshot = true; preBankLoadedOnce = true; ++revision;
+    const auto file = getPreBankFile ();
+    const bool saved = file.getParentDirectory ().createDirectory ().wasOk ()
+        && file.replaceWithText (juce::JSON::toString (snapshot));
+    preBankLastModificationMs = saved ? file.getLastModificationTime ().toMilliseconds () : -1;
+    return saved;
+}
+
 bool GP200ModSync::replaceFromDevice (const juce::var& snapshot, int userIRSamples)
 {
     const juce::ScopedLock lock (syncLock);
@@ -319,7 +342,7 @@ juce::File GP200ModSync::getWahConfigFile ()
 void GP200ModSync::reloadIfChanged ()
 {
     const juce::ScopedLock lock (syncLock);
-    reloadPreBankUnlocked ();
+    if (!livePreSnapshot) reloadPreBankUnlocked ();
     reloadWahConfigUnlocked ();
     // A failed disk write must not discard the complete live snapshot on the next getter.
     if (unsavedDeviceSnapshot) return;

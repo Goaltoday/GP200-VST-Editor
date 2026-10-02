@@ -42,6 +42,7 @@ class EffectBlockComponent final : public juce::Component
     int getSlotIndex () const;
     int getBlockIndex () const;
 
+    void setBlendForDisplay (bool blend);
     void setEnabledForDisplay (bool shouldBeEnabled);
     void setParameterValueForDisplay (int paramIndex, float value);
     void setMoveButtonsEnabled (bool canMoveUp, bool canMoveDown);
@@ -99,6 +100,7 @@ class EffectBlockComponent final : public juce::Component
     std::vector<juce::uint32> effectChoiceIds;
     bool updatingEffectSelector{false};
 
+    bool blendForDisplay{false};
     bool expanded{false};
     std::vector<ParameterControl> parameterControls;
     bool delaySyncControlRebuildPending{false};

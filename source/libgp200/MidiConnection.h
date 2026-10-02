@@ -158,7 +158,8 @@ class MidiConnection final : private juce::MidiInputCallback, private juce::Time
     void finishModSyncFailure (const juce::String& reason);
     void applyModSyncSnapshot ();
     juce::String modSyncStatus{"MOD_SYNC: waiting for startup"};
-    bool modSyncAttempted{false}; // Lifetime of this instance; NOT reset on disconnect/editor reopen.
+    int modSyncTargetPages{19};
+    bool modSyncAttempted{false}; // Repeated on MIDI reconnect; editor reopen alone does not restart it.
     bool modSyncActive{false};
     bool modSyncWaiting{false};
     int modSyncPage{0}, modSyncRetries{0};

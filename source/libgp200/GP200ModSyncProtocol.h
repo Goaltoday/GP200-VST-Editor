@@ -5,8 +5,9 @@
 #include <vector>
 #include <cstddef>
 namespace gp200 { namespace modsync {
-constexpr int pageCount = 19;
+constexpr int pageCount = 23;
 constexpr int responseBytes = 168;
+constexpr std::array<std::uint32_t,15> preIds {{10u,11u,12u,14u,25u,26u,50331649u,50331650u,50331654u,50331657u,50331668u,16777289u,67108909u,67108911u,67108912u}};
 constexpr std::array<std::uint32_t,71> ampIds {{0x07000001u,0x07000003u,0x07000004u,0x07000005u,0x07000009u,0x0700000du,0x0700000fu,0x07000010u,0x07000011u,0x07000014u,0x07000015u,0x07000019u,0x0700001au,0x0700001bu,0x0700001fu,0x07000022u,0x07000023u,0x07000024u,0x07000027u,0x07000028u,0x0700002au,0x0700002bu,0x0700002cu,0x0700002du,0x0700002eu,0x0700002fu,0x07000030u,0x07000035u,0x07000039u,0x0700003au,0x0700003bu,0x0700003du,0x0700003eu,0x07000040u,0x07000041u,0x07000043u,0x07000044u,0x07000047u,0x07000048u,0x07000049u,0x0700004au,0x0700004bu,0x0700004eu,0x07000053u,0x07000055u,0x07000056u,0x07000057u,0x07000059u,0x0700005au,0x0700005du,0x0700005eu,0x0700005fu,0x07000060u,0x07000063u,0x07000065u,0x07000066u,0x07000068u,0x07000069u,0x0700006au,0x0700006bu,0x0700006du,0x0700006eu,0x07000073u,0x07000075u,0x07000077u,0x0700007bu,0x0700007cu,0x08000075u,0x08000076u,0x0800007au,0x0800007bu}};
 inline unsigned read16(const std::uint8_t* p) { return unsigned(p[0]) | (unsigned(p[1])<<8); }
 inline std::uint32_t read32(const std::uint8_t* p) { return read16(p) | (std::uint32_t(read16(p+2))<<16); }
@@ -34,9 +35,29 @@ inline Decode decode(const std::uint8_t* data,int size,int expectedPage,std::uin
  unsigned checksum=0;
  for(int i=0;i<responseBytes;++i) {if(data[13+i*2]>15||data[14+i*2]>15)return Decode::invalid;out.bytes[i]=std::uint8_t((data[13+i*2]<<4)|data[14+i*2]);checksum+=out.bytes[i];}
  auto p=out.bytes.data();
- if((checksum&255)!=0 || read16(p)!=0x1009 || read16(p+2)!=164 || read16(p+6)!=unsigned(expectedPage) || read32(p+12)!=nonce || p[16]!=1 || p[17]!=0 || (p[19]&~7)!=0 || p[20]!=70 || p[21]!=71 || p[22]!=1) return Decode::invalid;
- int count=expectedPage==0?0:expectedPage==9?6:expectedPage==18?7:8;
+ if((checksum&255)!=0 || read16(p)!=0x1009 || read16(p+2)!=164 || read16(p+6)!=unsigned(expectedPage) || read32(p+12)!=nonce || p[16]!=1 || p[17]!=0 || (p[19]&~15)!=0 || p[20]!=70 || p[21]!=71 || p[22]!=1) return Decode::invalid;
+ if(expectedPage<0||expectedPage>=pageCount)return Decode::invalid;
+ int count=expectedPage>=19?(expectedPage==22?3:4):expectedPage==0?0:expectedPage==9?6:expectedPage==18?7:8;
  if(p[18]!=count)return Decode::invalid;
+ if(expectedPage>=19) {
+  if(!(p[19]&8))return Decode::invalid;
+  for(int i=0;i<4;++i) {
+   const auto rec=p+24+i*32;
+   if(i>=count){for(int k=0;k<32;++k)if(rec[k]!=0)return Decode::invalid;continue;}
+   const auto id=read32(rec),source=read32(rec+4);
+   if(id!=preIds[static_cast<std::size_t>((expectedPage-19)*4+i)]||rec[11]!=0||rec[9]>1)return Decode::invalid;
+   if(rec[9]==0){if(source!=0||rec[8]!=0||rec[10]!=0)return Decode::invalid;}
+   else {
+    if(rec[8]<1||rec[8]>4||rec[10]<1||rec[10]>16)return Decode::invalid;
+    const unsigned family=source>>24;
+    if((rec[8]==1&&family!=4)||(rec[8]==2&&family!=11)||(rec[8]==3&&family!=12)||(rec[8]==4&&family!=1))return Decode::invalid;
+   }
+   if(rec[12]==0)return Decode::invalid;
+   for(int k=12;k<32;++k)if(rec[k]!=0&&(rec[k]<32||rec[k]>126))return Decode::invalid;
+  }
+  for(int k=152;k<168;++k)if(p[k]!=0)return Decode::invalid;
+  return Decode::valid;
+ }
  for(int i=0;i<8;++i) {
   const auto rec=p+24+i*18;
   if(i>=count) {for(int k=0;k<18;++k)if(rec[k]!=0)return Decode::invalid;continue;}

@@ -1538,8 +1538,8 @@ int AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getLoopMarkerX 
 
 int AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getLoopPositionAtX (int x) const
 {
-    const int minimumPosition = draggedLoopMarker == 0 ? 0 : localBoundary;
-    const int maximumPosition = draggedLoopMarker == 0 ? localBoundary : static_cast<int> (items.size ());
+    const int minimumPosition = draggedLoopMarker == 0 ? 0 : fxLoopSendPosition;
+    const int maximumPosition = draggedLoopMarker == 0 ? fxLoopReturnPosition : static_cast<int> (items.size ());
     auto bestPosition = minimumPosition;
     auto bestDistance = std::numeric_limits<int>::max ();
     for (int position = minimumPosition; position <= maximumPosition; ++position)
@@ -1602,15 +1602,6 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::paint (juce::G
         }
     }
 
-    g.setColour (juce::Colour (0xffb9bdc0));
-    g.setFont (gp200ui::regular (10.0f));
-    g.drawText ("SPR S=" + juce::String (fxLoopSendPosition) + " P=" + juce::String (localBoundary)
-                + " R=" + juce::String (fxLoopReturnPosition), 8, 0, 220, 13, juce::Justification::centredLeft);
-    const auto vol = std::find_if (items.begin (), items.end (), [] (const Item& item) { return item.blockIndex == 10; });
-    const int volPosition = static_cast<int> (std::distance (items.begin (), vol));
-    const auto volText = vol == items.end () || !vol->enabled ? "VOL: OFF"
-        : parallelMode && volPosition >= fxLoopReturnPosition ? "VOL: BLEND" : "VOL: LEVEL";
-    g.drawText (volText, 225, 0, 150, 13, juce::Justification::centredLeft);
     if (parallelMode)
     {
         const char* labels[] = {"IN COMMON", "A", "B", "OUT COMMON"};
@@ -1689,7 +1680,8 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::paint (juce::G
 
         g.setColour (displayColour);
         g.setFont (gp200ui::semibold (parallelMode ? 10.5f : 14.25f));
-        g.drawText (item.blockName,
+        g.drawText (parallelMode && item.blockIndex == 10 && item.enabled
+                    && i >= fxLoopReturnPosition ? "BLEND" : item.blockName,
                     tile.withTrimmedTop (tile.getHeight() - (parallelMode ? 18 : 24)).reduced (3, 1),
                     juce::Justification::centred);
 
@@ -1732,12 +1724,12 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::paint (juce::G
         arrow.closeSubPath ();
         g.setColour (colour);
         g.fillPath (arrow);
-        g.setFont (gp200ui::semibold (9.5f));
-        g.drawText (label, juce::Rectangle<int> (static_cast<int> (x) - 16, pointsUp ? 1 : getHeight () - 13, 32, 12),
+        g.setFont (gp200ui::semibold (11.0f));
+        g.drawText (label, juce::Rectangle<int> (static_cast<int> (x) - 25, pointsUp ? 1 : getHeight () - 14, 50, 13),
                     juce::Justification::centred);
     };
-    drawLoopMarker (sendMarkerPosition, 15, juce::Colour (0xff32a8ff), "SEND", true);
-    drawLoopMarker (returnMarkerPosition, getHeight () - 14, juce::Colour (0xffbd5cff), "RETURN", false);
+    drawLoopMarker (sendMarkerPosition, 15, juce::Colour (0xff32a8ff), parallelMode ? "SPLIT" : "SEND", true);
+    drawLoopMarker (returnMarkerPosition, getHeight () - 14, juce::Colour (0xffbd5cff), parallelMode ? "MIX" : "RETURN", false);
 
     if (draggedLoopMarker >= 0 && draggedLoopPosition >= 0)
     {
@@ -1854,6 +1846,7 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::mouseUp (const
         int& marker = draggedLoopMarker == 0 ? fxLoopSendPosition : fxLoopReturnPosition;
         const bool changed = marker != position;
         marker = position;
+        localBoundary = juce::jlimit (fxLoopSendPosition, fxLoopReturnPosition, localBoundary);
         cancelDrag ();
         if (changed && onRoutingChanged) onRoutingChanged ();
         return;
@@ -4444,7 +4437,7 @@ void AudioPluginAudioProcessorEditor::syncFlexibleRoutingFromDevice ()
 
 void AudioPluginAudioProcessorEditor::updateSeriesParallelButtonText ()
 {
-    seriesParallelButton.setButtonText (parallelRoutingSelected ? "SPR: PARALLEL" : "SPR: SERIES");
+    seriesParallelButton.setButtonText (parallelRoutingSelected ? "PARALLEL" : "SERIES");
     seriesParallelButton.setColour (juce::TextButton::buttonColourId,
                                     parallelRoutingSelected ? statusOnColour : panelColour);
     seriesParallelButton.setColour (juce::TextButton::buttonOnColourId,
@@ -4796,7 +4789,8 @@ void AudioPluginAudioProcessorEditor::updateEffectBlocksUI ()
     const auto dataSignature =
         sourceText + ":" + revisionText + ":"
         + juce::String (
-            static_cast<juce::int64> (assignmentRevision));
+            static_cast<juce::int64> (assignmentRevision))
+        + (parallelRoutingSelected ? ":parallel" : ":series");
 
     // A connected GP-200 may publish several intermediate revisions while a
     // preset/effect model is being changed. If no newer revision has arrived
@@ -4899,6 +4893,9 @@ void AudioPluginAudioProcessorEditor::updateEffectBlocksUI ()
                     continue;
 
                 block->setEnabledForDisplay (effect.enabled);
+                const auto volIt = std::find (preset.routingOrder.begin (), preset.routingOrder.end (), blockIndex);
+                block->setBlendForDisplay (parallelRoutingSelected && effect.enabled && blockIndex == 10
+                    && volIt != preset.routingOrder.end () && std::distance (preset.routingOrder.begin (), volIt) >= preset.fxLoopReturn);
 
                 for (int paramIndex = 0;
                      paramIndex < static_cast<int> (effect.params.size ());
@@ -5168,6 +5165,9 @@ void AudioPluginAudioProcessorEditor::rebuildEffectBlocks (const gp200::GP200Pre
         };
 
         effectsContent.addAndMakeVisible (*block);
+        const auto volIt = std::find (preset.routingOrder.begin (), preset.routingOrder.end (), blockIndex);
+        block->setBlendForDisplay (parallelRoutingSelected && effect.enabled && blockIndex == 10
+            && volIt != preset.routingOrder.end () && std::distance (preset.routingOrder.begin (), volIt) >= preset.fxLoopReturn);
         effectBlocks.push_back (std::move (block));
     }
 

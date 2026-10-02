@@ -322,7 +322,7 @@ void EffectBlockComponent::paint (juce::Graphics& g)
     g.drawRoundedRectangle (tagBounds.toFloat (), 4.0f, 1.2f);
 
     g.setFont (gp200ui::medium (14.75f));
-    g.drawText (getBlockName (), tagBounds, juce::Justification::centred);
+    g.drawText (blendForDisplay ? "BLEND" : getBlockName (), tagBounds, juce::Justification::centred);
 
     g.setColour (mutedTextColour);
     g.setFont (gp200ui::medium (14.75f));
@@ -642,6 +642,16 @@ void EffectBlockComponent::scheduleDelaySyncControlRebuild ()
     });
 }
 
+void EffectBlockComponent::setBlendForDisplay (bool blend)
+{
+    if (blendForDisplay == blend) return;
+    blendForDisplay = blend;
+    rebuildEffectChoices ();
+    rebuildParameterControls ();
+    updateParameterControlsVisibility ();
+    resized (); repaint ();
+}
+
 void EffectBlockComponent::rebuildParameterControls ()
 {
     parameterControls.clear ();
@@ -753,6 +763,29 @@ void EffectBlockComponent::rebuildParameterControls ()
                         effect.params[static_cast<std::size_t> (param.idx)]),
                     juce::dontSendNotification);
             }
+        }
+
+        if (blendForDisplay && getBlockIndex () == 10 && param.idx == 0)
+        {
+            control.label->setText ("A — B", juce::dontSendNotification);
+            control.slider->setTextBoxStyle (juce::Slider::TextBoxRight, false, 118, 20);
+            const double lo = control.slider->getMinimum (), hi = control.slider->getMaximum ();
+            control.slider->textFromValueFunction = [lo, hi] (double value)
+            {
+                const int b = juce::jlimit (0, 100, juce::roundToInt (100.0 * (value-lo) / juce::jmax (0.000001, hi-lo)));
+                if (b == 0) return juce::String ("A");
+                if (b == 100) return juce::String ("B");
+                return "A " + juce::String (100-b) + " / B " + juce::String (b);
+            };
+            control.slider->valueFromTextFunction = [lo, hi] (const juce::String& text)
+            {
+                if (text.trim ().equalsIgnoreCase ("A")) return lo;
+                if (text.trim ().equalsIgnoreCase ("B")) return hi;
+                const int pos = text.indexOf ("B ");
+                const double b = pos >= 0 ? text.substring (pos+2).getDoubleValue () : text.getDoubleValue ();
+                return lo + (hi-lo) * juce::jlimit (0.0, 100.0, b) / 100.0;
+            };
+            control.slider->updateText ();
         }
 
         auto* slider = control.slider.get ();
@@ -982,6 +1015,7 @@ juce::String EffectBlockComponent::getBlockName () const
 
 juce::String EffectBlockComponent::getEffectName () const
 {
+    if (blendForDisplay) return "Blend A / B";
     const auto moduleAwareName = gp200::GP200EffectDatabase::getEffectName (effect.effectId, getBlockName ());
     if (getBlockName ().equalsIgnoreCase ("PRE")
         && moduleAwareName != gp200::GP200EffectDatabase::getEffectName (effect.effectId))

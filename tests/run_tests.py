@@ -8,3 +8,8 @@ with tempfile.TemporaryDirectory() as work:
   binary=Path(work)/name
   subprocess.run(['g++','-std=c++20','-Wall','-Wextra','-Werror','-pthread',str(r/(name+'.cpp')),'-o',str(binary)],check=True)
   subprocess.run([str(binary)],check=True)
+
+with tempfile.TemporaryDirectory() as work:
+ binary=Path(work)/'pre_protocol_test'
+ subprocess.run(['g++','-std=c++20','-Wall','-Wextra','-Werror',str(r/'pre_protocol_test.cpp'),'-o',str(binary)],check=True)
+ subprocess.run([str(binary),str(r/'pre_fixtures')],check=True)
