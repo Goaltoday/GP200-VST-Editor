@@ -242,6 +242,8 @@ CompareSnapshot selectedCompareSnapshot{
         void mouseDown (const juce::MouseEvent& event) override;
         void mouseDrag (const juce::MouseEvent& event) override;
         void mouseUp (const juce::MouseEvent& event) override;
+        bool keyPressed (const juce::KeyPress& key) override;
+        void focusLost (FocusChangeType cause) override;
 
         gp200::RoutingOrder getLocalOrder () const;
         void keepRoutingDraft () { routingDraftEdited = true; }
@@ -266,6 +268,13 @@ CompareSnapshot selectedCompareSnapshot{
         int getDropGroup (juce::Point<int> position) const;
         juce::Rectangle<int> getGroupArea (int group) const;
         void moveLocalItem (int source, int group, int position);
+        void cancelDrag ();
+        void updateBlockDragTarget (juce::Point<int> position);
+        bool dragChangesRouting () const;
+        juce::Point<int> dragCursorPosition;
+        juce::Point<int> dragGrabOffset;
+        bool paintingDragPreview{false};
+        std::array<juce::Rectangle<int>, 4> previewGroupAreas;
         int localBoundary{5};
         bool localInitialised{false};
         bool routingDraftEdited{false};

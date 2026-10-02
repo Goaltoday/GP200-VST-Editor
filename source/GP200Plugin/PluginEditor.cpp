@@ -1345,10 +1345,17 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::setItems (std:
 {
     if (!localInitialised || !routingDraftEdited)
     {
+        bool sameOrder = items.size () == newItems.size ();
+        for (std::size_t i = 0; sameOrder && i < items.size (); ++i)
+            sameOrder = items[i].blockIndex == newItems[i].blockIndex;
+        if (!sameOrder) cancelDrag ();
         items = std::move (newItems);
-        fxLoopSendPosition = juce::jmin (2, static_cast<int> (items.size ()));
-        localBoundary = juce::jmin (5, static_cast<int> (items.size ()));
-        fxLoopReturnPosition = juce::jmin (8, static_cast<int> (items.size ()));
+        if (!localInitialised)
+        {
+            fxLoopSendPosition = juce::jmin (2, static_cast<int> (items.size ()));
+            localBoundary = juce::jmin (5, static_cast<int> (items.size ()));
+            fxLoopReturnPosition = juce::jmin (8, static_cast<int> (items.size ()));
+        }
         localInitialised = true;
     }
     else
@@ -1371,6 +1378,7 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::setLoopPositio
     if (routingDraftEdited) return;
     const int count = static_cast<int> (items.size ());
     if (sendPosition < 0 || returnPosition < sendPosition || returnPosition > count) return;
+    if (fxLoopSendPosition != sendPosition || fxLoopReturnPosition != returnPosition) cancelDrag ();
     fxLoopSendPosition = sendPosition;
     fxLoopReturnPosition = returnPosition;
     localBoundary = juce::jlimit (sendPosition, returnPosition, localBoundary);
@@ -1381,6 +1389,7 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::setLoopPositio
 void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::setDeviceRouting (int send, int boundary, int ret, bool parallel)
 {
     if (send < 0 || send > boundary || boundary > ret || ret > static_cast<int> (items.size ())) return;
+    if (fxLoopSendPosition != send || localBoundary != boundary || fxLoopReturnPosition != ret || parallelMode != parallel) cancelDrag ();
     fxLoopSendPosition = send; localBoundary = boundary; fxLoopReturnPosition = ret;
     parallelMode = parallel;
     repaint ();
@@ -1389,6 +1398,7 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::setDeviceRouti
 void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::setParallelMode (bool shouldBeParallel)
 {
     if (parallelMode == shouldBeParallel) return;
+    cancelDrag ();
     parallelMode = shouldBeParallel;
     repaint ();
 }
@@ -1456,6 +1466,7 @@ int AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getParallelGrou
 
 juce::Rectangle<int> AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getGroupArea (int group) const
 {
+    if (paintingDragPreview) return previewGroupAreas[static_cast<std::size_t> (group)];
     const int available = juce::jmax (1, getWidth () - 100);
     const int middleCount = juce::jmax (1, juce::jmax (localBoundary - fxLoopSendPosition,
                                                      fxLoopReturnPosition - localBoundary));
@@ -1562,6 +1573,35 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::paint (juce::G
     g.drawRoundedRectangle (bounds, 7.0f, 1.0f);
     if (items.empty ()) return;
 
+    const bool blockDrag = dragging && juce::isPositiveAndBelow (pressedItemIndex, static_cast<int> (items.size ()));
+    const bool preview = blockDrag && dragTargetPosition >= 0 && dragChangesRouting ();
+    const auto originalTile = blockDrag ? getTileBounds (pressedItemIndex) : juce::Rectangle<int> {};
+    const Item draggedItem = blockDrag ? items[static_cast<std::size_t> (pressedItemIndex)] : Item {};
+    struct LayoutRestore
+    {
+        EffectChainRibbonComponent& ribbon;
+        std::vector<Item> originalItems;
+        int send, boundary, ret;
+        ~LayoutRestore ()
+        {
+            ribbon.items = std::move (originalItems);
+            ribbon.fxLoopSendPosition = send; ribbon.localBoundary = boundary; ribbon.fxLoopReturnPosition = ret;
+            ribbon.paintingDragPreview = false;
+        }
+    } restore {*this, items, fxLoopSendPosition, localBoundary, fxLoopReturnPosition};
+    if (preview)
+    {
+        // Keep branch boundaries stable while previewing; redistribute tiles within each branch.
+        for (int group = 0; group < 4; ++group) previewGroupAreas[static_cast<std::size_t> (group)] = getGroupArea (group);
+        paintingDragPreview = parallelMode;
+        if (parallelMode) moveLocalItem (pressedItemIndex, dragTargetGroup, dragTargetPosition);
+        else
+        {
+            items.erase (items.begin () + pressedItemIndex);
+            items.insert (items.begin () + dragTargetPosition, draggedItem);
+        }
+    }
+
     g.setColour (juce::Colour (0xffb9bdc0));
     g.setFont (gp200ui::regular (10.0f));
     g.drawText ("SPR S=" + juce::String (fxLoopSendPosition) + " P=" + juce::String (localBoundary)
@@ -1612,6 +1652,20 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::paint (juce::G
     {
         const auto& item = items[static_cast<std::size_t> (i)];
         const auto tile = getTileBounds (i);
+        // The moved tile reserves a real slot; paint its gap instead of a destination block.
+        if (blockDrag && item.blockIndex == draggedItem.blockIndex)
+        {
+            if (preview)
+            {
+                const float x = static_cast<float> (tile.getCentreX ());
+                g.setColour (juce::Colour (0xffffa42a));
+                g.fillRoundedRectangle (x - 1.5f, static_cast<float> (tile.getY ()), 3.0f,
+                                        static_cast<float> (tile.getHeight ()), 1.5f);
+                g.drawLine (x - 5, static_cast<float> (tile.getY ()), x + 5, static_cast<float> (tile.getY ()), 2.0f);
+                g.drawLine (x - 5, static_cast<float> (tile.getBottom ()), x + 5, static_cast<float> (tile.getBottom ()), 2.0f);
+            }
+            continue;
+        }
         const auto selected = item.blockIndex == selectedBlockIndex;
         const auto displayColour = item.enabled ? item.colour : juce::Colour (0xff74787b);
         g.setColour (juce::Colour (0xff202427));
@@ -1692,99 +1746,139 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::paint (juce::G
         g.drawLine (static_cast<float> (x), 19.0f, static_cast<float> (x), static_cast<float> (getHeight () - 19), 1.0f);
     }
 
-    if (dragging && dragTargetPosition >= 0)
+    if (blockDrag)
     {
-        const auto count = static_cast<int> (items.size ());
-        int destinationCount = 0;
-        for (int i = 0; i < count; ++i)
-            if (i != pressedItemIndex && getParallelGroupForItem (items[static_cast<std::size_t> (i)]) == dragTargetGroup)
-                ++destinationCount;
-        const auto targetArea = parallelMode ? getGroupArea (dragTargetGroup) : first;
-        const auto lineX = parallelMode ? targetArea.getX () + dragTargetPosition * targetArea.getWidth () / juce::jmax (1, destinationCount + 1) : dragTargetPosition >= count ? getTileBounds (count - 1).getRight () + 5
-                                                       : getTileBounds (dragTargetPosition).getX () - 5;
-        g.setColour (juce::Colour (0xffffa42a));
-        g.fillRoundedRectangle (static_cast<float> (lineX - 2), static_cast<float> (targetArea.getY () - 4),
-                                4.0f, static_cast<float> (targetArea.getHeight () + 8), 2.0f);
+        auto drawDraggedTile = [&] (juce::Rectangle<int> tile, float opacity)
+        {
+            g.saveState ();
+            g.setOpacity (opacity);
+            const auto colour = draggedItem.enabled ? draggedItem.colour : juce::Colour (0xff74787b);
+            g.setColour (juce::Colour (0xff202427));
+            g.fillRoundedRectangle (tile.toFloat (), 6.0f);
+            g.setColour (colour);
+            g.drawRoundedRectangle (tile.toFloat ().reduced (0.5f), 6.0f, 1.4f);
+            const auto iconArea = tile.toFloat ().reduced (7.0f, 4.0f).withTrimmedBottom (18.0f);
+            drawRibbonBlockIcon (g, draggedItem.blockName, iconArea, colour);
+            g.setFont (gp200ui::semibold (parallelMode ? 10.5f : 14.25f));
+            g.drawText (draggedItem.blockName, tile.withTrimmedTop (tile.getHeight () - 18).reduced (3, 1),
+                        juce::Justification::centred);
+            g.restoreState ();
+        };
+        // Only retain the attenuated original when it cannot obscure another preview tile.
+        bool originalClear = true;
+        for (int i = 0; i < static_cast<int> (items.size ()); ++i)
+            if ((preview || items[static_cast<std::size_t> (i)].blockIndex != draggedItem.blockIndex)
+                && getTileBounds (i).intersects (originalTile)) originalClear = false;
+        if (originalClear) drawDraggedTile (originalTile, 0.22f);
+        drawDraggedTile (originalTile.withPosition (dragCursorPosition - dragGrabOffset), 0.65f);
     }
+}
+
+void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::cancelDrag ()
+{
+    pressedItemIndex = -1; dragTargetPosition = -1; dragging = false;
+    draggedLoopMarker = -1; draggedLoopPosition = -1;
+    repaint ();
+}
+
+bool AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::keyPressed (const juce::KeyPress& key)
+{
+    if (key.getKeyCode () != juce::KeyPress::escapeKey) return false;
+    if (pressedItemIndex < 0 && draggedLoopMarker < 0) return false;
+    cancelDrag (); return true;
+}
+
+void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::focusLost (FocusChangeType)
+{
+    cancelDrag ();
+}
+
+bool AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::dragChangesRouting () const
+{
+    if (pressedItemIndex < 0 || dragTargetPosition < 0) return false;
+    if (!parallelMode) return dragTargetPosition != pressedItemIndex;
+    const int sourceGroup = getParallelGroupForItem (items[static_cast<std::size_t> (pressedItemIndex)]);
+    if (sourceGroup != dragTargetGroup) return true;
+    int sourceRank = 0;
+    for (int i = 0; i < pressedItemIndex; ++i)
+        if (getParallelGroupForItem (items[static_cast<std::size_t> (i)]) == sourceGroup) ++sourceRank;
+    return sourceRank != dragTargetPosition;
+}
+
+void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::updateBlockDragTarget (juce::Point<int> position)
+{
+    dragCursorPosition = position;
+    dragTargetPosition = -1;
+    if (!getLocalBounds ().contains (position)) return;
+    dragTargetGroup = parallelMode ? getDropGroup (position) : 0;
+    dragTargetPosition = 0;
+    for (int i = 0; i < static_cast<int> (items.size ()); ++i)
+        if (i != pressedItemIndex && (!parallelMode || getParallelGroupForItem (items[static_cast<std::size_t> (i)]) == dragTargetGroup)
+            && position.x >= getTileBounds (i).getCentreX ()) ++dragTargetPosition;
 }
 
 void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::mouseDown (const juce::MouseEvent& event)
 {
+    cancelDrag ();
+    setWantsKeyboardFocus (true);
+    grabKeyboardFocus ();
+    mouseDownPosition = dragCursorPosition = event.getPosition ();
     draggedLoopMarker = getLoopMarkerAt (event.getPosition ());
     if (draggedLoopMarker >= 0)
     {
         draggedLoopPosition = draggedLoopMarker == 0 ? fxLoopSendPosition : fxLoopReturnPosition;
-        pressedItemIndex = -1;
-        dragging = false;
         return;
     }
     pressedItemIndex = getItemIndexAt (event.getPosition ());
-    mouseDownPosition = event.getPosition ();
-    dragTargetPosition = -1;
-    dragging = false;
+    if (pressedItemIndex >= 0) dragGrabOffset = event.getPosition () - getTileBounds (pressedItemIndex).getPosition ();
 }
 
 void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::mouseDrag (const juce::MouseEvent& event)
 {
     if (draggedLoopMarker >= 0)
     {
-        draggedLoopPosition = getLoopPositionAtX (event.x);
-        repaint ();
-        return;
+        draggedLoopPosition = getLocalBounds ().contains (event.getPosition ()) ? getLoopPositionAtX (event.x) : -1;
+        repaint (); return;
     }
     if (pressedItemIndex < 0) return;
-    if (!dragging && event.getPosition ().getDistanceFrom (mouseDownPosition) >= 6.0f)
-        dragging = true;
-    if (dragging)
-    {
-        dragTargetGroup = getDropGroup (event.getPosition ());
-        dragTargetPosition = 0;
-        if (parallelMode)
-        {
-            for (int i = 0; i < static_cast<int> (items.size ()); ++i)
-                if (i != pressedItemIndex && getParallelGroupForItem (items[static_cast<std::size_t> (i)]) == dragTargetGroup
-                    && event.x >= getTileBounds (i).getCentreX ()) ++dragTargetPosition;
-        }
-        else dragTargetPosition = getTargetPositionAtX (event.x);
-        repaint ();
-    }
+    if (!dragging && event.getPosition ().getDistanceFrom (mouseDownPosition) >= 6.0f) dragging = true;
+    if (dragging) { updateBlockDragTarget (event.getPosition ()); repaint (); }
 }
 
-void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::mouseUp (const juce::MouseEvent&)
+void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::mouseUp (const juce::MouseEvent& event)
 {
+    if (!getLocalBounds ().contains (event.getPosition ())) { cancelDrag (); return; }
     if (draggedLoopMarker >= 0)
     {
-        if (draggedLoopMarker == 0) fxLoopSendPosition = draggedLoopPosition;
-        else fxLoopReturnPosition = draggedLoopPosition;
-        if (onRoutingChanged) onRoutingChanged ();
-        draggedLoopMarker = -1;
-        draggedLoopPosition = -1;
-        repaint ();
+        const int position = getLoopPositionAtX (event.x);
+        int& marker = draggedLoopMarker == 0 ? fxLoopSendPosition : fxLoopReturnPosition;
+        const bool changed = marker != position;
+        marker = position;
+        cancelDrag ();
+        if (changed && onRoutingChanged) onRoutingChanged ();
         return;
     }
-    if (pressedItemIndex < 0 || pressedItemIndex >= static_cast<int> (items.size ()))
-    {
-        dragging = false; dragTargetPosition = -1; return;
-    }
+    if (!juce::isPositiveAndBelow (pressedItemIndex, static_cast<int> (items.size ()))) { cancelDrag (); return; }
     const auto blockIndex = items[static_cast<std::size_t> (pressedItemIndex)].blockIndex;
-    if (dragging && dragTargetPosition >= 0)
+    bool changed = false;
+    if (dragging)
     {
-        if (parallelMode) moveLocalItem (pressedItemIndex, dragTargetGroup, dragTargetPosition);
-        else
+        updateBlockDragTarget (event.getPosition ());
+        changed = dragChangesRouting ();
+        if (changed)
         {
-            auto moved = items[static_cast<std::size_t> (pressedItemIndex)];
-            items.erase (items.begin () + pressedItemIndex);
-            const int target = dragTargetPosition - (dragTargetPosition > pressedItemIndex ? 1 : 0);
-            items.insert (items.begin () + juce::jlimit (0, static_cast<int> (items.size ()), target), moved);
+            if (parallelMode) moveLocalItem (pressedItemIndex, dragTargetGroup, dragTargetPosition);
+            else
+            {
+                const auto moved = items[static_cast<std::size_t> (pressedItemIndex)];
+                items.erase (items.begin () + pressedItemIndex);
+                items.insert (items.begin () + dragTargetPosition, moved);
+            }
         }
     }
-    else if (onBlockSelected)
-        onBlockSelected (blockIndex);
-    if (dragging && onRoutingChanged) onRoutingChanged ();
-    dragging = false;
-    dragTargetPosition = -1;
-    pressedItemIndex = -1;
-    repaint ();
+    else if (onBlockSelected) onBlockSelected (blockIndex);
+    cancelDrag ();
+    if (changed && onRoutingChanged) onRoutingChanged ();
 }
 
 //==============================================================================
