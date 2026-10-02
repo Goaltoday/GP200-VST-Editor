@@ -82,7 +82,10 @@ TunerResult getTunerResult() const noexcept;
     void setGP200PresetSnapshotState (int snapshotIndex,
                                   int slot,
                                   const juce::String& presetName,
-                                  const juce::MemoryBlock& presetData);
+                                  const juce::MemoryBlock& presetData,
+                                  int routingMode = -1);
+    struct GP200PresetRecallSnapshot { juce::MemoryBlock data; juce::String name; int routingMode{-1}; };
+    GP200PresetRecallSnapshot getGP200PresetRecallSnapshot (int snapshotIndex) const;
 
     int getSavedGP200Slot () const;
     juce::String getSavedGP200PresetName () const;
@@ -164,6 +167,7 @@ bool saveToneMatchIRToFile (
         juce::String name{"unknown"};
         juce::String displayName;
         juce::MemoryBlock data;
+        int routingMode{-1}; // Independent native mode reply; extended byte includes P.
         std::uint64_t revision{0};
     };
 	

@@ -1,0 +1,364 @@
+--- a/source/GP200Plugin/PluginEditor.cpp
++++ b/source/GP200Plugin/PluginEditor.cpp
+@@ -2887,7 +2887,8 @@
+         snapshotIndex,
+         currentSlot,
+         preset.patchName,
+-        presetData);
++        presetData,
++        deviceState.mode.mode);
+ 
+     effectsStatusText = "Saved full preset snapshot " +
+                         getSelectedCompareSnapshotLabel () +
+@@ -3488,6 +3489,11 @@
+         return;
+     }
+ 
++    // PRST import has no snapshot routing metadata; do not reuse a preceding Recall value.
++    presetRestoreRoutingMode = -1;
++    presetRestoreRoutingMetadataFromDaw = false;
++    presetRestoreRoutingNotBeforeMs = 0;
++
+     // Mismos campos utilizados por Recall.
+     presetRestoreSnapshotData =
+         importSnapshotData;
+@@ -3562,9 +3568,8 @@
+         return;
+     }
+ 
+-    const auto presetData =
+-    processorRef.getSavedGP200PresetDataCopy (
+-        snapshotIndex);
++    const auto savedSnapshot = processorRef.getGP200PresetRecallSnapshot (snapshotIndex);
++    const auto presetData = savedSnapshot.data;
+ 
+     if (presetData.getSize () == 0)
+     {
+@@ -3637,9 +3642,7 @@
+         return;
+     }
+ 
+-    auto savedName =
+-    processorRef.getSavedGP200PresetSnapshotName (
+-        snapshotIndex);
++    auto savedName = savedSnapshot.name;
+ 
+     if (!isUsefulPresetName (savedName))
+         savedName = preset.patchName;
+@@ -3651,7 +3654,27 @@
+     presetRestoreSlot = targetSlot;
+     presetRestoreName = savedName;
+ 
++    presetRestoreRoutingMetadataFromDaw = true;
++    presetRestoreRoutingMode = savedSnapshot.routingMode;
++    presetRestoreRoutingNotBeforeMs = 0;
++    if (gp200::validRoutingModeValue (presetRestoreRoutingMode))
++    {
++        const int boundary = gp200::isExtendedRoutingMode (presetRestoreRoutingMode)
++            ? presetRestoreRoutingMode & 15 : preset.fxLoopSend;
++        if (!gp200::validFlexibleRouting (preset.routingOrder, preset.fxLoopSend, boundary, preset.fxLoopReturn))
++        {
++            effectsStatusText = "Recall Preset failed: saved routing mode/P does not match Send/Return";
++            repaint (); return;
++        }
++    }
+     buildFullPresetRestoreSteps (preset, presetData);
++    if (gp200::validRoutingModeValue (presetRestoreRoutingMode))
++    {
++        PresetRestoreStep modeStep;
++        modeStep.type = PresetRestoreStepType::RoutingMode;
++        modeStep.routingMode = presetRestoreRoutingMode;
++        presetRestoreSteps.push_back (modeStep);
++    }
+ 
+     if (presetRestoreSteps.empty ())
+     {
+@@ -3838,6 +3861,10 @@
+ 
+     const auto& step = presetRestoreSteps[static_cast<std::size_t> (presetRestoreStepIndex)];
+ 
++    // The final routing write follows the existing reorder, with the same pacing as SPR.
++    if (step.type == PresetRestoreStepType::RoutingMode
++        && juce::Time::getMillisecondCounterHiRes () < presetRestoreRoutingNotBeforeMs) return;
++
+     bool sent = false;
+ 
+     switch (step.type)
+@@ -3864,6 +3891,12 @@
+ 
+     case PresetRestoreStepType::ReorderEffects:
+         sent = midiConnection.sendReorderEffects (step.routingOrder, step.fxLoopSend, step.fxLoopReturn);
++        if (sent && gp200::validRoutingModeValue (presetRestoreRoutingMode))
++            presetRestoreRoutingNotBeforeMs = juce::Time::getMillisecondCounterHiRes () + 150.0;
++        break;
++
++    case PresetRestoreStepType::RoutingMode:
++        sent = midiConnection.sendPresetRestoreRoutingMode (presetRestoreSlot, step.routingMode);
+         break;
+     }
+ 
+@@ -3893,7 +3926,7 @@
+ 
+     midiConnection.adoptCurrentPresetSnapshot (
+         presetRestoreSlot, presetRestoreName, presetRestoreSnapshotData);
+-    midiConnection.endPresetRestoreTransaction ();
++    midiConnection.endPresetRestoreTransaction (presetRestoreRoutingMode);
+ 
+     presetRestoreSteps.clear ();
+     presetRestoreStepIndex = 0;
+@@ -3908,8 +3941,15 @@
+     savedBlockEnabledSlot = -1;
+     updateAllBlocksOffButtonText ();
+ 
+-    effectsStatusText =
+-        "Recall Preset: snapshot restored into current slot. Press Store preset to save it here.";
++    if (gp200::validRoutingModeValue (presetRestoreRoutingMode))
++        effectsStatusText = "Recall Preset: preset and Series/Parallel/P sent; waiting for device confirmation";
++    else if (presetRestoreRoutingMetadataFromDaw)
++        effectsStatusText = "Recall Preset: preset restored; this snapshot has no saved Series/Parallel/P metadata";
++    else
++        effectsStatusText = "Recall Preset: snapshot restored into current slot. Press Store preset to save it here.";
++    presetRestoreRoutingMetadataFromDaw = false;
++    presetRestoreRoutingMode = -1;
++    presetRestoreRoutingNotBeforeMs = 0;
+ 
+     updateEffectBlocksUI ();
+ }
+--- a/source/GP200Plugin/PluginEditor.h
++++ b/source/GP200Plugin/PluginEditor.h
+@@ -150,7 +150,8 @@
+         EffectChange,
+         ParamChange,
+         ToggleEffect,
+-        ReorderEffects
++        ReorderEffects,
++        RoutingMode
+     };
+ 
+     struct PresetRestoreStep
+@@ -166,6 +167,7 @@
+         gp200::RoutingOrder routingOrder{};
+         int fxLoopSend{4};
+         int fxLoopReturn{4};
++        int routingMode{-1};
+     };
+ 
+     static constexpr int idleTimerHz = 20;
+@@ -186,6 +188,9 @@
+     juce::MemoryBlock presetRestoreSnapshotData;
+     int presetRestoreSlot{-1};
+     juce::String presetRestoreName;
++    int presetRestoreRoutingMode{-1};
++    bool presetRestoreRoutingMetadataFromDaw{false};
++    double presetRestoreRoutingNotBeforeMs{0};
+ 
+     juce::TextButton previousBankButton{"BANK -"};
+     juce::TextButton previousPresetButton{"<"};
+--- a/source/GP200Plugin/PluginProcessor.cpp
++++ b/source/GP200Plugin/PluginProcessor.cpp
+@@ -10,6 +10,7 @@
+ #include "PluginProcessor.h"
+ #include "PluginEditor.h"
+ #include "../libgp200/GP200Constants.h"
++#include "../libgp200/GP200FlexibleRouting.h"
+ #include "../libgp200/GP200ModSync.h"
+ #include "../libgp200/GP200EffectDatabase.h"
+ #include "../libgp200/GP200EffectParamDatabase.h"
+@@ -638,7 +639,8 @@
+     int snapshotIndex,
+     int slot,
+     const juce::String& presetName,
+-    const juce::MemoryBlock& presetData)
++    const juce::MemoryBlock& presetData,
++    int routingMode)
+ {
+     if (!isValidSnapshotIndex (snapshotIndex))
+         return;
+@@ -663,7 +665,18 @@
+                                : juce::String (snapshotIndex == 0 ? "Snapshot A" : "Snapshot B");
+ 
+     snapshot.data = presetData;
++    // Do not inherit routing when replacing a snapshot with offline/old data.
++    snapshot.routingMode = slot >= 0 && presetData.getSize () > 0 && gp200::validRoutingModeValue (routingMode)
++        ? routingMode : -1;
+     ++snapshot.revision;
++}
++
++AudioPluginAudioProcessor::GP200PresetRecallSnapshot AudioPluginAudioProcessor::getGP200PresetRecallSnapshot (int snapshotIndex) const
++{
++    if (!isValidSnapshotIndex (snapshotIndex)) return {};
++    const juce::ScopedLock lock (stateLock);
++    const auto& snapshot = savedGP200PresetSnapshots[static_cast<std::size_t> (snapshotIndex)];
++    return { snapshot.data, snapshot.name, snapshot.routingMode };
+ }
+ 
+ int AudioPluginAudioProcessor::getSavedGP200Slot () const
+@@ -860,7 +873,7 @@
+     {
+         const juce::ScopedLock lock (stateLock);
+ 
+-        xml->setAttribute ("version", 7);
++        xml->setAttribute ("version", 8);
+ 
+         xml->setAttribute ("slotReferenceSlot", savedGP200Slot);
+         xml->setAttribute ("slotReferenceName",
+@@ -870,6 +883,7 @@
+         const auto& snapshotB = savedGP200PresetSnapshots[1];
+ 
+         xml->setAttribute ("snapshotASlot", snapshotA.slot);
++        xml->setAttribute ("snapshotARoutingMode", snapshotA.routingMode);
+         xml->setAttribute ("snapshotAName", snapshotA.name);
+         xml->setAttribute ("snapshotADisplayName", snapshotA.displayName);
+         xml->setAttribute (
+@@ -877,6 +891,7 @@
+             snapshotA.data.toBase64Encoding ());
+ 
+         xml->setAttribute ("snapshotBSlot", snapshotB.slot);
++        xml->setAttribute ("snapshotBRoutingMode", snapshotB.routingMode);
+         xml->setAttribute ("snapshotBName", snapshotB.name);
+         xml->setAttribute ("snapshotBDisplayName", snapshotB.displayName);
+         xml->setAttribute (
+@@ -926,6 +941,7 @@
+         snapshot.name = "unknown";
+         snapshot.displayName.clear ();
+         snapshot.data.setSize (0);
++        snapshot.routingMode = -1;
+         ++snapshot.revision;
+     }
+ 
+@@ -994,6 +1010,9 @@
+             snapshotA.data.fromBase64Encoding (
+                 snapshotADataBase64);
+         }
++        const int modeA = xml->getIntAttribute ("snapshotARoutingMode", -1);
++        snapshotA.routingMode = snapshotA.slot >= 0 && snapshotA.data.getSize () > 0
++            && gp200::validRoutingModeValue (modeA) ? modeA : -1;
+ 
+         snapshotB.slot =
+             xml->getIntAttribute ("snapshotBSlot", -1);
+@@ -1018,6 +1037,9 @@
+             snapshotB.data.fromBase64Encoding (
+                 snapshotBDataBase64);
+         }
++        const int modeB = xml->getIntAttribute ("snapshotBRoutingMode", -1);
++        snapshotB.routingMode = snapshotB.slot >= 0 && snapshotB.data.getSize () > 0
++            && gp200::validRoutingModeValue (modeB) ? modeB : -1;
+ 
+         return;
+     }
+--- a/source/GP200Plugin/PluginProcessor.h
++++ b/source/GP200Plugin/PluginProcessor.h
+@@ -82,7 +82,10 @@
+     void setGP200PresetSnapshotState (int snapshotIndex,
+                                   int slot,
+                                   const juce::String& presetName,
+-                                  const juce::MemoryBlock& presetData);
++                                  const juce::MemoryBlock& presetData,
++                                  int routingMode = -1);
++    struct GP200PresetRecallSnapshot { juce::MemoryBlock data; juce::String name; int routingMode{-1}; };
++    GP200PresetRecallSnapshot getGP200PresetRecallSnapshot (int snapshotIndex) const;
+ 
+     int getSavedGP200Slot () const;
+     juce::String getSavedGP200PresetName () const;
+@@ -164,6 +167,7 @@
+         juce::String name{"unknown"};
+         juce::String displayName;
+         juce::MemoryBlock data;
++        int routingMode{-1}; // Independent native mode reply; extended byte includes P.
+         std::uint64_t revision{0};
+     };
+ 	
+--- a/source/libgp200/MidiConnection.cpp
++++ b/source/libgp200/MidiConnection.cpp
+@@ -1853,7 +1853,9 @@
+     }
+     const bool freshMode = routingModeSnapshot.slot == currentSlot
+         && routingModeSnapshot.revision > routingModeBaseline && validRoutingModeValue (routingModeSnapshot.mode);
+-    if (routingStage == 3 && freshMode && routingModeSnapshot.mode == routingValue)
++    const bool modeMatches = isExtendedRoutingMode (routingValue) ? routingModeSnapshot.mode == routingValue
++        : validRoutingModeValue (routingModeSnapshot.mode) && routingModeIsParallel (routingModeSnapshot.mode) == routingModeIsParallel (routingValue);
++    if (routingStage == 3 && freshMode && modeMatches)
+     {
+         routingLiveBaseline = livePresetRevision; routingStage = 4;
+         scheduleLivePresetRefresh (); return;
+@@ -1866,7 +1868,7 @@
+         routingModeBaseline = routingModeSnapshot.revision; routingStage = 5;
+         routingQueryMs = 0; return;
+     }
+-    if (routingStage == 5 && freshMode && routingModeSnapshot.mode == routingValue)
++    if (routingStage == 5 && freshMode && modeMatches)
+     {
+         routingStage = 0; routingTransactionStatus = "SPR routing confirmed by device";
+     }
+@@ -2342,6 +2344,7 @@
+     currentPresetDataIsLive = false;
+     routingModeSnapshot.mode = -1; ++routingModeSnapshot.revision;
+     presetRestoreTransactionActive = true;
++    presetRestoreSlotGeneration = slotGeneration;
+     currentStateRequestQueued = false;
+     currentStateRequestPending = false;
+     stateDumpChunks.clear ();
+@@ -2354,7 +2357,19 @@
+     presetReadChunks.clear ();
+ }
+ 
+-void MidiConnection::endPresetRestoreTransaction ()
++bool MidiConnection::sendPresetRestoreRoutingMode (int expectedSlot, int mode)
++{
++    const juce::ScopedLock lock (stateLock);
++    if (!presetRestoreTransactionActive || currentSlot != expectedSlot
++        || slotGeneration != presetRestoreSlotGeneration || !validRoutingModeValue (mode))
++    {
++        lastMessageText = "Recall routing not sent: slot changed or invalid mode";
++        return false;
++    }
++    return sendRoutingModeValue (static_cast<juce::uint8> (mode));
++}
++
++void MidiConnection::endPresetRestoreTransaction (int expectedRoutingMode)
+ {
+     const juce::ScopedLock lock (stateLock);
+ 
+@@ -2371,6 +2386,22 @@
+     currentPresetDataIsLive = false;
+     startupHandshakePhase = StartupHandshakePhase::Ready;
+     currentStateRequestQueued = true;
++    if (validRoutingModeValue (expectedRoutingMode))
++    {
++        const auto preset = GP200PresetCodec::decodeLivePresetDump (currentPresetDecodedData);
++        routingSlot = currentSlot; routingGeneration = slotGeneration;
++        routingOrder = preset.routingOrder; routingSend = preset.fxLoopSend; routingReturn = preset.fxLoopReturn;
++        routingValue = expectedRoutingMode;
++        routingBoundary = isExtendedRoutingMode (expectedRoutingMode) ? expectedRoutingMode & 15 : routingSend;
++        routingLiveBaseline = livePresetRevision;
++        routingModeBaseline = routingModeSnapshot.revision;
++        routingStage = 4; // Already sent by Recall: verify a new live preset, then query the mode.
++        routingDeadlineMs = juce::Time::getMillisecondCounterHiRes () + 6500.0;
++        routingQueryMs = 0;
++        routingTransactionStatus = "Recall: waiting for Series/Parallel/P and order confirmation";
++        if (!preset.isValid || !validFlexibleRouting (routingOrder, routingSend, routingBoundary, routingReturn))
++            failRoutingTransaction ("invalid Recall routing snapshot");
++    }
+ }
+ 
+ bool MidiConnection::requestPresetNameForCurrentSlotIfNeeded ()
+--- a/source/libgp200/MidiConnection.h
++++ b/source/libgp200/MidiConnection.h
+@@ -135,7 +135,8 @@
+     // Suspend automatic preset/state reads while Recall from DAW or PRST import
+     // is actively rebuilding the GP-200 edit buffer.
+     void beginPresetRestoreTransaction ();
+-    void endPresetRestoreTransaction ();
++    void endPresetRestoreTransaction (int expectedRoutingMode = -1);
++    bool sendPresetRestoreRoutingMode (int expectedSlot, int mode);
+ 
+   private:
+     void timerCallback () override;
+@@ -266,6 +267,7 @@
+     double currentStateRequestSentMs{0.0};
+     bool liveRefreshPending{false};
+     bool presetRestoreTransactionActive{false};
++    std::uint64_t presetRestoreSlotGeneration{0};
+     double liveRefreshDueMs{0.0};
+     int lastRequestedNameSlot{-1};
+ 

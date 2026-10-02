@@ -2887,7 +2887,8 @@ void AudioPluginAudioProcessorEditor::saveCurrentPresetToProject ()
         snapshotIndex,
         currentSlot,
         preset.patchName,
-        presetData);
+        presetData,
+        deviceState.mode.mode);
 
     effectsStatusText = "Saved full preset snapshot " +
                         getSelectedCompareSnapshotLabel () +
@@ -3488,6 +3489,11 @@ void AudioPluginAudioProcessorEditor::importPrstFile (
         return;
     }
 
+    // PRST import has no snapshot routing metadata; do not reuse a preceding Recall value.
+    presetRestoreRoutingMode = -1;
+    presetRestoreRoutingMetadataFromDaw = false;
+    presetRestoreRoutingNotBeforeMs = 0;
+
     // Mismos campos utilizados por Recall.
     presetRestoreSnapshotData =
         importSnapshotData;
@@ -3562,9 +3568,8 @@ const auto snapshotLabel =
         return;
     }
 
-    const auto presetData =
-    processorRef.getSavedGP200PresetDataCopy (
-        snapshotIndex);
+    const auto savedSnapshot = processorRef.getGP200PresetRecallSnapshot (snapshotIndex);
+    const auto presetData = savedSnapshot.data;
 
     if (presetData.getSize () == 0)
     {
@@ -3637,9 +3642,7 @@ const auto snapshotLabel =
         return;
     }
 
-    auto savedName =
-    processorRef.getSavedGP200PresetSnapshotName (
-        snapshotIndex);
+    auto savedName = savedSnapshot.name;
 
     if (!isUsefulPresetName (savedName))
         savedName = preset.patchName;
@@ -3651,7 +3654,27 @@ const auto snapshotLabel =
     presetRestoreSlot = targetSlot;
     presetRestoreName = savedName;
 
+    presetRestoreRoutingMetadataFromDaw = true;
+    presetRestoreRoutingMode = savedSnapshot.routingMode;
+    presetRestoreRoutingNotBeforeMs = 0;
+    if (gp200::validRoutingModeValue (presetRestoreRoutingMode))
+    {
+        const int boundary = gp200::isExtendedRoutingMode (presetRestoreRoutingMode)
+            ? presetRestoreRoutingMode & 15 : preset.fxLoopSend;
+        if (!gp200::validFlexibleRouting (preset.routingOrder, preset.fxLoopSend, boundary, preset.fxLoopReturn))
+        {
+            effectsStatusText = "Recall Preset failed: saved routing mode/P does not match Send/Return";
+            repaint (); return;
+        }
+    }
     buildFullPresetRestoreSteps (preset, presetData);
+    if (gp200::validRoutingModeValue (presetRestoreRoutingMode))
+    {
+        PresetRestoreStep modeStep;
+        modeStep.type = PresetRestoreStepType::RoutingMode;
+        modeStep.routingMode = presetRestoreRoutingMode;
+        presetRestoreSteps.push_back (modeStep);
+    }
 
     if (presetRestoreSteps.empty ())
     {
@@ -3838,6 +3861,10 @@ void AudioPluginAudioProcessorEditor::processFullPresetRestoreStep ()
 
     const auto& step = presetRestoreSteps[static_cast<std::size_t> (presetRestoreStepIndex)];
 
+    // The final routing write follows the existing reorder, with the same pacing as SPR.
+    if (step.type == PresetRestoreStepType::RoutingMode
+        && juce::Time::getMillisecondCounterHiRes () < presetRestoreRoutingNotBeforeMs) return;
+
     bool sent = false;
 
     switch (step.type)
@@ -3864,6 +3891,12 @@ void AudioPluginAudioProcessorEditor::processFullPresetRestoreStep ()
 
     case PresetRestoreStepType::ReorderEffects:
         sent = midiConnection.sendReorderEffects (step.routingOrder, step.fxLoopSend, step.fxLoopReturn);
+        if (sent && gp200::validRoutingModeValue (presetRestoreRoutingMode))
+            presetRestoreRoutingNotBeforeMs = juce::Time::getMillisecondCounterHiRes () + 150.0;
+        break;
+
+    case PresetRestoreStepType::RoutingMode:
+        sent = midiConnection.sendPresetRestoreRoutingMode (presetRestoreSlot, step.routingMode);
         break;
     }
 
@@ -3893,7 +3926,7 @@ void AudioPluginAudioProcessorEditor::finishFullPresetRestore ()
 
     midiConnection.adoptCurrentPresetSnapshot (
         presetRestoreSlot, presetRestoreName, presetRestoreSnapshotData);
-    midiConnection.endPresetRestoreTransaction ();
+    midiConnection.endPresetRestoreTransaction (presetRestoreRoutingMode);
 
     presetRestoreSteps.clear ();
     presetRestoreStepIndex = 0;
@@ -3908,8 +3941,15 @@ void AudioPluginAudioProcessorEditor::finishFullPresetRestore ()
     savedBlockEnabledSlot = -1;
     updateAllBlocksOffButtonText ();
 
-    effectsStatusText =
-        "Recall Preset: snapshot restored into current slot. Press Store preset to save it here.";
+    if (gp200::validRoutingModeValue (presetRestoreRoutingMode))
+        effectsStatusText = "Recall Preset: preset and Series/Parallel/P sent; waiting for device confirmation";
+    else if (presetRestoreRoutingMetadataFromDaw)
+        effectsStatusText = "Recall Preset: preset restored; this snapshot has no saved Series/Parallel/P metadata";
+    else
+        effectsStatusText = "Recall Preset: snapshot restored into current slot. Press Store preset to save it here.";
+    presetRestoreRoutingMetadataFromDaw = false;
+    presetRestoreRoutingMode = -1;
+    presetRestoreRoutingNotBeforeMs = 0;
 
     updateEffectBlocksUI ();
 }

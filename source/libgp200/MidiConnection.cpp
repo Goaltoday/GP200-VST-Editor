@@ -1853,7 +1853,9 @@ void MidiConnection::processRoutingTransaction ()
     }
     const bool freshMode = routingModeSnapshot.slot == currentSlot
         && routingModeSnapshot.revision > routingModeBaseline && validRoutingModeValue (routingModeSnapshot.mode);
-    if (routingStage == 3 && freshMode && routingModeSnapshot.mode == routingValue)
+    const bool modeMatches = isExtendedRoutingMode (routingValue) ? routingModeSnapshot.mode == routingValue
+        : validRoutingModeValue (routingModeSnapshot.mode) && routingModeIsParallel (routingModeSnapshot.mode) == routingModeIsParallel (routingValue);
+    if (routingStage == 3 && freshMode && modeMatches)
     {
         routingLiveBaseline = livePresetRevision; routingStage = 4;
         scheduleLivePresetRefresh (); return;
@@ -1866,7 +1868,7 @@ void MidiConnection::processRoutingTransaction ()
         routingModeBaseline = routingModeSnapshot.revision; routingStage = 5;
         routingQueryMs = 0; return;
     }
-    if (routingStage == 5 && freshMode && routingModeSnapshot.mode == routingValue)
+    if (routingStage == 5 && freshMode && modeMatches)
     {
         routingStage = 0; routingTransactionStatus = "SPR routing confirmed by device";
     }
@@ -2342,6 +2344,7 @@ void MidiConnection::beginPresetRestoreTransaction ()
     currentPresetDataIsLive = false;
     routingModeSnapshot.mode = -1; ++routingModeSnapshot.revision;
     presetRestoreTransactionActive = true;
+    presetRestoreSlotGeneration = slotGeneration;
     currentStateRequestQueued = false;
     currentStateRequestPending = false;
     stateDumpChunks.clear ();
@@ -2354,7 +2357,19 @@ void MidiConnection::beginPresetRestoreTransaction ()
     presetReadChunks.clear ();
 }
 
-void MidiConnection::endPresetRestoreTransaction ()
+bool MidiConnection::sendPresetRestoreRoutingMode (int expectedSlot, int mode)
+{
+    const juce::ScopedLock lock (stateLock);
+    if (!presetRestoreTransactionActive || currentSlot != expectedSlot
+        || slotGeneration != presetRestoreSlotGeneration || !validRoutingModeValue (mode))
+    {
+        lastMessageText = "Recall routing not sent: slot changed or invalid mode";
+        return false;
+    }
+    return sendRoutingModeValue (static_cast<juce::uint8> (mode));
+}
+
+void MidiConnection::endPresetRestoreTransaction (int expectedRoutingMode)
 {
     const juce::ScopedLock lock (stateLock);
 
@@ -2371,6 +2386,22 @@ void MidiConnection::endPresetRestoreTransaction ()
     currentPresetDataIsLive = false;
     startupHandshakePhase = StartupHandshakePhase::Ready;
     currentStateRequestQueued = true;
+    if (validRoutingModeValue (expectedRoutingMode))
+    {
+        const auto preset = GP200PresetCodec::decodeLivePresetDump (currentPresetDecodedData);
+        routingSlot = currentSlot; routingGeneration = slotGeneration;
+        routingOrder = preset.routingOrder; routingSend = preset.fxLoopSend; routingReturn = preset.fxLoopReturn;
+        routingValue = expectedRoutingMode;
+        routingBoundary = isExtendedRoutingMode (expectedRoutingMode) ? expectedRoutingMode & 15 : routingSend;
+        routingLiveBaseline = livePresetRevision;
+        routingModeBaseline = routingModeSnapshot.revision;
+        routingStage = 4; // Already sent by Recall: verify a new live preset, then query the mode.
+        routingDeadlineMs = juce::Time::getMillisecondCounterHiRes () + 6500.0;
+        routingQueryMs = 0;
+        routingTransactionStatus = "Recall: waiting for Series/Parallel/P and order confirmation";
+        if (!preset.isValid || !validFlexibleRouting (routingOrder, routingSend, routingBoundary, routingReturn))
+            failRoutingTransaction ("invalid Recall routing snapshot");
+    }
 }
 
 bool MidiConnection::requestPresetNameForCurrentSlotIfNeeded ()

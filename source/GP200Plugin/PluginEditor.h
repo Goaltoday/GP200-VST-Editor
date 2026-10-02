@@ -150,7 +150,8 @@ void updateSnapshotNameEditor ();
         EffectChange,
         ParamChange,
         ToggleEffect,
-        ReorderEffects
+        ReorderEffects,
+        RoutingMode
     };
 
     struct PresetRestoreStep
@@ -166,6 +167,7 @@ void updateSnapshotNameEditor ();
         gp200::RoutingOrder routingOrder{};
         int fxLoopSend{4};
         int fxLoopReturn{4};
+        int routingMode{-1};
     };
 
     static constexpr int idleTimerHz = 20;
@@ -186,6 +188,9 @@ double lastInitialPresetRequestMs{0.0};
     juce::MemoryBlock presetRestoreSnapshotData;
     int presetRestoreSlot{-1};
     juce::String presetRestoreName;
+    int presetRestoreRoutingMode{-1};
+    bool presetRestoreRoutingMetadataFromDaw{false};
+    double presetRestoreRoutingNotBeforeMs{0};
 
     juce::TextButton previousBankButton{"BANK -"};
     juce::TextButton previousPresetButton{"<"};

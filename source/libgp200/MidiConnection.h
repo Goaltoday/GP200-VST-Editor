@@ -135,7 +135,8 @@ class MidiConnection final : private juce::MidiInputCallback, private juce::Time
     // Suspend automatic preset/state reads while Recall from DAW or PRST import
     // is actively rebuilding the GP-200 edit buffer.
     void beginPresetRestoreTransaction ();
-    void endPresetRestoreTransaction ();
+    void endPresetRestoreTransaction (int expectedRoutingMode = -1);
+    bool sendPresetRestoreRoutingMode (int expectedSlot, int mode);
 
   private:
     void timerCallback () override;
@@ -266,6 +267,7 @@ class MidiConnection final : private juce::MidiInputCallback, private juce::Time
     double currentStateRequestSentMs{0.0};
     bool liveRefreshPending{false};
     bool presetRestoreTransactionActive{false};
+    std::uint64_t presetRestoreSlotGeneration{0};
     double liveRefreshDueMs{0.0};
     int lastRequestedNameSlot{-1};
 

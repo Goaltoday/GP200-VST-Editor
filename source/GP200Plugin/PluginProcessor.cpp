@@ -10,6 +10,7 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
 #include "../libgp200/GP200Constants.h"
+#include "../libgp200/GP200FlexibleRouting.h"
 #include "../libgp200/GP200ModSync.h"
 #include "../libgp200/GP200EffectDatabase.h"
 #include "../libgp200/GP200EffectParamDatabase.h"
@@ -638,7 +639,8 @@ void AudioPluginAudioProcessor::setGP200PresetSnapshotState (
     int snapshotIndex,
     int slot,
     const juce::String& presetName,
-    const juce::MemoryBlock& presetData)
+    const juce::MemoryBlock& presetData,
+    int routingMode)
 {
     if (!isValidSnapshotIndex (snapshotIndex))
         return;
@@ -663,7 +665,18 @@ void AudioPluginAudioProcessor::setGP200PresetSnapshotState (
                                : juce::String (snapshotIndex == 0 ? "Snapshot A" : "Snapshot B");
 
     snapshot.data = presetData;
+    // Do not inherit routing when replacing a snapshot with offline/old data.
+    snapshot.routingMode = slot >= 0 && presetData.getSize () > 0 && gp200::validRoutingModeValue (routingMode)
+        ? routingMode : -1;
     ++snapshot.revision;
+}
+
+AudioPluginAudioProcessor::GP200PresetRecallSnapshot AudioPluginAudioProcessor::getGP200PresetRecallSnapshot (int snapshotIndex) const
+{
+    if (!isValidSnapshotIndex (snapshotIndex)) return {};
+    const juce::ScopedLock lock (stateLock);
+    const auto& snapshot = savedGP200PresetSnapshots[static_cast<std::size_t> (snapshotIndex)];
+    return { snapshot.data, snapshot.name, snapshot.routingMode };
 }
 
 int AudioPluginAudioProcessor::getSavedGP200Slot () const
@@ -860,7 +873,7 @@ void AudioPluginAudioProcessor::getStateInformation (
     {
         const juce::ScopedLock lock (stateLock);
 
-        xml->setAttribute ("version", 7);
+        xml->setAttribute ("version", 8);
 
         xml->setAttribute ("slotReferenceSlot", savedGP200Slot);
         xml->setAttribute ("slotReferenceName",
@@ -870,6 +883,7 @@ void AudioPluginAudioProcessor::getStateInformation (
         const auto& snapshotB = savedGP200PresetSnapshots[1];
 
         xml->setAttribute ("snapshotASlot", snapshotA.slot);
+        xml->setAttribute ("snapshotARoutingMode", snapshotA.routingMode);
         xml->setAttribute ("snapshotAName", snapshotA.name);
         xml->setAttribute ("snapshotADisplayName", snapshotA.displayName);
         xml->setAttribute (
@@ -877,6 +891,7 @@ void AudioPluginAudioProcessor::getStateInformation (
             snapshotA.data.toBase64Encoding ());
 
         xml->setAttribute ("snapshotBSlot", snapshotB.slot);
+        xml->setAttribute ("snapshotBRoutingMode", snapshotB.routingMode);
         xml->setAttribute ("snapshotBName", snapshotB.name);
         xml->setAttribute ("snapshotBDisplayName", snapshotB.displayName);
         xml->setAttribute (
@@ -926,6 +941,7 @@ void AudioPluginAudioProcessor::setStateInformation (
         snapshot.name = "unknown";
         snapshot.displayName.clear ();
         snapshot.data.setSize (0);
+        snapshot.routingMode = -1;
         ++snapshot.revision;
     }
 
@@ -994,6 +1010,9 @@ void AudioPluginAudioProcessor::setStateInformation (
             snapshotA.data.fromBase64Encoding (
                 snapshotADataBase64);
         }
+        const int modeA = xml->getIntAttribute ("snapshotARoutingMode", -1);
+        snapshotA.routingMode = snapshotA.slot >= 0 && snapshotA.data.getSize () > 0
+            && gp200::validRoutingModeValue (modeA) ? modeA : -1;
 
         snapshotB.slot =
             xml->getIntAttribute ("snapshotBSlot", -1);
@@ -1018,6 +1037,9 @@ void AudioPluginAudioProcessor::setStateInformation (
             snapshotB.data.fromBase64Encoding (
                 snapshotBDataBase64);
         }
+        const int modeB = xml->getIntAttribute ("snapshotBRoutingMode", -1);
+        snapshotB.routingMode = snapshotB.slot >= 0 && snapshotB.data.getSize () > 0
+            && gp200::validRoutingModeValue (modeB) ? modeB : -1;
 
         return;
     }
