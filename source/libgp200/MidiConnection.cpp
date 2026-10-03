@@ -1839,7 +1839,7 @@ bool MidiConnection::sendRoutingModeValue (juce::uint8 value)
     return true;
 }
 
-bool MidiConnection::sendFlexibleRouting (const RoutingOrder& order, int send, int boundary, int ret, bool parallel, int expectedSlot)
+bool MidiConnection::sendFlexibleRouting (const RoutingOrder& order, int send, int boundary, int ret, bool parallel, int expectedSlot, bool modeOnly)
 {
     const juce::ScopedLock lock (stateLock);
     // Validation and first write are atomic with respect to MIDI receive callbacks.
@@ -1852,16 +1852,30 @@ bool MidiConnection::sendFlexibleRouting (const RoutingOrder& order, int send, i
         lastMessageText = "SPR not sent: device state unavailable or operation busy";
         return false;
     }
-    if (!sendRoutingModeValue (1)) return false;
+    if (modeOnly)
+    {
+        const auto preset = GP200PresetCodec::decodeLivePresetDump (currentPresetDecodedData);
+        if (routingStage != 0 || !preset.isValid || preset.routingOrder != order
+            || preset.fxLoopSend != send || preset.fxLoopReturn != ret)
+        { lastMessageText = "CHAIN not sent: routing changed; refresh device state"; return false; }
+    }
+    if (!modeOnly && !sendRoutingModeValue (1)) return false;
     presetNameScanner.cancel ();
     liveRefreshPending = false;
     routingOrder = order; routingSend = send; routingBoundary = boundary; routingReturn = ret;
     routingValue = parallel ? (0x80 | boundary) : nativeRoutingMode;
     routingSlot = currentSlot; routingGeneration = slotGeneration;
-    routingStage = 1;
+    routingStage = modeOnly ? 3 : 1;
     routingNextMs = juce::Time::getMillisecondCounterHiRes () + 150.0;
     routingDeadlineMs = routingNextMs + 6500.0;
-    routingTransactionStatus = "SPR sending: Series, order, mode; waiting for device";
+    if (modeOnly)
+    {
+        routingModeBaseline = routingModeSnapshot.revision;
+        routingQueryMs = routingNextMs;
+        if (!sendRoutingModeValue (static_cast<juce::uint8> (routingValue)))
+        { failRoutingTransaction ("mode send failed"); return false; }
+    }
+    routingTransactionStatus = modeOnly ? "CHAIN sent; waiting for device" : "SPR sending: Series, order, mode; waiting for device";
     return true;
 }
 

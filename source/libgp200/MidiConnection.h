@@ -97,7 +97,7 @@ class MidiConnection final : private juce::MidiInputCallback, private juce::Time
     void processBlendReadback ();
     bool sendSeriesParallel (bool parallel);
     bool sendRoutingModeValue (juce::uint8 value);
-    bool sendFlexibleRouting (const RoutingOrder& order, int send, int boundary, int ret, bool parallel, int expectedSlot = -1);
+    bool sendFlexibleRouting (const RoutingOrder& order, int send, int boundary, int ret, bool parallel, int expectedSlot = -1, bool modeOnly = false);
     bool canSaveCurrentPreset () const;
     bool isRoutingTransactionBusy () const;
     juce::String getRoutingTransactionStatus () const;
