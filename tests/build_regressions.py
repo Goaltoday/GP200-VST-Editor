@@ -1,7 +1,7 @@
 from pathlib import Path
 r=Path(__file__).resolve().parent;src=r.parent/'source/libgp200/MidiConnection.cpp';s=src.read_text()
 # Compile exact production method bodies; JUCE ports and preset codec are test doubles.
-names=[('getRoutingRequestSnapshot','MidiConnection::RoutingRequestSnapshot'),('getRoutingStateSnapshot','MidiConnection::RoutingStateSnapshot'),('timerCallback','void'),('sendFlexibleRouting','bool'),('canSaveCurrentPreset','bool'),('isRoutingTransactionBusy','bool'),('getRoutingTransactionStatus','juce::String'),('failRoutingTransaction','void'),('processRoutingTransaction','void'),('processPresetReadRecovery','void'),('sendStateDumpRequestUnlocked','bool'),('requestPresetNameForCurrentSlotIfNeeded','bool'),('sendLiveReadRequestForSlot','bool'),('resetPresetDumpCaptureForSlot','void'),('collectPresetReadChunk','void'),('getChunkOffset','int'),('assemblePresetReadChunks','juce::MemoryBlock'),('nibbleDecode','std::vector<juce::uint8>'),('buildLiveReadRequest','std::vector<juce::uint8>'),('buildStateDumpRequest','std::vector<juce::uint8>'),('sendRoutingModeValue','bool'),('requestRoutingModeFromGP200','bool'),('sendReorderEffects','bool'),('buildReorderEffects','std::vector<juce::uint8>'),('nibbleEncode','std::vector<juce::uint8>'),('scheduleLivePresetRefresh','void'),('processPendingLivePresetRefresh','void'),('beginPresetRestoreTransaction','void'),('endPresetRestoreTransaction','void'),('sendPresetRestoreRoutingMode','bool'),('storeCurrentPresetToGP200','bool')]
+names=[('processBlendReadback','void'),('isBlendWritePending','bool'),('sendIndependentBlend','bool'),('getRoutingRequestSnapshot','MidiConnection::RoutingRequestSnapshot'),('getRoutingStateSnapshot','MidiConnection::RoutingStateSnapshot'),('timerCallback','void'),('sendFlexibleRouting','bool'),('canSaveCurrentPreset','bool'),('isRoutingTransactionBusy','bool'),('getRoutingTransactionStatus','juce::String'),('failRoutingTransaction','void'),('processRoutingTransaction','void'),('processPresetReadRecovery','void'),('sendStateDumpRequestUnlocked','bool'),('requestPresetNameForCurrentSlotIfNeeded','bool'),('sendLiveReadRequestForSlot','bool'),('resetPresetDumpCaptureForSlot','void'),('collectPresetReadChunk','void'),('getChunkOffset','int'),('assemblePresetReadChunks','juce::MemoryBlock'),('nibbleDecode','std::vector<juce::uint8>'),('buildLiveReadRequest','std::vector<juce::uint8>'),('buildStateDumpRequest','std::vector<juce::uint8>'),('sendRoutingModeValue','bool'),('requestRoutingModeFromGP200','bool'),('sendReorderEffects','bool'),('buildReorderEffects','std::vector<juce::uint8>'),('nibbleEncode','std::vector<juce::uint8>'),('scheduleLivePresetRefresh','void'),('processPendingLivePresetRefresh','void'),('beginPresetRestoreTransaction','void'),('endPresetRestoreTransaction','void'),('sendPresetRestoreRoutingMode','bool'),('storeCurrentPresetToGP200','bool')]
 methods=[];decl=[]
 for name,ret in names:
  a=s.index('MidiConnection::'+name+' (');b=s.index('\n}',a)+2;body=s[a:b];methods.append(ret+' '+body);signature=body[:body.index('\n{')].replace('MidiConnection::','')
@@ -18,8 +18,10 @@ h=r'''#include "../source/libgp200/GP200FlexibleRouting.h"
 #include <algorithm>
 #include <mutex>
 #include <thread>
+#include <cstring>
+#include "../source/libgp200/GP200ChainBlend.h"
 namespace juce {
-using uint8=std::uint8_t;
+using uint8=std::uint8_t;using uint32=std::uint32_t;
 template<class T>T jlimit(T a,T b,T v){return std::clamp(v,a,b);}
 struct String:std::string {using std::string::string;using std::string::operator=;String(int n):std::string(std::to_string(n)){}String(std::string s):std::string(s){}bool isEmpty()const{return empty();}};
 struct MemoryBlock {std::vector<uint8> v;void setSize(size_t n){v.resize(n);}size_t getSize()const{return v.size();}void* getData(){return v.data();}const void* getData()const{return v.data();}void append(const void*p,size_t n){auto b=(const uint8*)p;v.insert(v.end(),b,b+n);}};
@@ -29,8 +31,9 @@ struct MidiMessage {std::vector<uint8> bytes;static MidiMessage createSysExMessa
 }
 namespace gp200 {
 using RoutingOrder=std::array<int,11>;
-struct GP200Preset {bool isValid=false;RoutingOrder routingOrder{};int fxLoopSend=0,fxLoopReturn=0;};
-struct GP200PresetCodec {static GP200Preset decodeLivePresetDump(const juce::MemoryBlock& b){GP200Preset p;if(b.getSize()<912)return p;p.isValid=true;auto x=(const juce::uint8*)b.getData();p.fxLoopSend=x[106];p.fxLoopReturn=x[107];for(int i=0;i<11;i++)p.routingOrder[i]=x[108+i];return p;}};
+struct GP200EffectSlot {int blockIndex=0,slotIndex=0;bool enabled=true;juce::uint32 effectId=0x06000003;std::array<float,15> params{};};
+struct GP200Preset {std::array<GP200EffectSlot,11> effects{};bool isValid=false;RoutingOrder routingOrder{};int fxLoopSend=0,fxLoopReturn=0;};
+struct GP200PresetCodec {static GP200Preset decodeLivePresetDump(const juce::MemoryBlock& b){GP200Preset p;if(b.getSize()<912)return p;p.isValid=true;auto x=(const juce::uint8*)b.getData();p.fxLoopSend=x[106];p.fxLoopReturn=x[107];for(int i=0;i<11;i++){p.routingOrder[i]=x[108+i];p.effects[i].blockIndex=i;std::memcpy(p.effects[i].params.data(),x+effectBlockStart+i*effectBlockSize+paramsOffset,60);}return p;}};
 struct Scanner {bool pending=false;void cancel(){pending=false;}bool hasPendingRequest(){return pending;}void setCachedName(int,juce::String){}};
 struct MidiConnection {
 int input=0;int* midiInput=&input;
@@ -49,6 +52,9 @@ struct RoutingStateSnapshot {bool connected=false;int slot=-1;bool live=false;Ro
 bool isIRUploadInProgress(){return irUploadPhase!=IRUploadPhase::Idle;}bool isSoundCloneUploadInProgress(){return soundCloneUploadPhase!=SoundCloneUploadPhase::Idle;}juce::String getLastMessageText(){return lastMessageText;}
 std::uint64_t presetRevision=1,livePresetRevision=1;
 juce::String currentPresetName="test",currentPresetDumpStatusText,lastMessageText;
+int nativeRoutingMode=1;bool blendWritePending=false,blendWriteMarked=false;int blendWriteSlot=-1;std::uint64_t blendWriteBaseline=0;float blendWriteExpected=50.0f;double blendWriteDeadline=0;
+std::vector<std::pair<int,float>> parameterWrites;
+bool sendParamChange(int block,int param,juce::uint32,float value){parameterWrites.push_back({param,value});std::memcpy(currentPresetDecodedData.v.data()+effectBlockStart+block*effectBlockSize+paramsOffset+param*4,&value,4);return true;}
 int routingStage=0,routingSlot=-1,routingSend=0,routingBoundary=0,routingReturn=0,routingValue=1;RoutingOrder routingOrder{};
 std::uint64_t routingGeneration=0,slotGeneration=0,routingModeBaseline=0,routingLiveBaseline=0,presetModeBaseline=0,presetRestoreSlotGeneration=0;
 double routingNextMs=0,routingDeadlineMs=0,routingQueryMs=0,presetReadStartedMs=0,presetReadResumeMs=0,modePollMs=0;int presetReadRetries=0;bool presetReadIsLive=false;
@@ -120,7 +126,7 @@ for(int missing=0;missing<7;missing++){MidiConnection m;init(m);m.sendLiveReadRe
 {MidiConnection m;init(m);m.sendLiveReadRequestForSlot(0);receive(m);assert(!m.canSaveCurrentPreset());mode(m,0x85);assert(m.canSaveCurrentPreset());cases++;}
 {MidiConnection m;init(m);assert(m.sendFlexibleRouting(order,2,5,8,true,0));++m.slotGeneration;juce::Time::now=150;auto n=m.output.messages.size();m.processRoutingTransaction();assert(m.routingStage==6&&m.output.messages.size()==n);cases++;}
 {MidiConnection m;init(m);m.sendLiveReadRequestForSlot(0);for(int attempt=0;attempt<4;attempt++){juce::Time::now=m.presetReadStartedMs+1500;m.processPresetReadRecovery();double expected=attempt==3?5000:300;assert(m.presetReadResumeMs==juce::Time::now+expected);juce::Time::now=m.presetReadResumeMs;assert(m.requestPresetNameForCurrentSlotIfNeeded());}cases++;}
-for(int wanted:{0,1,0x82,0x85,0x88,0x92,0x95,0x98}){MidiConnection m;init(m);m.beginPresetRestoreTransaction();assert(m.sendPresetRestoreRoutingMode(0,wanted));m.endPresetRestoreTransaction(wanted);assert(m.routingStage==4&&!m.canSaveCurrentPreset());m.sendLiveReadRequestForSlot(0);receive(m);m.processRoutingTransaction();assert(m.routingStage==5);mode(m,wanted<2?(wanted==0?0x85:0x95):wanted);m.processRoutingTransaction();assert(m.routingStage==0&&m.canSaveCurrentPreset());cases++;}
+for(int wanted:{0,1,0x82,0x85,0x88,0x92,0x95,0x98}){MidiConnection m;init(m);m.beginPresetRestoreTransaction();assert(m.sendPresetRestoreRoutingMode(0,wanted));m.endPresetRestoreTransaction(wanted);assert(m.routingStage==4&&!m.canSaveCurrentPreset());m.sendLiveReadRequestForSlot(0);receive(m);m.processRoutingTransaction();assert(m.routingStage==5);mode(m,wanted);m.processBlendReadback();m.processRoutingTransaction();assert(m.routingStage==0&&m.canSaveCurrentPreset());cases++;}
 {MidiConnection m;init(m);m.beginPresetRestoreTransaction();m.currentSlot=1;++m.slotGeneration;auto n=m.output.messages.size();assert(!m.sendPresetRestoreRoutingMode(0,0x85)&&m.output.messages.size()==n);cases++;}
 {MidiConnection m;init(m);m.beginPresetRestoreTransaction();++m.slotGeneration;assert(!m.sendPresetRestoreRoutingMode(0,0x85));cases++;}
 {MidiConnection m;init(m);m.beginPresetRestoreTransaction();m.endPresetRestoreTransaction(0x95);m.sendLiveReadRequestForSlot(0);receive(m);m.processRoutingTransaction();mode(m,0x85);m.processRoutingTransaction();assert(m.routingStage==5&&!m.canSaveCurrentPreset());juce::Time::now=7000;m.processRoutingTransaction();assert(m.routingStage==6&&!m.canSaveCurrentPreset());cases++;}

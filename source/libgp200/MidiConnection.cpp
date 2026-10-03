@@ -10,6 +10,7 @@
 */
 #include "MidiConnection.h"
 #include "GP200FlexibleRouting.h"
+#include "GP200ChainBlend.h"
 #include "GP200EffectDatabase.h"
 #include "GP200EffectParamDatabase.h"
 #include "MidiDeviceScanner.h"
@@ -41,6 +42,7 @@ void MidiConnection::timerCallback ()
     }
     processPresetReadRecovery ();
     processRoutingTransaction ();
+    processBlendReadback ();
     if (routingStage == 1 || routingStage == 2) return;
     if (startupHandshakePhase == StartupHandshakePhase::Idle) requestCurrentPresetFromGP200 ();
     processStartupHandshake ();
@@ -1765,6 +1767,57 @@ bool MidiConnection::requestRoutingModeFromGP200 ()
     return true;
 }
 
+bool MidiConnection::isBlendWritePending () const
+{
+    const juce::ScopedLock lock (stateLock);
+    return blendWritePending;
+}
+
+void MidiConnection::processBlendReadback ()
+{
+    if (!blendWritePending) return;
+    if (currentSlot != blendWriteSlot || midiOutput == nullptr) { blendWritePending = false; return; }
+    if (currentPresetDataIsLive && livePresetRevision > blendWriteBaseline) {
+        const auto p = GP200PresetCodec::decodeLivePresetDump (currentPresetDecodedData);
+        const bool matches = p.isValid && (blendWriteMarked
+            ? hasIndependentBlend(p) && p.effects[10].params[14] == blendWriteExpected
+            : std::bit_cast<std::uint32_t>(p.effects[10].params[13]) == 0);
+        blendWritePending = false;
+        lastMessageText = matches ? "BLEND confirmed by pedal" : "BLEND not confirmed: actual pedal value recovered; requires FIX33 firmware";
+        return;
+    }
+    if (juce::Time::getMillisecondCounterHiRes () >= blendWriteDeadline) {
+        blendWritePending = false; currentPresetDataIsLive = false;
+        scheduleLivePresetRefresh ();
+        lastMessageText = "BLEND readback timed out";
+    }
+}
+
+bool MidiConnection::sendIndependentBlend (float value, bool activate, int expectedSlot)
+{
+    const juce::ScopedLock lock (stateLock);
+    if (!std::isfinite(value) || value < 0.0f || value > 100.0f || midiOutput == nullptr
+        || currentSlot != expectedSlot || !currentPresetDataIsLive || blendWritePending
+        || routingStage != 0 || presetRestoreTransactionActive || modSyncActive || presetDumpSlot >= 0
+        || currentStateRequestPending || irUploadPhase != IRUploadPhase::Idle || soundCloneUploadPhase != SoundCloneUploadPhase::Idle
+        || !routingModeIsChain(routingModeSnapshot.mode) || routingModeSnapshot.slot != currentSlot
+        || routingModeSnapshot.revision <= presetModeBaseline) return false;
+    const auto p = GP200PresetCodec::decodeLivePresetDump(currentPresetDecodedData);
+    if (!p.isValid || (!hasIndependentBlend(p) && !activate)) return false;
+    if (!hasIndependentBlend(p) && activate) {
+        value = legacyVolumeIsBlend(p) && std::isfinite(p.effects[10].params[0]) && p.effects[10].params[0]>=0.0f && p.effects[10].params[0]<=100.0f
+            ? p.effects[10].params[0] : 50.0f;
+        if (legacyVolumeIsBlend(p) && !sendParamChange(10,0,p.effects[10].effectId,100.0f)) return false;
+    }
+    if (!sendParamChange(10,14,p.effects[10].effectId,value)
+        || !sendParamChange(10,13,p.effects[10].effectId,blendTagFloat())) return false;
+    blendWriteExpected=value; blendWriteMarked=true; blendWriteSlot=currentSlot;
+    blendWriteBaseline=livePresetRevision; blendWriteDeadline=juce::Time::getMillisecondCounterHiRes()+6500.0;
+    blendWritePending=true; scheduleLivePresetRefresh();
+    lastMessageText="BLEND sent: awaiting pedal readback";
+    return true;
+}
+
 bool MidiConnection::sendSeriesParallel (bool parallel)
 {
     return sendRoutingModeValue (parallel ? 0 : 1);
@@ -1794,7 +1847,7 @@ bool MidiConnection::sendFlexibleRouting (const RoutingOrder& order, int send, i
         || !currentPresetDataIsLive || !validFlexibleRouting (order, send, boundary, ret)
         || presetRestoreTransactionActive || modSyncActive || presetDumpSlot >= 0 || currentStateRequestPending
         || irUploadPhase != IRUploadPhase::Idle || soundCloneUploadPhase != SoundCloneUploadPhase::Idle
-        || presetNameScanner.hasPendingRequest () || routingStage >= 3)
+        || presetNameScanner.hasPendingRequest () || blendWritePending || routingStage >= 3)
     {
         lastMessageText = "SPR not sent: device state unavailable or operation busy";
         return false;
@@ -1803,7 +1856,7 @@ bool MidiConnection::sendFlexibleRouting (const RoutingOrder& order, int send, i
     presetNameScanner.cancel ();
     liveRefreshPending = false;
     routingOrder = order; routingSend = send; routingBoundary = boundary; routingReturn = ret;
-    routingValue = (parallel ? 0x80 : 0x90) | boundary;
+    routingValue = parallel ? (0x80 | boundary) : nativeRoutingMode;
     routingSlot = currentSlot; routingGeneration = slotGeneration;
     routingStage = 1;
     routingNextMs = juce::Time::getMillisecondCounterHiRes () + 150.0;
@@ -1820,7 +1873,7 @@ bool MidiConnection::canSaveCurrentPreset () const
     const int boundary = isExtendedRoutingMode (routingModeSnapshot.mode) ? routingModeSnapshot.mode & 15 : preset.fxLoopSend;
     return preset.isValid && validFlexibleRouting (preset.routingOrder, preset.fxLoopSend, boundary, preset.fxLoopReturn)
         && midiOutput != nullptr && currentSlot >= 0 && currentPresetDataIsLive && routingStage == 0
-        && !presetRestoreTransactionActive && !currentStateRequestPending && presetDumpSlot < 0
+        && !blendWritePending && !presetRestoreTransactionActive && !currentStateRequestPending && presetDumpSlot < 0
         && irUploadPhase == IRUploadPhase::Idle && soundCloneUploadPhase == SoundCloneUploadPhase::Idle
         && routingModeSnapshot.slot == currentSlot && routingModeSnapshot.revision > presetModeBaseline
         && validRoutingModeValue (routingModeSnapshot.mode);
@@ -1887,8 +1940,7 @@ void MidiConnection::processRoutingTransaction ()
     }
     const bool freshMode = routingModeSnapshot.slot == currentSlot
         && routingModeSnapshot.revision > routingModeBaseline && validRoutingModeValue (routingModeSnapshot.mode);
-    const bool modeMatches = isExtendedRoutingMode (routingValue) ? routingModeSnapshot.mode == routingValue
-        : validRoutingModeValue (routingModeSnapshot.mode) && routingModeIsParallel (routingModeSnapshot.mode) == routingModeIsParallel (routingValue);
+    const bool modeMatches = routingModeSnapshot.mode == routingValue;
     if (routingStage == 3 && freshMode && modeMatches)
     {
         routingLiveBaseline = livePresetRevision; routingStage = 4;
@@ -2374,6 +2426,7 @@ void MidiConnection::beginPresetRestoreTransaction ()
 {
     const juce::ScopedLock lock (stateLock);
 
+    blendWritePending = false;
     if (routingStage != 0) failRoutingTransaction ("Recall started");
     currentPresetDataIsLive = false;
     routingModeSnapshot.mode = -1; ++routingModeSnapshot.revision;
@@ -2417,6 +2470,14 @@ void MidiConnection::endPresetRestoreTransaction (int expectedRoutingMode)
     presetDumpSlot = -1;
     presetReadChunks.clear ();
     presetRestoreTransactionActive = false;
+    const auto restoredBlend = GP200PresetCodec::decodeLivePresetDump (currentPresetDecodedData);
+    if (restoredBlend.isValid) {
+        blendWriteMarked = hasIndependentBlend (restoredBlend);
+        blendWriteExpected = restoredBlend.effects[10].params[14];
+        blendWriteSlot = currentSlot; blendWriteBaseline = livePresetRevision;
+        blendWriteDeadline = juce::Time::getMillisecondCounterHiRes () + 6500.0;
+        blendWritePending = true;
+    }
     currentPresetDataIsLive = false;
     startupHandshakePhase = StartupHandshakePhase::Ready;
     currentStateRequestQueued = true;
@@ -2642,6 +2703,7 @@ void MidiConnection::scheduleLivePresetRefresh ()
 
 void MidiConnection::resetPresetDumpCaptureForSlot (int slot)
 {
+    if (routingModeSnapshot.slot != slot) { nativeRoutingMode = 1; blendWritePending = false; }
     if (routingModeSnapshot.slot != slot)
     {
         routingModeSnapshot.mode = -1; routingModeSnapshot.slot = slot;
@@ -3318,6 +3380,7 @@ void MidiConnection::parseGP200SysEx (const juce::uint8* data, int size)
         // A later query after the complete live read will recover the current mode.
         if (currentSlot < 0 || !currentPresetDataIsLive) return;
         const bool changed = routingModeSnapshot.mode != routeMode || routingModeSnapshot.slot != currentSlot;
+        if ((routeMode == 0 || routeMode == 1) && routingStage == 0 && !presetRestoreTransactionActive) nativeRoutingMode = routeMode;
         routingModeSnapshot.mode = routeMode;
         routingModeSnapshot.slot = currentSlot;
         ++routingModeSnapshot.revision;

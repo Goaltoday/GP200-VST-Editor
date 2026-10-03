@@ -9,6 +9,7 @@
 */
 #include "PluginEditor.h"
 #include "../libgp200/GP200FlexibleRouting.h"
+#include "../libgp200/GP200ChainBlend.h"
 #include "GP200Typography.h"
 #include "BinaryData.h"
 #include "../libgp200/GP200Preset.h"
@@ -1687,8 +1688,7 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::paint (juce::G
 
         g.setColour (displayColour);
         g.setFont (gp200ui::semibold (parallelMode ? 10.5f : 14.25f));
-        g.drawText (parallelMode && item.blockIndex == 10 && item.enabled
-                    && i >= fxLoopReturnPosition ? "BLEND" : item.blockName,
+        g.drawText (item.blockName,
                     tile.withTrimmedTop (tile.getHeight() - (parallelMode ? 18 : 24)).reduced (3, 1),
                     juce::Justification::centred);
 
@@ -1920,6 +1920,16 @@ addAndMakeVisible (soundCloneButton);
     addAndMakeVisible (presetNameEditor);
     addAndMakeVisible (tunerButton);
     addAndMakeVisible (seriesParallelButton);
+    addAndMakeVisible (chainBlendLabel); addAndMakeVisible (chainBlendSlider); addAndMakeVisible (newBlendButton);
+    chainBlendLabel.setText ("BLEND", juce::dontSendNotification);
+    chainBlendSlider.setSliderStyle (juce::Slider::LinearHorizontal);
+    chainBlendSlider.setRange (0.0,100.0,1.0);
+    chainBlendSlider.setTextBoxStyle (juce::Slider::TextBoxRight,false,84,20);
+    chainBlendSlider.textFromValueFunction=[](double v) { const int b=juce::roundToInt(v); return b==0?juce::String("SOLO A"):b==100?juce::String("SOLO B"):b==50?juce::String("CENTRO"):juce::String("POS ")+juce::String(b); };
+    chainBlendSlider.onValueChange=[this] { chainBlendQueuedValue=static_cast<float>(chainBlendSlider.getValue());chainBlendQueued=true; };
+    newBlendButton.setTooltip ("Explicitly enables independent BLEND in this preset. Does not STORE. Requires FIX33 firmware.");
+    newBlendButton.onClick=[this] { if(midiConnection.sendIndependentBlend(50.0f,true,chainBlendSlot)) { chainBlendQueued=false;effectsStatusText="NEW BLEND sent; waiting for pedal";repaint(); } };
+
     addAndMakeVisible (allBlocksOffButton);
     addAndMakeVisible (autoCabButton);
 	addAndMakeVisible (toneMatchButton);
@@ -2144,7 +2154,7 @@ storePresetButton.setColour (
 
     tunerButton.onClick = [this] { toggleTuner (); };
 
-    seriesParallelButton.setTooltip ("SPR experimental routing: requires R15 SPR firmware. Sends S/P/R to the GP-200.");
+    seriesParallelButton.setTooltip ("CHAIN on/off. Native Series/Parallel remain separate. Independent BLEND requires FIX33 firmware.");
     seriesParallelButton.onClick = [this] { toggleSeriesParallel (); };
 
     allBlocksOffButton.onClick = [this] { toggleAllBlocksOff (); };
@@ -2634,6 +2644,9 @@ tapTempoButton.setBounds (882, 150, 46, 24);
 allBlocksOffButton.setBounds (170, 191, 120, 28);
 autoCabButton.setBounds (300, 191, 108, 28);
 seriesParallelButton.setBounds (563, 191, 135, 28);
+chainBlendLabel.setBounds (30,222,52,20);
+chainBlendSlider.setBounds (88,222,236,20);
+newBlendButton.setBounds (334,222,106,20);
 toneMatchButton.setBounds (708, 191, 110, 28);
 soundCloneButton.setBounds (828, 191, 110, 28);
 
@@ -2673,6 +2686,7 @@ void AudioPluginAudioProcessorEditor::timerCallback ()
 {
     const auto nowMs = juce::Time::getMillisecondCounterHiRes();
     syncFlexibleRoutingFromDevice ();
+    syncChainBlendControls ();
 
     const auto modSyncRevision = gp200::GP200ModSync::getRevision ();
     if (modSyncRevision != lastModSyncRevision)
@@ -3933,6 +3947,13 @@ void AudioPluginAudioProcessorEditor::buildFullPresetRestoreSteps (const gp200::
 
     addKnownParameterPass ();
 
+    auto metadataEffect = preset.effects[10];
+    const bool independent = gp200::hasIndependentBlend (preset);
+    metadataEffect.params[13] = independent ? gp200::blendTagFloat () : 0.0f;
+    metadataEffect.params[14] = independent ? preset.effects[10].params[14] : 0.0f;
+    addParameterStep (metadataEffect,14);
+    addParameterStep (metadataEffect,13);
+
     PresetRestoreStep reorderStep;
     reorderStep.type = PresetRestoreStepType::ReorderEffects;
     reorderStep.routingOrder = preset.routingOrder;
@@ -4355,6 +4376,25 @@ void AudioPluginAudioProcessorEditor::updateTunerButtonText ()
                            tunerIsOn ? juce::Colours::black : panelOutlineColour);
 }
 
+void AudioPluginAudioProcessorEditor::syncChainBlendControls ()
+{
+    const auto state=midiConnection.getRoutingStateSnapshot();
+    if (chainBlendSlot!=state.slot || !state.connected) { chainBlendQueued=false;chainBlendSlot=state.slot; }
+    const bool chain=state.connected && state.slot==sprDeviceSlot && gp200::routingModeIsChain(sprDeviceMode);
+    const auto p=gp200::GP200PresetCodec::decodeLivePresetDump(state.data);
+    const bool marked=gp200::hasIndependentBlend(p);
+    chainBlendLabel.setVisible(chain);chainBlendSlider.setVisible(chain);newBlendButton.setVisible(chain && !marked);
+    const bool ready=chain && state.live && state.modeFresh && !presetRestoreInProgress && !midiConnection.isRoutingTransactionBusy() && !midiConnection.isBlendWritePending();
+    chainBlendSlider.setEnabled(ready && marked);newBlendButton.setEnabled(ready && !marked);
+    if (!chain || presetRestoreInProgress || midiConnection.isRoutingTransactionBusy()) chainBlendQueued=false;
+    if (ready && marked && chainBlendQueued) {
+        if(midiConnection.sendIndependentBlend(chainBlendQueuedValue,false,chainBlendSlot)) chainBlendQueued=false;
+    }
+    if (!chainBlendQueued && !chainBlendSlider.isMouseButtonDown() && marked)
+        chainBlendSlider.setValue(p.effects[10].params[14],juce::dontSendNotification);
+    chainBlendLabel.setTooltip(marked?"Independent blend. VOL retains volume. Position is not a gain percentage.":"Legacy preset: independent BLEND is OFF. NEW BLEND enables it explicitly; existing VOL behavior is preserved.");
+}
+
 void AudioPluginAudioProcessorEditor::toggleSeriesParallel ()
 {
     if (midiConnection.isRoutingTransactionBusy ())
@@ -4365,8 +4405,8 @@ void AudioPluginAudioProcessorEditor::toggleSeriesParallel ()
     effectChainRibbon.setParallelMode (parallelRoutingSelected);
     updateSeriesParallelButtonText ();
     effectsStatusText = parallelRoutingSelected
-        ? "SPR Parallel"
-        : "SPR Series";
+        ? "CHAIN ON"
+        : "CHAIN OFF";
     repaint ();
     sendFlexibleRouteFromRibbon ();
     scheduleEditorHeightUpdate ();
@@ -4392,7 +4432,7 @@ void AudioPluginAudioProcessorEditor::sendFlexibleRouteFromRibbon ()
         if (fallback.isValid && gp200::validRoutingModeValue (mode))
         {
             updateEffectChainRibbon (fallback);
-            parallelRoutingSelected = gp200::routingModeIsParallel (mode);
+            parallelRoutingSelected = gp200::routingModeIsChain (mode);
             effectChainRibbon.setDeviceRouting (fallback.fxLoopSend, boundary, fallback.fxLoopReturn, parallelRoutingSelected);
             updateSeriesParallelButtonText ();
             if (accepted.active) effectChainRibbon.keepRoutingDraft ();
@@ -4435,7 +4475,7 @@ void AudioPluginAudioProcessorEditor::syncFlexibleRoutingFromDevice ()
     sprConfirmedPreset = preset; sprConfirmedBoundary = boundary; sprConfirmedMode = state.mode.mode;
     effectChainRibbon.releaseRoutingDraft ();
     updateEffectChainRibbon (preset);
-    parallelRoutingSelected = gp200::routingModeIsParallel (state.mode.mode);
+    parallelRoutingSelected = gp200::routingModeIsChain (state.mode.mode);
     effectChainRibbon.setDeviceRouting (preset.fxLoopSend, boundary, preset.fxLoopReturn, parallelRoutingSelected);
     updateSeriesParallelButtonText (); scheduleEditorHeightUpdate ();
     effectsStatusText = midiConnection.getRoutingTransactionStatus ();
@@ -4444,7 +4484,7 @@ void AudioPluginAudioProcessorEditor::syncFlexibleRoutingFromDevice ()
 
 void AudioPluginAudioProcessorEditor::updateSeriesParallelButtonText ()
 {
-    seriesParallelButton.setButtonText (parallelRoutingSelected ? "PARALLEL" : "SERIES");
+    seriesParallelButton.setButtonText ("CHAIN");
     seriesParallelButton.setColour (juce::TextButton::buttonColourId,
                                     parallelRoutingSelected ? statusOnColour : panelColour);
     seriesParallelButton.setColour (juce::TextButton::buttonOnColourId,
@@ -4900,9 +4940,7 @@ void AudioPluginAudioProcessorEditor::updateEffectBlocksUI ()
                     continue;
 
                 block->setEnabledForDisplay (effect.enabled);
-                const auto volIt = std::find (preset.routingOrder.begin (), preset.routingOrder.end (), blockIndex);
-                block->setBlendForDisplay (parallelRoutingSelected && effect.enabled && blockIndex == 10
-                    && volIt != preset.routingOrder.end () && std::distance (preset.routingOrder.begin (), volIt) >= preset.fxLoopReturn);
+        block->setBlendForDisplay (false);
 
                 for (int paramIndex = 0;
                      paramIndex < static_cast<int> (effect.params.size ());
@@ -5172,9 +5210,7 @@ void AudioPluginAudioProcessorEditor::rebuildEffectBlocks (const gp200::GP200Pre
         };
 
         effectsContent.addAndMakeVisible (*block);
-        const auto volIt = std::find (preset.routingOrder.begin (), preset.routingOrder.end (), blockIndex);
-        block->setBlendForDisplay (parallelRoutingSelected && effect.enabled && blockIndex == 10
-            && volIt != preset.routingOrder.end () && std::distance (preset.routingOrder.begin (), volIt) >= preset.fxLoopReturn);
+        block->setBlendForDisplay (false);
         effectBlocks.push_back (std::move (block));
     }
 
@@ -5332,7 +5368,7 @@ void AudioPluginAudioProcessorEditor::updateEffectChainRibbon (const gp200::GP20
     if (midiConnection.isConnected () && !midiConnection.isRoutingTransactionBusy ()
         && gp200::isExtendedRoutingMode (sprDeviceMode))
         effectChainRibbon.setDeviceRouting (preset.fxLoopSend, sprDeviceMode & 15, preset.fxLoopReturn,
-            gp200::routingModeIsParallel (sprDeviceMode));
+            gp200::routingModeIsChain (sprDeviceMode));
     effectChainRibbon.setSelectedBlockIndex (selectedEffectBlockIndex);
 }
 

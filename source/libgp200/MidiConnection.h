@@ -92,6 +92,9 @@ class MidiConnection final : private juce::MidiInputCallback, private juce::Time
     bool sendEffectChange (int blockIndex, juce::uint32 effectId);
     bool sendAutoCabMatch (bool shouldBeEnabled);
     bool sendParamChange (int blockIndex, int paramIndex, juce::uint32 effectId, float value);
+    bool sendIndependentBlend (float value, bool activate, int expectedSlot);
+    bool isBlendWritePending () const;
+    void processBlendReadback ();
     bool sendSeriesParallel (bool parallel);
     bool sendRoutingModeValue (juce::uint8 value);
     bool sendFlexibleRouting (const RoutingOrder& order, int send, int boundary, int ret, bool parallel, int expectedSlot = -1);
@@ -276,6 +279,13 @@ class MidiConnection final : private juce::MidiInputCallback, private juce::Time
     int presetDumpSlot{-1};
     std::vector<std::vector<juce::uint8>> presetReadChunks;
     juce::MemoryBlock currentPresetDecodedData;
+    int nativeRoutingMode{1};
+    bool blendWritePending{false};
+    int blendWriteSlot{-1};
+    std::uint64_t blendWriteBaseline{0};
+    float blendWriteExpected{50.0f};
+    bool blendWriteMarked{false};
+    double blendWriteDeadline{0.0};
     bool currentPresetDataIsLive{false};
     juce::String currentPresetDumpStatusText{"Current full preset data: not captured"};
 
