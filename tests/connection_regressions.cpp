@@ -8,8 +8,10 @@
 #include <algorithm>
 #include <mutex>
 #include <thread>
+#include <cstring>
+#include "../source/libgp200/GP200ChainBlend.h"
 namespace juce {
-using uint8=std::uint8_t;
+using uint8=std::uint8_t;using uint32=std::uint32_t;
 template<class T>T jlimit(T a,T b,T v){return std::clamp(v,a,b);}
 struct String:std::string {using std::string::string;using std::string::operator=;String(int n):std::string(std::to_string(n)){}String(std::string s):std::string(s){}bool isEmpty()const{return empty();}};
 struct MemoryBlock {std::vector<uint8> v;void setSize(size_t n){v.resize(n);}size_t getSize()const{return v.size();}void* getData(){return v.data();}const void* getData()const{return v.data();}void append(const void*p,size_t n){auto b=(const uint8*)p;v.insert(v.end(),b,b+n);}};
@@ -19,8 +21,9 @@ struct MidiMessage {std::vector<uint8> bytes;static MidiMessage createSysExMessa
 }
 namespace gp200 {
 using RoutingOrder=std::array<int,11>;
-struct GP200Preset {bool isValid=false;RoutingOrder routingOrder{};int fxLoopSend=0,fxLoopReturn=0;};
-struct GP200PresetCodec {static GP200Preset decodeLivePresetDump(const juce::MemoryBlock& b){GP200Preset p;if(b.getSize()<912)return p;p.isValid=true;auto x=(const juce::uint8*)b.getData();p.fxLoopSend=x[106];p.fxLoopReturn=x[107];for(int i=0;i<11;i++)p.routingOrder[i]=x[108+i];return p;}};
+struct GP200EffectSlot {int blockIndex=0,slotIndex=0;bool enabled=true;juce::uint32 effectId=0x06000003;std::array<float,15> params{};};
+struct GP200Preset {std::array<GP200EffectSlot,11> effects{};bool isValid=false;RoutingOrder routingOrder{};int fxLoopSend=0,fxLoopReturn=0;};
+struct GP200PresetCodec {static GP200Preset decodeLivePresetDump(const juce::MemoryBlock& b){GP200Preset p;if(b.getSize()<912)return p;p.isValid=true;auto x=(const juce::uint8*)b.getData();p.fxLoopSend=x[106];p.fxLoopReturn=x[107];for(int i=0;i<11;i++){p.routingOrder[i]=x[108+i];p.effects[i].blockIndex=i;std::memcpy(p.effects[i].params.data(),x+effectBlockStart+i*effectBlockSize+paramsOffset,60);}return p;}};
 struct Scanner {bool pending=false;void cancel(){pending=false;}bool hasPendingRequest(){return pending;}void setCachedName(int,juce::String){}};
 struct MidiConnection {
 int input=0;int* midiInput=&input;
@@ -39,6 +42,9 @@ struct RoutingStateSnapshot {bool connected=false;int slot=-1;bool live=false;Ro
 bool isIRUploadInProgress(){return irUploadPhase!=IRUploadPhase::Idle;}bool isSoundCloneUploadInProgress(){return soundCloneUploadPhase!=SoundCloneUploadPhase::Idle;}juce::String getLastMessageText(){return lastMessageText;}
 std::uint64_t presetRevision=1,livePresetRevision=1;
 juce::String currentPresetName="test",currentPresetDumpStatusText,lastMessageText;
+int nativeRoutingMode=0;bool blendWritePending=false,blendWriteMarked=false;int blendWriteSlot=-1;std::uint64_t blendWriteBaseline=0;float blendWriteExpected=50.0f;double blendWriteDeadline=0;
+std::vector<std::pair<int,float>> parameterWrites;
+bool sendParamChange(int block,int param,juce::uint32,float value){parameterWrites.push_back({param,value});std::memcpy(currentPresetDecodedData.v.data()+effectBlockStart+block*effectBlockSize+paramsOffset+param*4,&value,4);return true;}
 int routingStage=0,routingSlot=-1,routingSend=0,routingBoundary=0,routingReturn=0,routingValue=1;RoutingOrder routingOrder{};
 std::uint64_t routingGeneration=0,slotGeneration=0,routingModeBaseline=0,routingLiveBaseline=0,presetModeBaseline=0,presetRestoreSlotGeneration=0;
 double routingNextMs=0,routingDeadlineMs=0,routingQueryMs=0,presetReadStartedMs=0,presetReadResumeMs=0,modePollMs=0;int presetReadRetries=0;bool presetReadIsLive=false;
@@ -46,10 +52,13 @@ juce::String routingTransactionStatus="SPR: idle";
 int irTicks=0,cloneTicks=0,scanTicks=0;bool stopped=false;
 bool isConnected()const{return midiOutput!=nullptr;}void stopTimer(){stopped=true;}void processIRUpload(){irTicks++;}void processSoundCloneUpload(){cloneTicks++;}void finishModSyncFailure(juce::String){modSyncActive=false;}bool requestCurrentPresetFromGP200(){return sendStateDumpRequestUnlocked();}void processStartupHandshake(){}void processPresetNameScan(){scanTicks++;}
 static juce::String sanitizePresetNameForStore(juce::String x){return x;}static std::vector<juce::uint8> buildStorePresetCommit(int slot,juce::String){return {0xf0,(juce::uint8)slot,0xf7};}
+void processBlendReadback ();
+bool isBlendWritePending () const;
+bool sendIndependentBlend (float value, bool activate, int expectedSlot);
 RoutingRequestSnapshot getRoutingRequestSnapshot () const;
 RoutingStateSnapshot getRoutingStateSnapshot () const;
 void timerCallback ();
-bool sendFlexibleRouting (const RoutingOrder& order, int send, int boundary, int ret, bool parallel, int expectedSlot = -1);
+bool sendFlexibleRouting (const RoutingOrder& order, int send, int boundary, int ret, bool parallel, int expectedSlot = -1, bool modeOnly = false);
 bool canSaveCurrentPreset () const;
 bool isRoutingTransactionBusy () const;
 juce::String getRoutingTransactionStatus () const;
@@ -78,6 +87,54 @@ void endPresetRestoreTransaction (int expectedRoutingMode = -1);
 bool sendPresetRestoreRoutingMode (int expectedSlot, int mode);
 bool storeCurrentPresetToGP200 ();
 };
+void MidiConnection::processBlendReadback ()
+{
+    if (!blendWritePending) return;
+    if (currentSlot != blendWriteSlot || midiOutput == nullptr) { blendWritePending = false; return; }
+    if (currentPresetDataIsLive && livePresetRevision > blendWriteBaseline) {
+        const auto p = GP200PresetCodec::decodeLivePresetDump (currentPresetDecodedData);
+        const bool matches = p.isValid && (blendWriteMarked
+            ? hasIndependentBlend(p) && p.effects[10].params[14] == blendWriteExpected
+            : std::bit_cast<std::uint32_t>(p.effects[10].params[13]) == 0);
+        blendWritePending = false;
+        lastMessageText = matches ? "BLEND confirmed by pedal" : "BLEND not confirmed: actual pedal value recovered; requires FIX34 firmware";
+        return;
+    }
+    if (juce::Time::getMillisecondCounterHiRes () >= blendWriteDeadline) {
+        blendWritePending = false; currentPresetDataIsLive = false;
+        scheduleLivePresetRefresh ();
+        lastMessageText = "BLEND readback timed out";
+    }
+}
+bool MidiConnection::isBlendWritePending () const
+{
+    const juce::ScopedLock lock (stateLock);
+    return blendWritePending;
+}
+bool MidiConnection::sendIndependentBlend (float value, bool activate, int expectedSlot)
+{
+    const juce::ScopedLock lock (stateLock);
+    if (!std::isfinite(value) || value < 0.0f || value > 100.0f || midiOutput == nullptr
+        || currentSlot != expectedSlot || !currentPresetDataIsLive || blendWritePending
+        || routingStage != 0 || presetRestoreTransactionActive || modSyncActive || presetDumpSlot >= 0
+        || currentStateRequestPending || irUploadPhase != IRUploadPhase::Idle || soundCloneUploadPhase != SoundCloneUploadPhase::Idle
+        || !routingModeIsChain(routingModeSnapshot.mode) || routingModeSnapshot.slot != currentSlot
+        || routingModeSnapshot.revision <= presetModeBaseline) return false;
+    const auto p = GP200PresetCodec::decodeLivePresetDump(currentPresetDecodedData);
+    if (!p.isValid || (!hasIndependentBlend(p) && !activate)) return false;
+    if (!hasIndependentBlend(p) && activate) {
+        // This is a deliberate slider edit: apply the requested value, not the
+        // old VOL value. Loading a preset alone never initializes the signature.
+        if (legacyVolumeIsBlend(p) && !sendParamChange(10,0,p.effects[10].effectId,100.0f)) return false;
+    }
+    if (!sendParamChange(10,14,p.effects[10].effectId,value)
+        || !sendParamChange(10,13,p.effects[10].effectId,blendTagFloat())) return false;
+    blendWriteExpected=value; blendWriteMarked=true; blendWriteSlot=currentSlot;
+    blendWriteBaseline=livePresetRevision; blendWriteDeadline=juce::Time::getMillisecondCounterHiRes()+6500.0;
+    blendWritePending=true; scheduleLivePresetRefresh();
+    lastMessageText="BLEND sent: awaiting pedal readback";
+    return true;
+}
 MidiConnection::RoutingRequestSnapshot MidiConnection::getRoutingRequestSnapshot () const
 {
     const juce::ScopedLock lock (stateLock);
@@ -105,6 +162,7 @@ void MidiConnection::timerCallback ()
     }
     processPresetReadRecovery ();
     processRoutingTransaction ();
+    processBlendReadback ();
     if (routingStage == 1 || routingStage == 2) return;
     if (startupHandshakePhase == StartupHandshakePhase::Idle) requestCurrentPresetFromGP200 ();
     processStartupHandshake ();
@@ -124,7 +182,7 @@ void MidiConnection::timerCallback ()
         processPresetNameScan ();
     }
 }
-bool MidiConnection::sendFlexibleRouting (const RoutingOrder& order, int send, int boundary, int ret, bool parallel, int expectedSlot)
+bool MidiConnection::sendFlexibleRouting (const RoutingOrder& order, int send, int boundary, int ret, bool parallel, int expectedSlot, bool modeOnly)
 {
     const juce::ScopedLock lock (stateLock);
     // Validation and first write are atomic with respect to MIDI receive callbacks.
@@ -132,21 +190,35 @@ bool MidiConnection::sendFlexibleRouting (const RoutingOrder& order, int send, i
         || !currentPresetDataIsLive || !validFlexibleRouting (order, send, boundary, ret)
         || presetRestoreTransactionActive || modSyncActive || presetDumpSlot >= 0 || currentStateRequestPending
         || irUploadPhase != IRUploadPhase::Idle || soundCloneUploadPhase != SoundCloneUploadPhase::Idle
-        || presetNameScanner.hasPendingRequest () || routingStage >= 3)
+        || presetNameScanner.hasPendingRequest () || blendWritePending || routingStage >= 3)
     {
         lastMessageText = "SPR not sent: device state unavailable or operation busy";
         return false;
     }
-    if (!sendRoutingModeValue (1)) return false;
+    if (modeOnly)
+    {
+        const auto preset = GP200PresetCodec::decodeLivePresetDump (currentPresetDecodedData);
+        if (routingStage != 0 || !preset.isValid || preset.routingOrder != order
+            || preset.fxLoopSend != send || preset.fxLoopReturn != ret)
+        { lastMessageText = "CHAIN not sent: routing changed; refresh device state"; return false; }
+    }
+    if (!modeOnly && !sendRoutingModeValue (1)) return false;
     presetNameScanner.cancel ();
     liveRefreshPending = false;
     routingOrder = order; routingSend = send; routingBoundary = boundary; routingReturn = ret;
-    routingValue = (parallel ? 0x80 : 0x90) | boundary;
+    routingValue = parallel ? (0x80 | boundary) : nativeRoutingMode;
     routingSlot = currentSlot; routingGeneration = slotGeneration;
-    routingStage = 1;
+    routingStage = modeOnly ? 3 : 1;
     routingNextMs = juce::Time::getMillisecondCounterHiRes () + 150.0;
     routingDeadlineMs = routingNextMs + 6500.0;
-    routingTransactionStatus = "SPR sending: Series, order, mode; waiting for device";
+    if (modeOnly)
+    {
+        routingModeBaseline = routingModeSnapshot.revision;
+        routingQueryMs = routingNextMs;
+        if (!sendRoutingModeValue (static_cast<juce::uint8> (routingValue)))
+        { failRoutingTransaction ("mode send failed"); return false; }
+    }
+    routingTransactionStatus = modeOnly ? "CHAIN sent; waiting for device" : "SPR sending: Series, order, mode; waiting for device";
     return true;
 }
 bool MidiConnection::canSaveCurrentPreset () const
@@ -156,7 +228,7 @@ bool MidiConnection::canSaveCurrentPreset () const
     const int boundary = isExtendedRoutingMode (routingModeSnapshot.mode) ? routingModeSnapshot.mode & 15 : preset.fxLoopSend;
     return preset.isValid && validFlexibleRouting (preset.routingOrder, preset.fxLoopSend, boundary, preset.fxLoopReturn)
         && midiOutput != nullptr && currentSlot >= 0 && currentPresetDataIsLive && routingStage == 0
-        && !presetRestoreTransactionActive && !currentStateRequestPending && presetDumpSlot < 0
+        && !blendWritePending && !presetRestoreTransactionActive && !currentStateRequestPending && presetDumpSlot < 0
         && irUploadPhase == IRUploadPhase::Idle && soundCloneUploadPhase == SoundCloneUploadPhase::Idle
         && routingModeSnapshot.slot == currentSlot && routingModeSnapshot.revision > presetModeBaseline
         && validRoutingModeValue (routingModeSnapshot.mode);
@@ -213,8 +285,7 @@ void MidiConnection::processRoutingTransaction ()
     }
     const bool freshMode = routingModeSnapshot.slot == currentSlot
         && routingModeSnapshot.revision > routingModeBaseline && validRoutingModeValue (routingModeSnapshot.mode);
-    const bool modeMatches = isExtendedRoutingMode (routingValue) ? routingModeSnapshot.mode == routingValue
-        : validRoutingModeValue (routingModeSnapshot.mode) && routingModeIsParallel (routingModeSnapshot.mode) == routingModeIsParallel (routingValue);
+    const bool modeMatches = routingModeSnapshot.mode == routingValue;
     if (routingStage == 3 && freshMode && modeMatches)
     {
         routingLiveBaseline = livePresetRevision; routingStage = 4;
@@ -326,6 +397,7 @@ bool MidiConnection::sendLiveReadRequestForSlot (int slot)
 }
 void MidiConnection::resetPresetDumpCaptureForSlot (int slot)
 {
+    if (routingModeSnapshot.slot != slot) { nativeRoutingMode = 0; blendWritePending = false; }
     if (routingModeSnapshot.slot != slot)
     {
         routingModeSnapshot.mode = -1; routingModeSnapshot.slot = slot;
@@ -667,6 +739,7 @@ void MidiConnection::beginPresetRestoreTransaction ()
 {
     const juce::ScopedLock lock (stateLock);
 
+    blendWritePending = false;
     if (routingStage != 0) failRoutingTransaction ("Recall started");
     currentPresetDataIsLive = false;
     routingModeSnapshot.mode = -1; ++routingModeSnapshot.revision;
@@ -697,6 +770,14 @@ void MidiConnection::endPresetRestoreTransaction (int expectedRoutingMode)
     presetDumpSlot = -1;
     presetReadChunks.clear ();
     presetRestoreTransactionActive = false;
+    const auto restoredBlend = GP200PresetCodec::decodeLivePresetDump (currentPresetDecodedData);
+    if (restoredBlend.isValid) {
+        blendWriteMarked = hasIndependentBlend (restoredBlend);
+        blendWriteExpected = restoredBlend.effects[10].params[14];
+        blendWriteSlot = currentSlot; blendWriteBaseline = livePresetRevision;
+        blendWriteDeadline = juce::Time::getMillisecondCounterHiRes () + 6500.0;
+        blendWritePending = true;
+    }
     currentPresetDataIsLive = false;
     startupHandshakePhase = StartupHandshakePhase::Ready;
     currentStateRequestQueued = true;
@@ -789,13 +870,13 @@ struct AudioPluginAudioProcessorEditor {
  struct Processor{void notifyOfflineStateChanged(){}}processorRef;
  void repaint(){}void updateSeriesParallelButtonText(){}void scheduleEditorHeightUpdate(){}void clearInterfaceTypography(){}void stopTimer(){}
  void updateEffectChainRibbon(gp200::GP200Preset p){effectChainRibbon.order=p.routingOrder;}
- void sendFlexibleRouteFromRibbon();void syncFlexibleRoutingFromDevice();void toggleSeriesParallel();
+ void sendFlexibleRouteFromRibbon(bool modeOnly = false);void syncFlexibleRoutingFromDevice();void toggleSeriesParallel();
 };
-void AudioPluginAudioProcessorEditor::sendFlexibleRouteFromRibbon ()
+void AudioPluginAudioProcessorEditor::sendFlexibleRouteFromRibbon (bool modeOnly)
 {
     const auto state = midiConnection.getRoutingStateSnapshot ();
     if (presetRestoreInProgress || !midiConnection.sendFlexibleRouting (effectChainRibbon.getLocalOrder (),
-        effectChainRibbon.getSend (), effectChainRibbon.getBoundary (), effectChainRibbon.getReturn (), parallelRoutingSelected, state.slot))
+        effectChainRibbon.getSend (), effectChainRibbon.getBoundary (), effectChainRibbon.getReturn (), parallelRoutingSelected, state.slot, modeOnly))
     {
         // Force reapplication even when the confirmed revision did not change.
         const auto accepted = midiConnection.getRoutingRequestSnapshot ();
@@ -811,7 +892,7 @@ void AudioPluginAudioProcessorEditor::sendFlexibleRouteFromRibbon ()
         if (fallback.isValid && gp200::validRoutingModeValue (mode))
         {
             updateEffectChainRibbon (fallback);
-            parallelRoutingSelected = gp200::routingModeIsParallel (mode);
+            parallelRoutingSelected = gp200::routingModeIsChain (mode);
             effectChainRibbon.setDeviceRouting (fallback.fxLoopSend, boundary, fallback.fxLoopReturn, parallelRoutingSelected);
             updateSeriesParallelButtonText ();
             if (accepted.active) effectChainRibbon.keepRoutingDraft ();
@@ -851,7 +932,7 @@ void AudioPluginAudioProcessorEditor::syncFlexibleRoutingFromDevice ()
     sprConfirmedPreset = preset; sprConfirmedBoundary = boundary; sprConfirmedMode = state.mode.mode;
     effectChainRibbon.releaseRoutingDraft ();
     updateEffectChainRibbon (preset);
-    parallelRoutingSelected = gp200::routingModeIsParallel (state.mode.mode);
+    parallelRoutingSelected = gp200::routingModeIsChain (state.mode.mode);
     effectChainRibbon.setDeviceRouting (preset.fxLoopSend, boundary, preset.fxLoopReturn, parallelRoutingSelected);
     updateSeriesParallelButtonText (); scheduleEditorHeightUpdate ();
     effectsStatusText = midiConnection.getRoutingTransactionStatus ();
@@ -867,10 +948,10 @@ void AudioPluginAudioProcessorEditor::toggleSeriesParallel ()
     effectChainRibbon.setParallelMode (parallelRoutingSelected);
     updateSeriesParallelButtonText ();
     effectsStatusText = parallelRoutingSelected
-        ? "SPR Parallel"
-        : "SPR Series";
+        ? "CHAIN ON"
+        : "CHAIN OFF";
     repaint ();
-    sendFlexibleRouteFromRibbon ();
+    sendFlexibleRouteFromRibbon (true);
     scheduleEditorHeightUpdate ();
 }
 AudioPluginAudioProcessorEditor::~AudioPluginAudioProcessorEditor ()
@@ -898,6 +979,15 @@ void receive(MidiConnection& m){auto cs=chunks(data());std::reverse(cs.begin(),c
 void mode(MidiConnection& m,int value){m.routingModeSnapshot.mode=value;m.routingModeSnapshot.slot=m.currentSlot;++m.routingModeSnapshot.revision;}
 void stageToReply(MidiConnection& m){assert(m.sendFlexibleRouting(order,2,5,8,true,0));assert(!m.canSaveCurrentPreset());juce::Time::now=150;m.processRoutingTransaction();assert(m.routingStage==2);juce::Time::now=300;m.processRoutingTransaction();assert(m.routingStage==3);}
 int main(){int cases=0;
+{MidiConnection m;init(m);AudioPluginAudioProcessorEditor editor(m);editor.toggleSeriesParallel();assert(!editor.parallelRoutingSelected&&m.routingStage==3&&m.routingValue==0&&m.output.messages.size()==1);editor.toggleSeriesParallel();assert(m.output.messages.size()==1);cases++;}
+
+for(int native:{0,1})for(int initial:{0,1,0x85,0x95}){MidiConnection m;init(m);m.nativeRoutingMode=native;mode(m,initial);
+ for(int k=0;k<6;k++){bool on=(k%2)==1;auto n=m.output.messages.size();assert(m.sendFlexibleRouting(order,2,5,8,on,0,true));int wanted=on?0x85:native;assert(m.routingStage==3&&m.routingValue==wanted&&m.output.messages.size()==n+1);
+ auto sent=m.output.messages.back();assert(!m.sendFlexibleRouting(order,2,5,8,!on,0,true));assert(m.output.messages.size()==n+1);
+ mode(m,wanted);m.processRoutingTransaction();assert(m.routingStage==4);juce::Time::now+=200;m.processPendingLivePresetRefresh();receive(m);m.processRoutingTransaction();assert(m.routingStage==5);mode(m,wanted);m.processRoutingTransaction();assert(m.routingStage==0&&m.canSaveCurrentPreset());cases++;}}
+{MidiConnection m;init(m);auto bad=order;std::swap(bad[0],bad[1]);assert(!m.sendFlexibleRouting(bad,2,5,8,false,0,true));assert(m.output.messages.empty()&&m.routingStage==0);cases++;}
+{MidiConnection m;init(m);assert(m.sendFlexibleRouting(order,2,5,8,false,0,true));mode(m,0x85);m.processRoutingTransaction();assert(m.routingStage==3);juce::Time::now=7000;m.processRoutingTransaction();assert(m.routingStage==6);auto n=m.output.messages.size();m.sendLiveReadRequestForSlot(0);receive(m);mode(m,0x85);m.processRoutingTransaction();assert(m.routingStage==0&&m.routingModeSnapshot.mode==0x85);assert(m.output.messages.size()>=n);cases++;}
+
 {MidiConnection m;init(m);stageToReply(m);mode(m,0x85);m.processRoutingTransaction();assert(m.routingStage==4);juce::Time::now=500;m.processPendingLivePresetRefresh();assert(m.presetDumpSlot==0&&!m.currentPresetDataIsLive);receive(m);m.processRoutingTransaction();assert(m.routingStage==5&&!m.canSaveCurrentPreset());mode(m,0x85);m.processRoutingTransaction();assert(m.routingStage==0&&m.canSaveCurrentPreset());assert(m.storeCurrentPresetToGP200());cases++;}
 // There is no editor in this harness: the production connection timer alone advances writes.
 {MidiConnection m;init(m);assert(m.sendFlexibleRouting(order,2,5,8,true,0));juce::Time::now=150;m.timerCallback();assert(m.routingStage==2&&m.irTicks==1&&m.cloneTicks==1);juce::Time::now=300;m.timerCallback();assert(m.routingStage==3);cases++;}
@@ -921,7 +1011,7 @@ for(int missing=0;missing<7;missing++){MidiConnection m;init(m);m.sendLiveReadRe
 {MidiConnection m;init(m);m.sendLiveReadRequestForSlot(0);receive(m);assert(!m.canSaveCurrentPreset());mode(m,0x85);assert(m.canSaveCurrentPreset());cases++;}
 {MidiConnection m;init(m);assert(m.sendFlexibleRouting(order,2,5,8,true,0));++m.slotGeneration;juce::Time::now=150;auto n=m.output.messages.size();m.processRoutingTransaction();assert(m.routingStage==6&&m.output.messages.size()==n);cases++;}
 {MidiConnection m;init(m);m.sendLiveReadRequestForSlot(0);for(int attempt=0;attempt<4;attempt++){juce::Time::now=m.presetReadStartedMs+1500;m.processPresetReadRecovery();double expected=attempt==3?5000:300;assert(m.presetReadResumeMs==juce::Time::now+expected);juce::Time::now=m.presetReadResumeMs;assert(m.requestPresetNameForCurrentSlotIfNeeded());}cases++;}
-for(int wanted:{0,1,0x82,0x85,0x88,0x92,0x95,0x98}){MidiConnection m;init(m);m.beginPresetRestoreTransaction();assert(m.sendPresetRestoreRoutingMode(0,wanted));m.endPresetRestoreTransaction(wanted);assert(m.routingStage==4&&!m.canSaveCurrentPreset());m.sendLiveReadRequestForSlot(0);receive(m);m.processRoutingTransaction();assert(m.routingStage==5);mode(m,wanted<2?(wanted==0?0x85:0x95):wanted);m.processRoutingTransaction();assert(m.routingStage==0&&m.canSaveCurrentPreset());cases++;}
+for(int wanted:{0,1,0x82,0x85,0x88,0x92,0x95,0x98}){MidiConnection m;init(m);m.beginPresetRestoreTransaction();assert(m.sendPresetRestoreRoutingMode(0,wanted));m.endPresetRestoreTransaction(wanted);assert(m.routingStage==4&&!m.canSaveCurrentPreset());m.sendLiveReadRequestForSlot(0);receive(m);m.processRoutingTransaction();assert(m.routingStage==5);mode(m,wanted);m.processBlendReadback();m.processRoutingTransaction();assert(m.routingStage==0&&m.canSaveCurrentPreset());cases++;}
 {MidiConnection m;init(m);m.beginPresetRestoreTransaction();m.currentSlot=1;++m.slotGeneration;auto n=m.output.messages.size();assert(!m.sendPresetRestoreRoutingMode(0,0x85)&&m.output.messages.size()==n);cases++;}
 {MidiConnection m;init(m);m.beginPresetRestoreTransaction();++m.slotGeneration;assert(!m.sendPresetRestoreRoutingMode(0,0x85));cases++;}
 {MidiConnection m;init(m);m.beginPresetRestoreTransaction();m.endPresetRestoreTransaction(0x95);m.sendLiveReadRequestForSlot(0);receive(m);m.processRoutingTransaction();mode(m,0x85);m.processRoutingTransaction();assert(m.routingStage==5&&!m.canSaveCurrentPreset());juce::Time::now=7000;m.processRoutingTransaction();assert(m.routingStage==6&&!m.canSaveCurrentPreset());cases++;}

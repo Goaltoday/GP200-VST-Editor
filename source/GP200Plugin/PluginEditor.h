@@ -83,7 +83,7 @@ void updateSnapshotNameEditor ();
     void toggleTuner ();
     void updateTunerButtonText ();
     void toggleSeriesParallel ();
-    void sendFlexibleRouteFromRibbon ();
+    void sendFlexibleRouteFromRibbon (bool modeOnly = false);
     void syncFlexibleRoutingFromDevice ();
     void syncChainBlendControls ();
     int sprDeviceSlot{-2};

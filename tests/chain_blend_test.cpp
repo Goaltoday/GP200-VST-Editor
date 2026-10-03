@@ -8,21 +8,14 @@
 #include <algorithm>
 #include <mutex>
 #include <thread>
-#include <map>
-#include <sstream>
-#include <iomanip>
-#include <cmath>
+#include <limits>
 #include <cstring>
 #include "../source/libgp200/GP200ChainBlend.h"
 namespace juce {
-using uint8=std::uint8_t;using uint32=std::uint32_t;constexpr int dontSendNotification=0;using uint32=std::uint32_t;
+using uint8=std::uint8_t;using uint32=std::uint32_t;
 template<class T>T jlimit(T a,T b,T v){return std::clamp(v,a,b);}
-
-struct String:std::string {using std::string::string;using std::string::operator=;String(int n):std::string(std::to_string(n)){}String(std::string s):std::string(s){}bool isEmpty()const{return empty();}bool isNotEmpty()const{return !empty();}String trim()const{auto a=find_first_not_of(" \r\n\t");return a==npos?String{}:String(substr(a,find_last_not_of(" \r\n\t")-a+1));}String substring(int a,int b)const{return substr(a,std::max(0,b-a));}};
-struct MemoryBlock {std::vector<uint8> v;void setSize(size_t n){v.resize(n);}size_t getSize()const{return v.size();}void* getData(){return v.data();}const void* getData()const{return v.data();}void append(const void*p,size_t n){auto b=(const uint8*)p;v.insert(v.end(),b,b+n);}String toBase64Encoding()const{static const char chars[]="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";String s;unsigned buffer=0;int bits=-6;for(auto c:v){buffer=(buffer<<8)|c;bits+=8;while(bits>=0){s+=chars[(buffer>>bits)&63];bits-=6;}}if(bits>-6)s+=chars[((buffer<<8)>>(bits+8))&63];while(s.size()%4)s+='=';return s;}bool fromBase64Encoding(const String& s){static const std::string chars="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";v.clear();unsigned buffer=0;int bits=-8;for(char c:s){if(c=='=')break;auto i=chars.find(c);if(i==std::string::npos){v.clear();return false;}buffer=(buffer<<6)|unsigned(i);bits+=6;if(bits>=0){v.push_back((buffer>>bits)&255);bits-=8;}}return true;}};
-struct XmlElement {String tag;std::map<std::string,String> attrs;XmlElement(String s):tag(s){}void setAttribute(String k,String v){attrs[k]=v;}void setAttribute(String k,int v){attrs[k]=String(v);}int getIntAttribute(String k,int d)const{auto i=attrs.find(k);if(i==attrs.end())return d;try{return std::stoi(i->second);}catch(...){return d;}}String getStringAttribute(String k,String d)const{auto i=attrs.find(k);return i==attrs.end()?d:i->second;}bool getBoolAttribute(String k,bool d)const{return getIntAttribute(k,int(d))!=0;}bool hasAttribute(String k)const{return attrs.count(k)>0;}bool hasTagName(String t)const{return tag==t;}};
-void copyXmlToBinary(const XmlElement& xml,MemoryBlock& b){std::ostringstream out;out<<std::quoted(std::string(xml.tag))<<'\n';for(auto& [k,v]:xml.attrs)out<<std::quoted(k)<<' '<<std::quoted(std::string(v))<<'\n';auto text=out.str();b.v.assign(text.begin(),text.end());}
-std::unique_ptr<XmlElement> getXmlFromBinary(const void* p,int n){std::string s((const char*)p,n);std::istringstream in(s);std::string tag,k,v;if(!(in>>std::quoted(tag)))return {};auto xml=std::make_unique<XmlElement>(tag);while(in>>std::quoted(k)>>std::quoted(v))xml->attrs[k]=v;return xml;}
+struct String:std::string {using std::string::string;using std::string::operator=;String(int n):std::string(std::to_string(n)){}String(std::string s):std::string(s){}bool isEmpty()const{return empty();}};
+struct MemoryBlock {std::vector<uint8> v;void setSize(size_t n){v.resize(n);}size_t getSize()const{return v.size();}void* getData(){return v.data();}const void* getData()const{return v.data();}void append(const void*p,size_t n){auto b=(const uint8*)p;v.insert(v.end(),b,b+n);}};
 struct CriticalSection {mutable std::recursive_mutex m;};struct ScopedLock{const CriticalSection& c;ScopedLock(const CriticalSection& x):c(x){c.m.lock();}~ScopedLock(){c.m.unlock();}};
 struct Time {static inline double now=0;static double getMillisecondCounterHiRes(){return now;}};
 struct MidiMessage {std::vector<uint8> bytes;static MidiMessage createSysExMessage(const uint8*p,int n){MidiMessage m;m.bytes.push_back(0xf0);m.bytes.insert(m.bytes.end(),p,p+n);m.bytes.push_back(0xf7);return m;}};
@@ -30,8 +23,8 @@ struct MidiMessage {std::vector<uint8> bytes;static MidiMessage createSysExMessa
 namespace gp200 {
 using RoutingOrder=std::array<int,11>;
 struct GP200EffectSlot {int blockIndex=0,slotIndex=0;bool enabled=true;juce::uint32 effectId=0x06000003;std::array<float,15> params{};};
-struct GP200Preset {juce::String patchName{"preset"};std::array<GP200EffectSlot,11> effects{};bool isValid=false;RoutingOrder routingOrder{};int fxLoopSend=0,fxLoopReturn=0;};
-struct GP200PresetCodec {static GP200Preset decodeLivePresetDump(const juce::MemoryBlock& b){GP200Preset p;if(b.getSize()<912)return p;p.isValid=true;auto x=(const juce::uint8*)b.getData();p.fxLoopSend=x[106];p.fxLoopReturn=x[107];for(int i=0;i<11;i++){p.routingOrder[i]=x[108+i];p.effects[i].blockIndex=i;std::memcpy(p.effects[i].params.data(),x+effectBlockStart+i*effectBlockSize+paramsOffset,60);}return p;}};
+struct GP200Preset {std::array<GP200EffectSlot,11> effects{};bool isValid=false;RoutingOrder routingOrder{};int fxLoopSend=0,fxLoopReturn=0;};
+struct GP200PresetCodec {static juce::String blockNameForSlotIndex(int){return "BLOCK";}static GP200Preset decodeLivePresetDump(const juce::MemoryBlock& b){GP200Preset p;if(b.getSize()<912)return p;p.isValid=true;auto x=(const juce::uint8*)b.getData();p.fxLoopSend=x[106];p.fxLoopReturn=x[107];for(int i=0;i<11;i++){p.routingOrder[i]=x[108+i];p.effects[i].blockIndex=i;std::memcpy(p.effects[i].params.data(),x+effectBlockStart+i*effectBlockSize+paramsOffset,60);}return p;}};
 struct Scanner {bool pending=false;void cancel(){pending=false;}bool hasPendingRequest(){return pending;}void setCachedName(int,juce::String){}};
 struct MidiConnection {
 int input=0;int* midiInput=&input;
@@ -58,9 +51,6 @@ std::uint64_t routingGeneration=0,slotGeneration=0,routingModeBaseline=0,routing
 double routingNextMs=0,routingDeadlineMs=0,routingQueryMs=0,presetReadStartedMs=0,presetReadResumeMs=0,modePollMs=0;int presetReadRetries=0;bool presetReadIsLive=false;
 juce::String routingTransactionStatus="SPR: idle";
 int irTicks=0,cloneTicks=0,scanTicks=0;bool stopped=false;
-int getCurrentSlot()const{return currentSlot;}
-bool sendPatchVolume(int){return true;}bool sendPatchTempoBpm(int){return true;}bool sendEffectChange(int,juce::uint32){return true;}bool sendEffectOnOff(int,bool){return true;}
-void adoptCurrentPresetSnapshot(int slot,juce::String name,juce::MemoryBlock data){currentSlot=slot;currentPresetName=name;currentPresetDecodedData=data;currentPresetDataIsLive=false;++presetRevision;}
 bool isConnected()const{return midiOutput!=nullptr;}void stopTimer(){stopped=true;}void processIRUpload(){irTicks++;}void processSoundCloneUpload(){cloneTicks++;}void finishModSyncFailure(juce::String){modSyncActive=false;}bool requestCurrentPresetFromGP200(){return sendStateDumpRequestUnlocked();}void processStartupHandshake(){}void processPresetNameScan(){scanTicks++;}
 static juce::String sanitizePresetNameForStore(juce::String x){return x;}static std::vector<juce::uint8> buildStorePresetCommit(int slot,juce::String){return {0xf0,(juce::uint8)slot,0xf7};}
 void processBlendReadback ();
@@ -864,646 +854,249 @@ bool MidiConnection::storeCurrentPresetToGP200 ()
 }
 } // namespace gp200
 
-
-using juce::copyXmlToBinary;using juce::getXmlFromBinary;
-juce::MemoryBlock serialiseOfflineState(gp200::GP200Preset,int,int,int){return {};}
-bool deserialiseOfflineState(juce::MemoryBlock,gp200::GP200Preset&,int&,int&,int&){return false;}
-struct AudioPluginAudioProcessor {
- struct GP200PresetSnapshot {int slot=-1;juce::String name="unknown",displayName;juce::MemoryBlock data;int routingMode=-1;std::uint64_t revision=0;};
- struct GP200PresetRecallSnapshot {juce::MemoryBlock data;juce::String name;int routingMode=-1;};
- std::array<GP200PresetSnapshot,2> savedGP200PresetSnapshots;mutable juce::CriticalSection stateLock;
- int savedGP200Slot=-1,offlinePatchVolume=50,offlinePatchPan=0,offlinePatchTempo=120;juce::String savedGP200PresetName="unknown";gp200::GP200Preset offlinePreset;bool offlinePresetDirty=false;std::uint64_t offlinePresetRevision=0;
- static bool isValidSnapshotIndex(int i){return i>=0&&i<2;}static bool isUsefulPresetName(juce::String s){return !s.trim().empty()&&s!="unknown";}
- void setGP200PresetSnapshotState(int,int,const juce::String&,const juce::MemoryBlock&,int=-1);
- GP200PresetRecallSnapshot getGP200PresetRecallSnapshot(int)const;
- void getStateInformation(juce::MemoryBlock&);void setStateInformation(const void*,int);bool hasSavedGP200PresetData(int)const;
- void notifyOfflineStateChanged(){}
-};
+namespace gp200 {struct Param {int idx;};struct ParamSet {int count;const Param* params;};struct GP200EffectParamDatabase {static const ParamSet* findParamsForEffect(juce::uint32,juce::String){static const Param p[]{ {0} };static const ParamSet s{1,p};return &s;}};}
+namespace juce { inline constexpr int dontSendNotification=0; }
+struct BlendSlider { double value=50; bool enabled=false,visible=false,down=false; void setVisible(bool x){visible=x;} void setEnabled(bool x){enabled=x;} bool isMouseButtonDown()const{return down;} void setValue(double x,int){value=x;} };
+struct BlendLabel { bool visible=false;void setVisible(bool x){visible=x;}void setTooltip(const char*){} };
 struct AudioPluginAudioProcessorEditor {
- AudioPluginAudioProcessor& processorRef;gp200::MidiConnection& midiConnection;explicit AudioPluginAudioProcessorEditor(AudioPluginAudioProcessor& p,gp200::MidiConnection& m):processorRef(p),midiConnection(m){}
- int selected=0;static constexpr int idleTimerHz=20,restoreTimerHz=100;
- struct Slider {int value=50;int getValue(){return value;}void setValue(int v,int){value=v;}}patchVolumeSlider,panSlider,tempoSlider;
- struct Edit {juce::String text="preset";juce::String getText(){return text;}void setText(juce::String s,int){text=s;}}presetNameEditor;
- gp200::GP200Preset offlinePreset;bool offlinePresetDirty=false;std::uint64_t offlinePresetRevision=0;int offlinePatchVolume=50,offlinePatchPan=0,offlinePatchTempo=120;
- juce::String effectsStatusText,effectBlocksSignature,effectBlocksDataSignature,patchVolumeSourceSignature,presetNameEditorSignature;
+ gp200::MidiConnection midiConnection;
+ BlendSlider chainBlendSlider;BlendLabel chainBlendLabel;
+ bool chainBlendQueued=false,presetRestoreInProgress=false;int chainBlendSlot=-1,sprDeviceSlot=0,sprDeviceMode=0x85;float chainBlendQueuedValue=50;
+ void syncChainBlendControls();
  enum class PresetRestoreStepType {PatchVolume,PatchTempo,EffectChange,ParamChange,ToggleEffect,ReorderEffects,RoutingMode};
  struct PresetRestoreStep {PresetRestoreStepType type=PresetRestoreStepType::ParamChange;int blockIndex=-1,paramIndex=-1;juce::uint32 effectId=0;float value=0;bool shouldBeOn=false;gp200::RoutingOrder routingOrder{};int fxLoopSend=4,fxLoopReturn=4,routingMode=-1;};
- std::vector<PresetRestoreStep> presetRestoreSteps;int presetRestoreStepIndex=0;bool presetRestoreInProgress=false;
- juce::MemoryBlock presetRestoreSnapshotData;int presetRestoreSlot=-1;juce::String presetRestoreName;int presetRestoreRoutingMode=-1;bool presetRestoreRoutingMetadataFromDaw=false;double presetRestoreRoutingNotBeforeMs=0;
- bool hasSavedBlockEnabledStates=false,allBlocksAreTemporarilyOff=false;int savedBlockEnabledSlot=-1;
- int getSelectedCompareSnapshotIndex(){return selected;}juce::String getSelectedCompareSnapshotLabel(){return selected==0?"A":"B";}
- static bool isUsefulPresetName(juce::String s){return !s.empty()&&s!="unknown";}
- static juce::MemoryBlock serialiseOfflineSnapshot(gp200::GP200Preset,int,int,int){juce::MemoryBlock b;b.setSize(100);return b;}
- static bool deserialiseOfflineSnapshot(juce::MemoryBlock,gp200::GP200Preset&,int&,int&,int&){return false;}
- void repaint(){}void startTimerHz(int){}void updateSnapshotNameEditor(){}void updateEffectBlocksUI(){}void updateAllBlocksOffButtonText(){}
- // The parameter/effect replay is unchanged production code; only represent its final reorder here.
- void buildFullPresetRestoreSteps(gp200::GP200Preset p,juce::MemoryBlock){presetRestoreSteps.clear();PresetRestoreStep s;s.type=PresetRestoreStepType::ReorderEffects;s.routingOrder=p.routingOrder;s.fxLoopSend=p.fxLoopSend;s.fxLoopReturn=p.fxLoopReturn;presetRestoreSteps.push_back(s);}
- void saveCurrentPresetToProject();void startFullPresetRestoreFromSnapshot();void processFullPresetRestoreStep();void finishFullPresetRestore();
+ std::vector<PresetRestoreStep> presetRestoreSteps;
+ void buildFullPresetRestoreSteps(const gp200::GP200Preset&,const juce::MemoryBlock&);
 };
-void AudioPluginAudioProcessor::setGP200PresetSnapshotState (
-    int snapshotIndex,
-    int slot,
-    const juce::String& presetName,
-    const juce::MemoryBlock& presetData,
-    int routingMode)
+void AudioPluginAudioProcessorEditor::buildFullPresetRestoreSteps (const gp200::GP200Preset& preset,
+                                                                   const juce::MemoryBlock& presetData)
 {
-    if (!isValidSnapshotIndex (snapshotIndex))
-        return;
+    presetRestoreSteps.clear ();
 
-    const juce::ScopedLock lock (stateLock);
-
-    auto& snapshot =
-        savedGP200PresetSnapshots[static_cast<std::size_t> (snapshotIndex)];
-
-    snapshot.slot = slot;
-
-    if (isUsefulPresetName (presetName))
-        snapshot.name = presetName.trim ();
-    else
-        snapshot.name = "unknown";
-
-    // A newly saved snapshot starts with a useful independent display name.
-    // The original preset name remains in snapshot.name for legacy behaviour,
-    // while displayName is what the A/B UI shows and allows the user to edit.
-    snapshot.displayName = isUsefulPresetName (presetName)
-                               ? presetName.trim ()
-                               : juce::String (snapshotIndex == 0 ? "Snapshot A" : "Snapshot B");
-
-    snapshot.data = presetData;
-    // Do not inherit routing when replacing a snapshot with offline/old data.
-    snapshot.routingMode = slot >= 0 && presetData.getSize () > 0 && gp200::validRoutingModeValue (routingMode)
-        ? routingMode : -1;
-    ++snapshot.revision;
-}
-AudioPluginAudioProcessor::GP200PresetRecallSnapshot AudioPluginAudioProcessor::getGP200PresetRecallSnapshot (int snapshotIndex) const
-{
-    if (!isValidSnapshotIndex (snapshotIndex)) return {};
-    const juce::ScopedLock lock (stateLock);
-    const auto& snapshot = savedGP200PresetSnapshots[static_cast<std::size_t> (snapshotIndex)];
-    return { snapshot.data, snapshot.name, snapshot.routingMode };
-}
-void AudioPluginAudioProcessor::getStateInformation (
-    juce::MemoryBlock& destData)
-{
-    auto xml =
-        std::make_unique<juce::XmlElement> ("GP200StudioState");
-
+    auto addParameterStep = [this] (const gp200::GP200EffectSlot& effect, int paramIndex)
     {
-        const juce::ScopedLock lock (stateLock);
+        if (effect.blockIndex < 0 || effect.blockIndex >= static_cast<int> (gp200::effectBlockCount))
+            return;
 
-        xml->setAttribute ("version", 8);
+        if (paramIndex < 0 || paramIndex >= static_cast<int> (effect.params.size ()))
+            return;
 
-        xml->setAttribute ("slotReferenceSlot", savedGP200Slot);
-        xml->setAttribute ("slotReferenceName",
-                           savedGP200PresetName);
+        const auto value = effect.params[static_cast<std::size_t> (paramIndex)];
 
-        const auto& snapshotA = savedGP200PresetSnapshots[0];
-        const auto& snapshotB = savedGP200PresetSnapshots[1];
+        if (!std::isfinite (value))
+            return;
 
-        xml->setAttribute ("snapshotASlot", snapshotA.slot);
-        xml->setAttribute ("snapshotARoutingMode", snapshotA.routingMode);
-        xml->setAttribute ("snapshotAName", snapshotA.name);
-        xml->setAttribute ("snapshotADisplayName", snapshotA.displayName);
-        xml->setAttribute (
-            "snapshotADataBase64",
-            snapshotA.data.toBase64Encoding ());
+        PresetRestoreStep step;
+        step.type = PresetRestoreStepType::ParamChange;
+        step.blockIndex = effect.blockIndex;
+        step.paramIndex = paramIndex;
+        step.effectId = effect.effectId;
+        step.value = value;
 
-        xml->setAttribute ("snapshotBSlot", snapshotB.slot);
-        xml->setAttribute ("snapshotBRoutingMode", snapshotB.routingMode);
-        xml->setAttribute ("snapshotBName", snapshotB.name);
-        xml->setAttribute ("snapshotBDisplayName", snapshotB.displayName);
-        xml->setAttribute (
-            "snapshotBDataBase64",
-            snapshotB.data.toBase64Encoding ());
+        presetRestoreSteps.push_back (step);
+    };
 
-        const auto offlineData = serialiseOfflineState (
-            offlinePreset,
-            offlinePatchVolume,
-            offlinePatchPan,
-            offlinePatchTempo);
-        xml->setAttribute ("offlinePresetDataBase64",
-                           offlineData.toBase64Encoding ());
-        xml->setAttribute ("offlinePresetDirty", offlinePresetDirty);
-    }
-
-    copyXmlToBinary (*xml, destData);
-}
-void AudioPluginAudioProcessor::setStateInformation (
-    const void* data,
-    int sizeInBytes)
-{
-    const auto xml = getXmlFromBinary (data, sizeInBytes);
-
-    if (xml == nullptr)
-        return;
-
-    if (!xml->hasTagName ("GP200StudioState"))
-        return;
-
-    const juce::ScopedLock lock (stateLock);
-
-    savedGP200Slot = xml->getIntAttribute (
-        "slotReferenceSlot",
-        xml->getIntAttribute ("gp200Slot", -1));
-
-    savedGP200PresetName = xml->getStringAttribute (
-        "slotReferenceName",
-        xml->getStringAttribute (
-            "gp200PresetName",
-            "unknown"));
-
-    for (auto& snapshot : savedGP200PresetSnapshots)
+    if (presetData.getSize () > gp200::patchVolumeOffset)
     {
-        snapshot.slot = -1;
-        snapshot.name = "unknown";
-        snapshot.displayName.clear ();
-        snapshot.data.setSize (0);
-        snapshot.routingMode = -1;
-        ++snapshot.revision;
-    }
+        const auto* data = static_cast<const juce::uint8*> (presetData.getData ());
 
-    const auto offlineDataBase64 =
-        xml->getStringAttribute ("offlinePresetDataBase64", {});
-
-    if (offlineDataBase64.isNotEmpty ())
-    {
-        juce::MemoryBlock offlineData;
-        if (offlineData.fromBase64Encoding (offlineDataBase64))
+        if (data != nullptr)
         {
-            gp200::GP200Preset restoredPreset;
-            int restoredVolume = 50;
-            int restoredPan = 0;
-            int restoredTempo = 120;
+            PresetRestoreStep step;
+            step.type = PresetRestoreStepType::PatchVolume;
+            step.value =
+                static_cast<float> (juce::jlimit (0, 100, static_cast<int> (data[gp200::patchVolumeOffset])));
 
-            if (deserialiseOfflineState (offlineData,
-                                         restoredPreset,
-                                         restoredVolume,
-                                         restoredPan,
-                                         restoredTempo))
+            presetRestoreSteps.push_back (step);
+        }
+    }
+
+    if (presetData.getSize () > gp200::patchTempoOffset)
+    {
+        const auto* data = static_cast<const juce::uint8*> (presetData.getData ());
+
+        if (data != nullptr)
+        {
+            PresetRestoreStep step;
+            step.type = PresetRestoreStepType::PatchTempo;
+            step.value =
+                static_cast<float> (juce::jlimit (40, 250, static_cast<int> (data[gp200::patchTempoOffset])));
+
+            presetRestoreSteps.push_back (step);
+        }
+    }
+
+    for (const auto& effect : preset.effects)
+    {
+        if (effect.blockIndex < 0 || effect.blockIndex >= static_cast<int> (gp200::effectBlockCount))
+            continue;
+
+        PresetRestoreStep step;
+        step.type = PresetRestoreStepType::EffectChange;
+        step.blockIndex = effect.blockIndex;
+        step.effectId = effect.effectId;
+
+        presetRestoreSteps.push_back (step);
+    }
+
+    auto addKnownParameterPass = [this, &preset, &addParameterStep]
+    {
+        for (const auto& effect : preset.effects)
+        {
+            if (effect.blockIndex < 0 || effect.blockIndex >= static_cast<int> (gp200::effectBlockCount))
+                continue;
+
+            const auto* paramSet = gp200::GP200EffectParamDatabase::findParamsForEffect (
+                effect.effectId, gp200::GP200PresetCodec::blockNameForSlotIndex (effect.blockIndex));
+
+            // Only restore parameters that are known for this effect.
+            // Do not send reserved/unused parameter slots from the raw 15-float dump.
+            if (paramSet == nullptr || paramSet->count <= 0 || paramSet->params == nullptr)
+                continue;
+
+            for (int i = 0; i < paramSet->count; ++i)
+                addParameterStep (effect, paramSet->params[i].idx);
+        }
+    };
+
+    auto resendFirstKnownParameter = [this, &preset, &addParameterStep]
+    {
+        for (const auto& effect : preset.effects)
+        {
+            if (effect.blockIndex < 0 || effect.blockIndex >= static_cast<int> (gp200::effectBlockCount))
+                continue;
+
+            const auto* paramSet = gp200::GP200EffectParamDatabase::findParamsForEffect (
+                effect.effectId, gp200::GP200PresetCodec::blockNameForSlotIndex (effect.blockIndex));
+
+            if (paramSet == nullptr || paramSet->count <= 0 || paramSet->params == nullptr)
+                continue;
+
+            for (int i = 0; i < paramSet->count; ++i)
             {
-                offlinePreset = std::move (restoredPreset);
-                offlinePatchVolume = restoredVolume;
-                offlinePatchPan = restoredPan;
-                offlinePatchTempo = restoredTempo;
-                offlinePresetDirty = xml->getBoolAttribute ("offlinePresetDirty", false);
-                ++offlinePresetRevision;
+                const auto paramIndex = paramSet->params[i].idx;
+
+                if (paramIndex >= 0 && paramIndex < static_cast<int> (effect.params.size ()))
+                {
+                    addParameterStep (effect, paramIndex);
+                    break;
+                }
             }
         }
-    }
+    };
 
-    const auto hasNewSnapshotFormat =
-        xml->hasAttribute ("snapshotASlot") ||
-        xml->hasAttribute ("snapshotAName") ||
-        xml->hasAttribute ("snapshotADataBase64") ||
-        xml->hasAttribute ("snapshotBSlot") ||
-        xml->hasAttribute ("snapshotBName") ||
-        xml->hasAttribute ("snapshotBDataBase64");
+    addKnownParameterPass ();
 
-    if (hasNewSnapshotFormat)
+    // The GP-200 can ignore the first value after an effect type change.
+    // Re-send the first known parameter for each effect. For CAB/User IR this is P1,
+    // not P0, so we avoid writing reserved IR internals.
+    resendFirstKnownParameter ();
+
+    for (const auto& effect : preset.effects)
     {
-        auto& snapshotA = savedGP200PresetSnapshots[0];
-        auto& snapshotB = savedGP200PresetSnapshots[1];
+        if (effect.blockIndex < 0 || effect.blockIndex >= static_cast<int> (gp200::effectBlockCount))
+            continue;
 
-        snapshotA.slot =
-            xml->getIntAttribute ("snapshotASlot", -1);
+        PresetRestoreStep step;
+        step.type = PresetRestoreStepType::ToggleEffect;
+        step.blockIndex = effect.blockIndex;
+        step.shouldBeOn = effect.enabled;
 
-        snapshotA.name =
-            xml->getStringAttribute (
-                "snapshotAName",
-                "unknown");
-
-        snapshotA.displayName =
-            xml->getStringAttribute (
-                "snapshotADisplayName",
-                snapshotA.name);
-
-        const auto snapshotADataBase64 =
-            xml->getStringAttribute (
-                "snapshotADataBase64",
-                {});
-
-        if (snapshotADataBase64.isNotEmpty ())
-        {
-            snapshotA.data.fromBase64Encoding (
-                snapshotADataBase64);
-        }
-        const int modeA = xml->getIntAttribute ("snapshotARoutingMode", -1);
-        snapshotA.routingMode = snapshotA.slot >= 0 && snapshotA.data.getSize () > 0
-            && gp200::validRoutingModeValue (modeA) ? modeA : -1;
-
-        snapshotB.slot =
-            xml->getIntAttribute ("snapshotBSlot", -1);
-
-        snapshotB.name =
-            xml->getStringAttribute (
-                "snapshotBName",
-                "unknown");
-
-        snapshotB.displayName =
-            xml->getStringAttribute (
-                "snapshotBDisplayName",
-                snapshotB.name);
-
-        const auto snapshotBDataBase64 =
-            xml->getStringAttribute (
-                "snapshotBDataBase64",
-                {});
-
-        if (snapshotBDataBase64.isNotEmpty ())
-        {
-            snapshotB.data.fromBase64Encoding (
-                snapshotBDataBase64);
-        }
-        const int modeB = xml->getIntAttribute ("snapshotBRoutingMode", -1);
-        snapshotB.routingMode = snapshotB.slot >= 0 && snapshotB.data.getSize () > 0
-            && gp200::validRoutingModeValue (modeB) ? modeB : -1;
-
-        return;
+        presetRestoreSteps.push_back (step);
     }
 
-    // Compatibilidad con proyectos que guardaban un único snapshot.
-    auto& snapshotA = savedGP200PresetSnapshots[0];
+    addKnownParameterPass ();
 
-    snapshotA.slot = xml->getIntAttribute (
-        "presetSnapshotSlot",
-        xml->getIntAttribute ("gp200Slot", -1));
+    auto metadataEffect = preset.effects[10];
+    const bool independent = gp200::hasIndependentBlend (preset);
+    metadataEffect.params[13] = independent ? gp200::blendTagFloat () : 0.0f;
+    metadataEffect.params[14] = independent ? preset.effects[10].params[14] : 0.0f;
+    addParameterStep (metadataEffect,14);
+    addParameterStep (metadataEffect,13);
 
-    snapshotA.name = xml->getStringAttribute (
-        "presetSnapshotName",
-        xml->getStringAttribute (
-            "gp200PresetName",
-            "unknown"));
-    snapshotA.displayName = snapshotA.name;
+    PresetRestoreStep reorderStep;
+    reorderStep.type = PresetRestoreStepType::ReorderEffects;
+    reorderStep.routingOrder = preset.routingOrder;
+    reorderStep.fxLoopSend = preset.fxLoopSend;
+    reorderStep.fxLoopReturn = preset.fxLoopReturn;
 
-    auto oldPresetDataBase64 =
-        xml->getStringAttribute (
-            "presetSnapshotDataBase64",
-            {});
-
-    if (oldPresetDataBase64.isEmpty ())
-    {
-        oldPresetDataBase64 =
-            xml->getStringAttribute (
-                "gp200PresetDataBase64",
-                {});
-    }
-
-    if (oldPresetDataBase64.isNotEmpty ())
-    {
-        snapshotA.data.fromBase64Encoding (
-            oldPresetDataBase64);
-    }
+    presetRestoreSteps.push_back (reorderStep);
 }
-bool AudioPluginAudioProcessor::hasSavedGP200PresetData (
-    int snapshotIndex) const
+void AudioPluginAudioProcessorEditor::syncChainBlendControls ()
 {
-    if (!isValidSnapshotIndex (snapshotIndex))
-        return false;
-
-    const juce::ScopedLock lock (stateLock);
-
-    return savedGP200PresetSnapshots[
-        static_cast<std::size_t> (snapshotIndex)].data.getSize () > 0;
-}
-void AudioPluginAudioProcessorEditor::saveCurrentPresetToProject ()
-{
-    if (midiConnection.isConnected () && !midiConnection.canSaveCurrentPreset ())
-    { effectsStatusText = "Save/export blocked: wait for fresh device preset and routing confirmation"; repaint (); return; }
-
-    const auto snapshotIndex = getSelectedCompareSnapshotIndex ();
-
-    if (!midiConnection.isConnected ())
+    const auto state = midiConnection.getRoutingStateSnapshot ();
+    if (chainBlendSlot != state.slot || !state.connected)
+    { chainBlendQueued = false; chainBlendSlot = state.slot; }
+    const bool chain = state.connected && state.slot == sprDeviceSlot
+        && gp200::routingModeIsChain (sprDeviceMode);
+    const auto preset = gp200::GP200PresetCodec::decodeLivePresetDump (state.data);
+    const bool marked = gp200::hasIndependentBlend (preset);
+    const bool pending = midiConnection.isBlendWritePending ();
+    chainBlendLabel.setVisible (chain);
+    chainBlendSlider.setVisible (chain);
+    const bool ready = chain && state.live && state.modeFresh && preset.isValid
+        && !presetRestoreInProgress && !midiConnection.isRoutingTransactionBusy ();
+    // Keep dragging available while the previous write awaits a physical readback.
+    chainBlendSlider.setEnabled (ready || (chain && pending && !presetRestoreInProgress
+        && !midiConnection.isRoutingTransactionBusy ()));
+    if (!chain || presetRestoreInProgress || midiConnection.isRoutingTransactionBusy ())
+        chainBlendQueued = false;
+    if (ready && !pending && chainBlendQueued)
     {
-        const auto visiblePresetName =
-            presetNameEditor.getText ().trim ().substring (0, gp200::presetNameMaxLength);
-
-        if (visiblePresetName.isNotEmpty ())
-            offlinePreset.patchName = visiblePresetName;
-
-        const auto snapshotData = serialiseOfflineSnapshot (
-            offlinePreset,
-            static_cast<int> (patchVolumeSlider.getValue ()),
-            static_cast<int> (panSlider.getValue ()),
-            static_cast<int> (tempoSlider.getValue ()));
-
-        processorRef.setGP200PresetSnapshotState (
-            snapshotIndex,
-            -1,
-            offlinePreset.patchName,
-            snapshotData);
-
-        offlinePresetDirty = false;
-        effectsStatusText = "Saved offline preset snapshot " +
-                            getSelectedCompareSnapshotLabel () +
-                            " to DAW";
-        updateSnapshotNameEditor ();
-        updateEffectBlocksUI ();
-        repaint ();
-        return;
+        // The first user edit initializes independent BLEND; merely loading does not.
+        if (midiConnection.sendIndependentBlend (chainBlendQueuedValue, !marked, chainBlendSlot))
+            chainBlendQueued = false;
     }
-
-    const auto deviceState = midiConnection.getRoutingStateSnapshot ();
-    if (!deviceState.canSave) { effectsStatusText = "Save blocked: device state changed"; repaint (); return; }
-    const auto currentSlot = deviceState.slot;
-    const auto presetData = deviceState.data;
-    const auto preset = gp200::GP200PresetCodec::decodeLivePresetDump (presetData);
-
-    if (presetData.getSize () == 0)
+    if (!chainBlendQueued && !midiConnection.isBlendWritePending ()
+        && !chainBlendSlider.isMouseButtonDown () && preset.isValid)
     {
-        effectsStatusText = "Save Preset failed: no full preset data captured yet";
-        repaint ();
-        return;
+        const float value = marked ? preset.effects[10].params[14]
+            : gp200::legacyVolumeIsBlend (preset) ? preset.effects[10].params[0] : 50.0f;
+        chainBlendSlider.setValue (std::clamp (value, 0.0f, 100.0f), juce::dontSendNotification);
     }
-
-    processorRef.setGP200PresetSnapshotState (
-        snapshotIndex,
-        currentSlot,
-        preset.patchName,
-        presetData,
-        deviceState.mode.mode);
-
-    effectsStatusText = "Saved full preset snapshot " +
-                        getSelectedCompareSnapshotLabel () +
-                        " to DAW";
-    updateSnapshotNameEditor ();
-    updateEffectBlocksUI ();
-    repaint ();
-}
-void AudioPluginAudioProcessorEditor::startFullPresetRestoreFromSnapshot ()
-{
-    if (presetRestoreInProgress)
-    {
-        effectsStatusText = "Recall Preset: restore already in progress";
-        repaint ();
-        return;
-    }
-	const auto snapshotIndex =
-    getSelectedCompareSnapshotIndex ();
-
-const auto snapshotLabel =
-    getSelectedCompareSnapshotLabel ();
-
-    if (!processorRef.hasSavedGP200PresetData (
-        snapshotIndex))
-    {
-        effectsStatusText =
-    "Recall snapshot " + snapshotLabel +
-    " failed: no preset saved";
-        repaint ();
-        return;
-    }
-
-    const auto savedSnapshot = processorRef.getGP200PresetRecallSnapshot (snapshotIndex);
-    const auto presetData = savedSnapshot.data;
-
-    if (presetData.getSize () == 0)
-    {
-        effectsStatusText = "Recall Preset failed: saved preset data is empty";
-        repaint ();
-        return;
-    }
-
-    if (!midiConnection.isConnected ())
-    {
-        int restoredVolume = 50;
-        int restoredPan = 0;
-        int restoredTempo = 120;
-        gp200::GP200Preset restoredPreset;
-
-        if (!deserialiseOfflineSnapshot (presetData,
-                                         restoredPreset,
-                                         restoredVolume,
-                                         restoredPan,
-                                         restoredTempo))
-        {
-            effectsStatusText =
-                "Recall snapshot " + snapshotLabel +
-                " failed: it was saved from a connected GP-200";
-            repaint ();
-            return;
-        }
-
-        offlinePreset = std::move (restoredPreset);
-        offlinePresetDirty = false;
-        ++offlinePresetRevision;
-
-        offlinePatchVolume = restoredVolume;
-        offlinePatchPan = restoredPan;
-        offlinePatchTempo = restoredTempo;
-        patchVolumeSlider.setValue (offlinePatchVolume, juce::dontSendNotification);
-        panSlider.setValue (offlinePatchPan, juce::dontSendNotification);
-        tempoSlider.setValue (offlinePatchTempo, juce::dontSendNotification);
-        presetNameEditor.setText (offlinePreset.patchName, juce::dontSendNotification);
-
-        effectBlocksSignature.clear ();
-        effectBlocksDataSignature.clear ();
-        patchVolumeSourceSignature.clear ();
-        presetNameEditorSignature.clear ();
-
-        processorRef.notifyOfflineStateChanged ();
-        effectsStatusText = "Recalled offline preset snapshot " +
-                            snapshotLabel +
-                            " from DAW";
-        updateEffectBlocksUI ();
-        repaint ();
-        return;
-    }
-
-    const auto preset = gp200::GP200PresetCodec::decodeLivePresetDump (presetData);
-
-    if (!preset.isValid)
-    {
-        effectsStatusText = "Recall Preset failed: saved preset data could not be decoded";
-        repaint ();
-        return;
-    }
-
-    const auto targetSlot = midiConnection.getCurrentSlot ();
-
-    if (targetSlot < 0 || targetSlot > 255)
-    {
-        effectsStatusText = "Recall Preset failed: current GP-200 slot is unknown";
-        repaint ();
-        return;
-    }
-
-    auto savedName = savedSnapshot.name;
-
-    if (!isUsefulPresetName (savedName))
-        savedName = preset.patchName;
-
-    // Important: do not change slot here.
-    // Recall Preset restores the saved sound into the currently selected GP-200 slot,
-    // so the user can then press Store preset and save it wherever they are.
-    presetRestoreSnapshotData = presetData;
-    presetRestoreSlot = targetSlot;
-    presetRestoreName = savedName;
-
-    presetRestoreRoutingMetadataFromDaw = true;
-    presetRestoreRoutingMode = savedSnapshot.routingMode;
-    presetRestoreRoutingNotBeforeMs = 0;
-    if (gp200::validRoutingModeValue (presetRestoreRoutingMode))
-    {
-        const int boundary = gp200::isExtendedRoutingMode (presetRestoreRoutingMode)
-            ? presetRestoreRoutingMode & 15 : preset.fxLoopSend;
-        if (!gp200::validFlexibleRouting (preset.routingOrder, preset.fxLoopSend, boundary, preset.fxLoopReturn))
-        {
-            effectsStatusText = "Recall Preset failed: saved routing mode/P does not match Send/Return";
-            repaint (); return;
-        }
-    }
-    buildFullPresetRestoreSteps (preset, presetData);
-    if (gp200::validRoutingModeValue (presetRestoreRoutingMode))
-    {
-        PresetRestoreStep modeStep;
-        modeStep.type = PresetRestoreStepType::RoutingMode;
-        modeStep.routingMode = presetRestoreRoutingMode;
-        presetRestoreSteps.push_back (modeStep);
-    }
-
-    if (presetRestoreSteps.empty ())
-    {
-        effectsStatusText = "Recall Preset failed: no restore steps were generated";
-        repaint ();
-        return;
-    }
-
-    presetRestoreStepIndex = 0;
-    midiConnection.beginPresetRestoreTransaction ();
-    presetRestoreInProgress = true;
-    startTimerHz (restoreTimerHz);
-
-    effectBlocksSignature.clear ();
-        effectBlocksDataSignature.clear ();
-    patchVolumeSourceSignature.clear ();
-    presetNameEditorSignature.clear ();
-
-    effectsStatusText = "Recall Preset: restoring snapshot into current slot 0/" +
-                        juce::String (static_cast<int> (presetRestoreSteps.size ()));
-
-    updateEffectBlocksUI ();
-    repaint ();
-}
-void AudioPluginAudioProcessorEditor::processFullPresetRestoreStep ()
-{
-    if (!presetRestoreInProgress)
-        return;
-
-    if (presetRestoreStepIndex >= static_cast<int> (presetRestoreSteps.size ()))
-    {
-        finishFullPresetRestore ();
-        return;
-    }
-
-    const auto& step = presetRestoreSteps[static_cast<std::size_t> (presetRestoreStepIndex)];
-
-    // The final routing write follows the existing reorder, with the same pacing as SPR.
-    if (step.type == PresetRestoreStepType::RoutingMode
-        && juce::Time::getMillisecondCounterHiRes () < presetRestoreRoutingNotBeforeMs) return;
-
-    bool sent = false;
-
-    switch (step.type)
-    {
-    case PresetRestoreStepType::PatchVolume:
-        sent = midiConnection.sendPatchVolume (static_cast<int> (std::round (step.value)));
-        break;
-
-    case PresetRestoreStepType::PatchTempo:
-        sent = midiConnection.sendPatchTempoBpm (static_cast<int> (std::round (step.value)));
-        break;
-
-    case PresetRestoreStepType::EffectChange:
-        sent = midiConnection.sendEffectChange (step.blockIndex, step.effectId);
-        break;
-
-    case PresetRestoreStepType::ParamChange:
-        sent = midiConnection.sendParamChange (step.blockIndex, step.paramIndex, step.effectId, step.value);
-        break;
-
-    case PresetRestoreStepType::ToggleEffect:
-        sent = midiConnection.sendEffectOnOff (step.blockIndex, step.shouldBeOn);
-        break;
-
-    case PresetRestoreStepType::ReorderEffects:
-        sent = midiConnection.sendReorderEffects (step.routingOrder, step.fxLoopSend, step.fxLoopReturn);
-        if (sent && gp200::validRoutingModeValue (presetRestoreRoutingMode))
-            presetRestoreRoutingNotBeforeMs = juce::Time::getMillisecondCounterHiRes () + 150.0;
-        break;
-
-    case PresetRestoreStepType::RoutingMode:
-        sent = midiConnection.sendPresetRestoreRoutingMode (presetRestoreSlot, step.routingMode);
-        break;
-    }
-
-    if (!sent)
-    {
-        presetRestoreInProgress = false;
-        midiConnection.endPresetRestoreTransaction ();
-        startTimerHz (idleTimerHz);
-        effectsStatusText = "Recall Preset failed: " + midiConnection.getLastMessageText ();
-        return;
-    }
-
-    ++presetRestoreStepIndex;
-
-    effectsStatusText = "Recall Preset: restoring snapshot into current slot " +
-                        juce::String (presetRestoreStepIndex) + "/" +
-                        juce::String (static_cast<int> (presetRestoreSteps.size ()));
-
-    if (presetRestoreStepIndex >= static_cast<int> (presetRestoreSteps.size ()))
-        finishFullPresetRestore ();
-}
-void AudioPluginAudioProcessorEditor::finishFullPresetRestore ()
-{
-    presetRestoreInProgress = false;
-    startTimerHz (idleTimerHz);
-
-    midiConnection.adoptCurrentPresetSnapshot (
-        presetRestoreSlot, presetRestoreName, presetRestoreSnapshotData);
-    midiConnection.endPresetRestoreTransaction (presetRestoreRoutingMode);
-
-    presetRestoreSteps.clear ();
-    presetRestoreStepIndex = 0;
-
-    effectBlocksSignature.clear ();
-        effectBlocksDataSignature.clear ();
-    patchVolumeSourceSignature.clear ();
-    presetNameEditorSignature.clear ();
-
-    hasSavedBlockEnabledStates = false;
-    allBlocksAreTemporarilyOff = false;
-    savedBlockEnabledSlot = -1;
-    updateAllBlocksOffButtonText ();
-
-    if (gp200::validRoutingModeValue (presetRestoreRoutingMode))
-        effectsStatusText = "Recall Preset: preset and Series/Parallel/P sent; waiting for device confirmation";
-    else if (presetRestoreRoutingMetadataFromDaw)
-        effectsStatusText = "Recall Preset: preset restored; this snapshot has no saved Series/Parallel/P metadata";
-    else
-        effectsStatusText = "Recall Preset: snapshot restored into current slot. Press Store preset to save it here.";
-    presetRestoreRoutingMetadataFromDaw = false;
-    presetRestoreRoutingMode = -1;
-    presetRestoreRoutingNotBeforeMs = 0;
-
-    updateEffectBlocksUI ();
+    chainBlendLabel.setTooltip ("A / B blend position. The first edit initializes independent BLEND. VOL retains volume. Requires FIX35 firmware.");
 }
 
 using namespace gp200;
-juce::MemoryBlock data(int s=2,int r=8){juce::MemoryBlock b;b.setSize(1176);auto p=(juce::uint8*)b.getData();p[106]=s;p[107]=r;for(int i=0;i<11;i++)p[108+i]=i;p[16]=71;return b;}
-void init(MidiConnection& m,int mode=0x85,int s=2,int r=8){m.currentPresetDecodedData=data(s,r);m.routingModeSnapshot.mode=mode;juce::Time::now=0;}
-void fresh(MidiConnection& m,const juce::MemoryBlock& wanted,int value){m.currentPresetDecodedData=wanted;m.currentPresetDataIsLive=true;++m.livePresetRevision;++m.presetRevision;m.processRoutingTransaction();assert(m.routingStage==5&&!m.canSaveCurrentPreset());m.routingModeSnapshot.mode=value;m.routingModeSnapshot.slot=m.currentSlot;++m.routingModeSnapshot.revision;m.processRoutingTransaction();m.processBlendReadback();assert(m.routingStage==0&&m.canSaveCurrentPreset());}
+juce::MemoryBlock data(){juce::MemoryBlock b;b.setSize(1176);b.v[106]=2;b.v[107]=8;for(int i=0;i<11;i++)b.v[108+i]=i;return b;}
+void field(juce::MemoryBlock& b,int param,float value){std::memcpy(b.v.data()+effectBlockStart+10*effectBlockSize+paramsOffset+param*4,&value,4);}
 int main(){int count=0;
-for(int slot:{0,1})for(int mode=0;mode<256;mode++) if(validRoutingModeValue(mode)){AudioPluginAudioProcessor p;MidiConnection m;init(m,mode,0,11);AudioPluginAudioProcessorEditor e(p,m);e.selected=slot;e.saveCurrentPresetToProject();auto saved=p.getGP200PresetRecallSnapshot(slot);assert(saved.routingMode==mode&&saved.data.v==m.currentPresetDecodedData.v);assert(p.getGP200PresetRecallSnapshot(1-slot).routingMode==-1);juce::MemoryBlock state;p.getStateInformation(state);AudioPluginAudioProcessor reopened;reopened.setStateInformation(state.getData(),state.getSize());auto recovered=reopened.getGP200PresetRecallSnapshot(slot);assert(recovered.routingMode==mode&&recovered.data.v==saved.data.v);m.routingModeSnapshot.mode=mode==0x85?0x95:0x85;AudioPluginAudioProcessorEditor recalled(reopened,m);recalled.selected=slot;recalled.startFullPresetRestoreFromSnapshot();assert(recalled.presetRestoreInProgress&&recalled.presetRestoreSteps.size()==2);assert(recalled.presetRestoreSteps.back().routingMode==mode);recalled.processFullPresetRestoreStep();auto n=m.output.messages.size();recalled.processFullPresetRestoreStep();assert(m.output.messages.size()==n&&recalled.presetRestoreInProgress);juce::Time::now=150;recalled.processFullPresetRestoreStep();assert(!recalled.presetRestoreInProgress&&m.routingStage==4&&!m.canSaveCurrentPreset());auto frame=m.output.messages.back().bytes;assert(routingModeResponse(frame.data(),frame.size())==mode);fresh(m,recovered.data,mode);count++;}
-{AudioPluginAudioProcessor p;MidiConnection m;init(m,0x85);AudioPluginAudioProcessorEditor e(p,m);e.saveCurrentPresetToProject();m.routingModeSnapshot.mode=0x98;e.selected=1;e.saveCurrentPresetToProject();juce::MemoryBlock state;p.getStateInformation(state);AudioPluginAudioProcessor q;q.setStateInformation(state.getData(),state.getSize());assert(q.getGP200PresetRecallSnapshot(0).routingMode==0x85&&q.getGP200PresetRecallSnapshot(1).routingMode==0x98);count++;}
-for(int value:{-1,2,127,0x8c,0x8f,0x9c,255,256}){AudioPluginAudioProcessor p;auto b=data();p.setGP200PresetSnapshotState(0,0,"preset",b,value);assert(p.getGP200PresetRecallSnapshot(0).routingMode==-1);count++;}
-{AudioPluginAudioProcessor p;p.setGP200PresetSnapshotState(0,0,"old",data(),0x95);p.setGP200PresetSnapshotState(0,0,"new",data());assert(p.getGP200PresetRecallSnapshot(0).routingMode==-1);p.setGP200PresetSnapshotState(0,-1,"offline",data(),0x85);assert(p.getGP200PresetRecallSnapshot(0).routingMode==-1);count++;}
-for(int format:{0,1}){juce::XmlElement xml("GP200StudioState");xml.setAttribute(format==0?"snapshotASlot":"presetSnapshotSlot",0);xml.setAttribute(format==0?"snapshotAName":"presetSnapshotName","old");xml.setAttribute(format==0?"snapshotADataBase64":"presetSnapshotDataBase64",data().toBase64Encoding());juce::MemoryBlock state;copyXmlToBinary(xml,state);AudioPluginAudioProcessor p;p.setGP200PresetSnapshotState(0,0,"stale",data(),0x95);p.setStateInformation(state.getData(),state.getSize());assert(p.getGP200PresetRecallSnapshot(0).data.v==data().v&&p.getGP200PresetRecallSnapshot(0).routingMode==-1);MidiConnection m;init(m,0x85);AudioPluginAudioProcessorEditor e(p,m);e.startFullPresetRestoreFromSnapshot();assert(e.presetRestoreSteps.size()==1);e.processFullPresetRestoreStep();assert(m.routingStage==0);for(auto& msg:m.output.messages)assert(routingModeResponse(msg.bytes.data(),msg.bytes.size())<0);count++;}
-for(int bad:{0x8c,255}){juce::XmlElement xml("GP200StudioState");xml.setAttribute("snapshotASlot",0);xml.setAttribute("snapshotADataBase64",data().toBase64Encoding());xml.setAttribute("snapshotARoutingMode",bad);juce::MemoryBlock state;copyXmlToBinary(xml,state);AudioPluginAudioProcessor p;p.setStateInformation(state.getData(),state.getSize());assert(p.getGP200PresetRecallSnapshot(0).routingMode==-1);count++;}
-{AudioPluginAudioProcessor p;p.setGP200PresetSnapshotState(0,0,"bad geometry",data(),0x8b);MidiConnection m;init(m);AudioPluginAudioProcessorEditor e(p,m);e.startFullPresetRestoreFromSnapshot();assert(!e.presetRestoreInProgress&&m.output.messages.empty());count++;}
-{AudioPluginAudioProcessor p;MidiConnection m;init(m);AudioPluginAudioProcessorEditor e(p,m);e.saveCurrentPresetToProject();e.startFullPresetRestoreFromSnapshot();e.processFullPresetRestoreStep();m.currentSlot=1;++m.slotGeneration;juce::Time::now=150;auto n=m.output.messages.size();e.processFullPresetRestoreStep();assert(!e.presetRestoreInProgress&&m.output.messages.size()==n);count++;}
-{AudioPluginAudioProcessor p;MidiConnection m;init(m);AudioPluginAudioProcessorEditor e(p,m);e.saveCurrentPresetToProject();m.currentPresetDataIsLive=false;e.selected=1;e.saveCurrentPresetToProject();assert(!p.hasSavedGP200PresetData(1));count++;}
-{AudioPluginAudioProcessor p;p.setGP200PresetSnapshotState(0,0,"initial",data(),0x85);MidiConnection m;init(m);m.midiOutput=nullptr;AudioPluginAudioProcessorEditor e(p,m);e.saveCurrentPresetToProject();assert(p.getGP200PresetRecallSnapshot(0).routingMode==-1&&p.getGP200PresetRecallSnapshot(0).data.getSize()==100);count++;}
-{AudioPluginAudioProcessor p;MidiConnection m;init(m);AudioPluginAudioProcessorEditor e(p,m);e.presetRestoreSnapshotData=data();e.presetRestoreSlot=0;e.presetRestoreRoutingMode=-1;e.presetRestoreRoutingMetadataFromDaw=false;e.finishFullPresetRestore();assert(e.effectsStatusText=="Recall Preset: snapshot restored into current slot. Press Store preset to save it here.");count++;}
-std::cout<<count<<" Save/Recall pipeline + A/B project-state regressions passed (actual methods; simulated JUCE XML, codec and ports)\n";
+for(int m=0;m<256;m++){assert(routingModeIsChain(m)==(m>=128&&m<=139));count++;}
+for(int v=0;v<=100;v++){
+ auto b=data();field(b,13,blendTagFloat());field(b,14,float(v));field(b,0,73);
+ auto p=GP200PresetCodec::decodeLivePresetDump(b);assert(hasIndependentBlend(p));
+ AudioPluginAudioProcessorEditor e;e.buildFullPresetRestoreSteps(p,b);
+ auto n=e.presetRestoreSteps.size();assert(n>3);auto& value=e.presetRestoreSteps[n-3];auto& tag=e.presetRestoreSteps[n-2];
+ assert(value.blockIndex==10&&value.paramIndex==14&&value.value==v);assert(tag.paramIndex==13&&std::bit_cast<std::uint32_t>(tag.value)==chainBlendTag);
+ assert(e.presetRestoreSteps.back().type==AudioPluginAudioProcessorEditor::PresetRestoreStepType::ReorderEffects);
+ MidiConnection m;m.currentPresetDecodedData=b;assert(m.sendIndependentBlend(float(v),false,0));assert(m.blendWritePending&&!m.canSaveCurrentPreset());
+ assert(m.parameterWrites.size()==2&&m.parameterWrites[0].first==14&&m.parameterWrites[1].first==13);
+ // An optimistic local edit must not count as physical confirmation.
+ m.processBlendReadback();assert(m.blendWritePending);
+ ++m.livePresetRevision;m.processBlendReadback();assert(!m.blendWritePending&&m.lastMessageText=="BLEND confirmed by pedal");count++;
+}
+for(float bad:{-1.f,101.f,std::numeric_limits<float>::quiet_NaN(),std::numeric_limits<float>::infinity()}){
+ auto b=data();field(b,13,blendTagFloat());field(b,14,bad);auto p=GP200PresetCodec::decodeLivePresetDump(b);assert(!hasIndependentBlend(p));
+ AudioPluginAudioProcessorEditor e;e.buildFullPresetRestoreSteps(p,b);auto n=e.presetRestoreSteps.size();assert(e.presetRestoreSteps[n-2].value==0&&e.presetRestoreSteps[n-3].value==0);count++;
+}
+{MidiConnection m;m.currentPresetDecodedData=data();field(m.currentPresetDecodedData,0,17);assert(!m.sendIndependentBlend(17,false,0));assert(m.sendIndependentBlend(50,true,0));assert(m.blendWriteExpected==50);assert(m.parameterWrites[0].first==0&&m.parameterWrites[0].second==100);count++;}
+{MidiConnection m;m.currentPresetDecodedData=data();m.currentPresetDecodedData.v[107]=11;assert(m.sendIndependentBlend(50,true,0));assert(m.blendWriteExpected==50&&m.parameterWrites.size()==2);count++;}
+{MidiConnection m;m.currentPresetDecodedData=data();assert(!m.sendIndependentBlend(50,true,1));m.routingModeSnapshot.mode=0;assert(!m.sendIndependentBlend(50,true,0));m.nativeRoutingMode=0;assert(m.sendFlexibleRouting(RoutingOrder{0,1,2,3,4,5,6,7,8,9,10},2,5,8,false,0));assert(m.routingValue==0);count++;}
+{MidiConnection m;m.currentPresetDecodedData=data();assert(m.sendIndependentBlend(50,true,0));m.currentPresetDecodedData=data();++m.livePresetRevision;m.processBlendReadback();assert(!m.blendWritePending&&m.lastMessageText.find("not confirmed")!=std::string::npos);count++;}
+{MidiConnection m;m.currentPresetDecodedData=data();assert(m.sendIndependentBlend(50,true,0));juce::Time::now=7000;m.processBlendReadback();assert(!m.blendWritePending&&!m.currentPresetDataIsLive);count++;}
+
+// A loaded CHAIN preset has no historical native mode: use Parallel, not silent external Series.
+{MidiConnection m;m.currentPresetDecodedData=data();assert(m.nativeRoutingMode==0);assert(m.sendFlexibleRouting(RoutingOrder{0,1,2,3,4,5,6,7,8,9,10},2,5,8,false,0));assert(m.routingValue==0);count++;}
+{MidiConnection m;m.currentPresetDecodedData=data();m.nativeRoutingMode=1;assert(m.sendFlexibleRouting(RoutingOrder{0,1,2,3,4,5,6,7,8,9,10},2,5,8,false,0));assert(m.routingValue==1);count++;}
+// First gesture sets requested position; loading and repaint alone do not convert.
+{AudioPluginAudioProcessorEditor e;auto& m=e.midiConnection;m.currentPresetDecodedData=data();field(m.currentPresetDecodedData,0,17);e.syncChainBlendControls();assert(e.chainBlendSlider.enabled&&e.chainBlendSlider.value==17&&m.parameterWrites.empty());
+ e.chainBlendQueued=true;e.chainBlendQueuedValue=31;e.chainBlendSlider.value=31;e.syncChainBlendControls();assert(m.blendWriteExpected==31&&m.blendWritePending);assert(m.parameterWrites[0].first==0&&m.parameterWrites[0].second==100);assert(e.chainBlendSlider.value==31);
+ // An in-flight read may hide the live flag; keep the drag available and its latest value queued.
+ m.currentPresetDataIsLive=false;e.chainBlendQueued=true;e.chainBlendQueuedValue=73;e.chainBlendSlider.value=73;e.syncChainBlendControls();assert(e.chainBlendSlider.enabled&&e.chainBlendQueued&&e.chainBlendSlider.value==73);
+ m.currentPresetDataIsLive=true;++m.livePresetRevision;m.processBlendReadback();e.syncChainBlendControls();assert(m.blendWritePending&&m.blendWriteExpected==73&&!e.chainBlendQueued&&e.chainBlendSlider.value==73);count++;}
+// Switching slot drops an unsent gesture rather than applying it to the new preset.
+{AudioPluginAudioProcessorEditor e;auto& m=e.midiConnection;m.currentPresetDecodedData=data();e.syncChainBlendControls();e.chainBlendQueued=true;e.chainBlendQueuedValue=99;m.currentSlot=1;e.syncChainBlendControls();assert(!e.chainBlendQueued&&m.parameterWrites.empty());count++;}
+// Routing/Recall cancel editing and never initialize metadata incidentally.
+{AudioPluginAudioProcessorEditor e;auto& m=e.midiConnection;m.currentPresetDecodedData=data();e.chainBlendSlot=0;e.chainBlendQueued=true;m.routingStage=1;e.syncChainBlendControls();assert(!e.chainBlendQueued&&!e.chainBlendSlider.enabled&&m.parameterWrites.empty());count++;}
+std::cout<<count<<" CHAIN/BLEND production restore and transport checks passed; JUCE ports/codec/known-parameter DB simulated\n";
 }

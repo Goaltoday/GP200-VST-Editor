@@ -4408,7 +4408,7 @@ void AudioPluginAudioProcessorEditor::syncChainBlendControls ()
             : gp200::legacyVolumeIsBlend (preset) ? preset.effects[10].params[0] : 50.0f;
         chainBlendSlider.setValue (std::clamp (value, 0.0f, 100.0f), juce::dontSendNotification);
     }
-    chainBlendLabel.setTooltip ("A / B blend position. The first edit initializes independent BLEND. VOL retains volume. Requires FIX34 firmware.");
+    chainBlendLabel.setTooltip ("A / B blend position. The first edit initializes independent BLEND. VOL retains volume. Requires FIX35 firmware.");
 }
 
 void AudioPluginAudioProcessorEditor::toggleSeriesParallel ()
@@ -4424,15 +4424,15 @@ void AudioPluginAudioProcessorEditor::toggleSeriesParallel ()
         ? "CHAIN ON"
         : "CHAIN OFF";
     repaint ();
-    sendFlexibleRouteFromRibbon ();
+    sendFlexibleRouteFromRibbon (true);
     scheduleEditorHeightUpdate ();
 }
 
-void AudioPluginAudioProcessorEditor::sendFlexibleRouteFromRibbon ()
+void AudioPluginAudioProcessorEditor::sendFlexibleRouteFromRibbon (bool modeOnly)
 {
     const auto state = midiConnection.getRoutingStateSnapshot ();
     if (presetRestoreInProgress || !midiConnection.sendFlexibleRouting (effectChainRibbon.getLocalOrder (),
-        effectChainRibbon.getSend (), effectChainRibbon.getBoundary (), effectChainRibbon.getReturn (), parallelRoutingSelected, state.slot))
+        effectChainRibbon.getSend (), effectChainRibbon.getBoundary (), effectChainRibbon.getReturn (), parallelRoutingSelected, state.slot, modeOnly))
     {
         // Force reapplication even when the confirmed revision did not change.
         const auto accepted = midiConnection.getRoutingRequestSnapshot ();

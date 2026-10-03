@@ -6,7 +6,7 @@ methods=[];decl=[]
 for name,ret in names:
  a=s.index('MidiConnection::'+name+' (');b=s.index('\n}',a)+2;body=s[a:b];methods.append(ret+' '+body);signature=body[:body.index('\n{')].replace('MidiConnection::','')
  if name == 'endPresetRestoreTransaction': signature=signature.replace('int expectedRoutingMode)', 'int expectedRoutingMode = -1)')
- if name in ['sendFlexibleRouting']: signature=signature.replace('int expectedSlot)','int expectedSlot = -1)')
+ if name in ['sendFlexibleRouting']: signature=signature.replace('int expectedSlot, bool modeOnly)', 'int expectedSlot = -1, bool modeOnly = false)')
  decl.append(('static ' if name in ['getChunkOffset','assemblePresetReadChunks','nibbleDecode','buildLiveReadRequest','buildStateDumpRequest','buildReorderEffects','nibbleEncode'] else '')+ret.replace('MidiConnection::','')+' '+signature+';')
 h=r'''#include "../source/libgp200/GP200FlexibleRouting.h"
 #include "../source/libgp200/GP200Constants.h"
@@ -70,7 +70,7 @@ METHODS
 ui_source=(r.parent/'source/GP200Plugin/PluginEditor.cpp').read_text()
 ui_methods=[]
 for name,ret in [('sendFlexibleRouteFromRibbon','void '),('syncFlexibleRoutingFromDevice','void '),('toggleSeriesParallel','void '),('~AudioPluginAudioProcessorEditor','')]:
- a=ui_source.index('AudioPluginAudioProcessorEditor::'+name+' ()');b=ui_source.index('\n}',a)+2;ui_methods.append(ret+ui_source[a:b])
+ a=ui_source.index('AudioPluginAudioProcessorEditor::'+name+(' (bool modeOnly)' if name=='sendFlexibleRouteFromRibbon' else ' ()'));b=ui_source.index('\n}',a)+2;ui_methods.append(ret+ui_source[a:b])
 ui_header=r"""
 struct Ribbon {
  gp200::RoutingOrder order{0,1,2,3,4,5,6,7,8,9,10};int s=2,p=5,r=8;bool parallel=true,draft=false;
@@ -89,7 +89,7 @@ struct AudioPluginAudioProcessorEditor {
  struct Processor{void notifyOfflineStateChanged(){}}processorRef;
  void repaint(){}void updateSeriesParallelButtonText(){}void scheduleEditorHeightUpdate(){}void clearInterfaceTypography(){}void stopTimer(){}
  void updateEffectChainRibbon(gp200::GP200Preset p){effectChainRibbon.order=p.routingOrder;}
- void sendFlexibleRouteFromRibbon();void syncFlexibleRoutingFromDevice();void toggleSeriesParallel();
+ void sendFlexibleRouteFromRibbon(bool modeOnly = false);void syncFlexibleRoutingFromDevice();void toggleSeriesParallel();
 };
 """
 ui=ui_header+'\n'.join(ui_methods)
@@ -103,6 +103,15 @@ void receive(MidiConnection& m){auto cs=chunks(data());std::reverse(cs.begin(),c
 void mode(MidiConnection& m,int value){m.routingModeSnapshot.mode=value;m.routingModeSnapshot.slot=m.currentSlot;++m.routingModeSnapshot.revision;}
 void stageToReply(MidiConnection& m){assert(m.sendFlexibleRouting(order,2,5,8,true,0));assert(!m.canSaveCurrentPreset());juce::Time::now=150;m.processRoutingTransaction();assert(m.routingStage==2);juce::Time::now=300;m.processRoutingTransaction();assert(m.routingStage==3);}
 int main(){int cases=0;
+{MidiConnection m;init(m);AudioPluginAudioProcessorEditor editor(m);editor.toggleSeriesParallel();assert(!editor.parallelRoutingSelected&&m.routingStage==3&&m.routingValue==0&&m.output.messages.size()==1);editor.toggleSeriesParallel();assert(m.output.messages.size()==1);cases++;}
+
+for(int native:{0,1})for(int initial:{0,1,0x85,0x95}){MidiConnection m;init(m);m.nativeRoutingMode=native;mode(m,initial);
+ for(int k=0;k<6;k++){bool on=(k%2)==1;auto n=m.output.messages.size();assert(m.sendFlexibleRouting(order,2,5,8,on,0,true));int wanted=on?0x85:native;assert(m.routingStage==3&&m.routingValue==wanted&&m.output.messages.size()==n+1);
+ auto sent=m.output.messages.back();assert(!m.sendFlexibleRouting(order,2,5,8,!on,0,true));assert(m.output.messages.size()==n+1);
+ mode(m,wanted);m.processRoutingTransaction();assert(m.routingStage==4);juce::Time::now+=200;m.processPendingLivePresetRefresh();receive(m);m.processRoutingTransaction();assert(m.routingStage==5);mode(m,wanted);m.processRoutingTransaction();assert(m.routingStage==0&&m.canSaveCurrentPreset());cases++;}}
+{MidiConnection m;init(m);auto bad=order;std::swap(bad[0],bad[1]);assert(!m.sendFlexibleRouting(bad,2,5,8,false,0,true));assert(m.output.messages.empty()&&m.routingStage==0);cases++;}
+{MidiConnection m;init(m);assert(m.sendFlexibleRouting(order,2,5,8,false,0,true));mode(m,0x85);m.processRoutingTransaction();assert(m.routingStage==3);juce::Time::now=7000;m.processRoutingTransaction();assert(m.routingStage==6);auto n=m.output.messages.size();m.sendLiveReadRequestForSlot(0);receive(m);mode(m,0x85);m.processRoutingTransaction();assert(m.routingStage==0&&m.routingModeSnapshot.mode==0x85);assert(m.output.messages.size()>=n);cases++;}
+
 {MidiConnection m;init(m);stageToReply(m);mode(m,0x85);m.processRoutingTransaction();assert(m.routingStage==4);juce::Time::now=500;m.processPendingLivePresetRefresh();assert(m.presetDumpSlot==0&&!m.currentPresetDataIsLive);receive(m);m.processRoutingTransaction();assert(m.routingStage==5&&!m.canSaveCurrentPreset());mode(m,0x85);m.processRoutingTransaction();assert(m.routingStage==0&&m.canSaveCurrentPreset());assert(m.storeCurrentPresetToGP200());cases++;}
 // There is no editor in this harness: the production connection timer alone advances writes.
 {MidiConnection m;init(m);assert(m.sendFlexibleRouting(order,2,5,8,true,0));juce::Time::now=150;m.timerCallback();assert(m.routingStage==2&&m.irTicks==1&&m.cloneTicks==1);juce::Time::now=300;m.timerCallback();assert(m.routingStage==3);cases++;}

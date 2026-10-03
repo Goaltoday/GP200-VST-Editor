@@ -249,7 +249,7 @@ juce::Rectangle<int> AudioPluginAudioProcessorEditor::EffectChainRibbonComponent
     const int unit = available / total;
     const int split = 50 + unit * juce::jmax (1, fxLoopSendPosition);
     const int merge = split + unit * middleCount;
-    const int y = getHeight () / 2;
+    const int y = (getHeight () + 28) / 2;
     if (group == 0) return {50, y - 26, split - 54, 52};
     if (group == 3) return {merge + 4, y - 26, getWidth () - 50 - merge - 4, 52};
     return {split + 4, y + (group == 1 ? -53 : 1), merge - split - 8, 52};
@@ -260,7 +260,7 @@ int AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getDropGroup (j
     const auto middle = getGroupArea (1);
     if (position.x < middle.getX ()) return 0;
     if (position.x > middle.getRight ()) return 3;
-    return position.y < getHeight () / 2 ? 1 : 2;
+    return position.y < (getHeight () + 28) / 2 ? 1 : 2;
 }
 
 void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::moveLocalItem (int source, int group, int position)
@@ -333,7 +333,7 @@ int AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getLoopMarkerAt
 {
     const auto sendX = getLoopMarkerX (parallelMode ? getEffectiveSendPosition () : fxLoopSendPosition);
     const auto returnX = getLoopMarkerX (parallelMode ? getEffectiveReturnPosition () : fxLoopReturnPosition);
-    if (std::abs (position.x - sendX) <= 10 && position.y <= 18) return 0;
+    if (std::abs (position.x - sendX) <= 10 && position.y >= (parallelMode ? 28 : 0) && position.y <= (parallelMode ? 46 : 18)) return 0;
     if (std::abs (position.x - returnX) <= 10 && position.y >= getHeight () - 18) return 1;
     return -1;
 }
@@ -378,24 +378,31 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::paint (juce::G
 
     if (parallelMode)
     {
-        const char* labels[] = {"IN COMMON", "A", "B", "OUT COMMON"};
         for (int group = 0; group < 4; ++group)
         {
             const auto area = getGroupArea (group);
             g.setColour (juce::Colour (0xff444a50));
             g.drawRoundedRectangle (area.toFloat (), 4.0f, 1.0f);
-            g.drawText (labels[group], area.withHeight (12), juce::Justification::centred);
+            if (group == 1 || group == 2)
+            {
+                const int labelY = group == 1 ? area.getY () - 16 : area.getBottom () + 2;
+                g.setColour (juce::Colour (0xffb9bdc0));
+                g.setFont (gp200ui::semibold (12.5f));
+                g.drawText (group == 1 ? "A" : "B",
+                            juce::Rectangle<int> (area.getX (), labelY, area.getWidth (), 14),
+                            juce::Justification::centred);
+            }
         }
     }
     const auto first = getTileBounds (0);
-    const auto chainY = parallelMode ? getHeight () / 2 : first.getCentreY ();
+    const auto chainY = parallelMode ? (getHeight () + 28) / 2 : first.getCentreY ();
     g.setColour (juce::Colour (0xff7b8083));
     if (parallelMode)
     {
         const auto splitX = static_cast<float> (getLoopMarkerX (getEffectiveSendPosition ()));
         const auto mergeX = static_cast<float> (getLoopMarkerX (getEffectiveReturnPosition ()));
-        const auto upperY = static_cast<float> (getHeight () / 2 - 27);
-        const auto lowerY = static_cast<float> (getHeight () / 2 + 27);
+        const auto upperY = static_cast<float> ((getHeight () + 28) / 2 - 27);
+        const auto lowerY = static_cast<float> ((getHeight () + 28) / 2 + 27);
         g.drawLine (36.0f, static_cast<float> (chainY), splitX, static_cast<float> (chainY), 2.0f);
         g.drawLine (splitX, upperY, splitX, lowerY, 2.0f);
         g.drawLine (splitX, upperY, mergeX, upperY, 2.0f);
@@ -454,8 +461,7 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::paint (juce::G
 
         g.setColour (displayColour);
         g.setFont (gp200ui::semibold (parallelMode ? 10.5f : 14.25f));
-        g.drawText (parallelMode && item.blockIndex == 10 && item.enabled
-                    && i >= fxLoopReturnPosition ? "BLEND" : item.blockName,
+        g.drawText (item.blockName,
                     tile.withTrimmedTop (tile.getHeight() - (parallelMode ? 18 : 24)).reduced (3, 1),
                     juce::Justification::centred);
 
@@ -499,17 +505,17 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::paint (juce::G
         g.setColour (colour);
         g.fillPath (arrow);
         g.setFont (gp200ui::semibold (11.0f));
-        g.drawText (label, juce::Rectangle<int> (static_cast<int> (x) - 25, pointsUp ? 1 : getHeight () - 14, 50, 13),
+        g.drawText (label, juce::Rectangle<int> (static_cast<int> (x) - 25, pointsUp ? (parallelMode ? 29 : 1) : getHeight () - 14, 50, 13),
                     juce::Justification::centred);
     };
-    drawLoopMarker (sendMarkerPosition, 15, juce::Colour (0xff32a8ff), parallelMode ? "SPLIT" : "SEND", true);
+    drawLoopMarker (sendMarkerPosition, parallelMode ? 43 : 15, juce::Colour (0xff32a8ff), parallelMode ? "SPLIT" : "SEND", true);
     drawLoopMarker (returnMarkerPosition, getHeight () - 14, juce::Colour (0xffbd5cff), parallelMode ? "MIX" : "RETURN", false);
 
     if (draggedLoopMarker >= 0 && draggedLoopPosition >= 0)
     {
         const auto x = getLoopMarkerX (draggedLoopPosition);
         g.setColour (juce::Colours::white.withAlpha (0.35f));
-        g.drawLine (static_cast<float> (x), 19.0f, static_cast<float> (x), static_cast<float> (getHeight () - 19), 1.0f);
+        g.drawLine (static_cast<float> (x), parallelMode ? 47.0f : 19.0f, static_cast<float> (x), static_cast<float> (getHeight () - 19), 1.0f);
     }
 
     if (blockDrag)
