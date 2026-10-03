@@ -279,7 +279,8 @@ class MidiConnection final : private juce::MidiInputCallback, private juce::Time
     int presetDumpSlot{-1};
     std::vector<std::vector<juce::uint8>> presetReadChunks;
     juce::MemoryBlock currentPresetDecodedData;
-    int nativeRoutingMode{1};
+    // A loaded CHAIN preset has no saved previous native mode. Parallel keeps the dry path.
+    int nativeRoutingMode{0};
     bool blendWritePending{false};
     int blendWriteSlot{-1};
     std::uint64_t blendWriteBaseline{0};

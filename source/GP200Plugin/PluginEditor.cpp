@@ -1476,7 +1476,7 @@ juce::Rectangle<int> AudioPluginAudioProcessorEditor::EffectChainRibbonComponent
     const int unit = available / total;
     const int split = 50 + unit * juce::jmax (1, fxLoopSendPosition);
     const int merge = split + unit * middleCount;
-    const int y = getHeight () / 2;
+    const int y = (getHeight () + 28) / 2;
     if (group == 0) return {50, y - 26, split - 54, 52};
     if (group == 3) return {merge + 4, y - 26, getWidth () - 50 - merge - 4, 52};
     return {split + 4, y + (group == 1 ? -53 : 1), merge - split - 8, 52};
@@ -1487,7 +1487,7 @@ int AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getDropGroup (j
     const auto middle = getGroupArea (1);
     if (position.x < middle.getX ()) return 0;
     if (position.x > middle.getRight ()) return 3;
-    return position.y < getHeight () / 2 ? 1 : 2;
+    return position.y < (getHeight () + 28) / 2 ? 1 : 2;
 }
 
 void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::moveLocalItem (int source, int group, int position)
@@ -1560,7 +1560,7 @@ int AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getLoopMarkerAt
 {
     const auto sendX = getLoopMarkerX (parallelMode ? getEffectiveSendPosition () : fxLoopSendPosition);
     const auto returnX = getLoopMarkerX (parallelMode ? getEffectiveReturnPosition () : fxLoopReturnPosition);
-    if (std::abs (position.x - sendX) <= 10 && position.y <= 18) return 0;
+    if (std::abs (position.x - sendX) <= 10 && position.y >= (parallelMode ? 28 : 0) && position.y <= (parallelMode ? 46 : 18)) return 0;
     if (std::abs (position.x - returnX) <= 10 && position.y >= getHeight () - 18) return 1;
     return -1;
 }
@@ -1622,14 +1622,14 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::paint (juce::G
         }
     }
     const auto first = getTileBounds (0);
-    const auto chainY = parallelMode ? getHeight () / 2 : first.getCentreY ();
+    const auto chainY = parallelMode ? (getHeight () + 28) / 2 : first.getCentreY ();
     g.setColour (juce::Colour (0xff7b8083));
     if (parallelMode)
     {
         const auto splitX = static_cast<float> (getLoopMarkerX (getEffectiveSendPosition ()));
         const auto mergeX = static_cast<float> (getLoopMarkerX (getEffectiveReturnPosition ()));
-        const auto upperY = static_cast<float> (getHeight () / 2 - 27);
-        const auto lowerY = static_cast<float> (getHeight () / 2 + 27);
+        const auto upperY = static_cast<float> ((getHeight () + 28) / 2 - 27);
+        const auto lowerY = static_cast<float> ((getHeight () + 28) / 2 + 27);
         g.drawLine (36.0f, static_cast<float> (chainY), splitX, static_cast<float> (chainY), 2.0f);
         g.drawLine (splitX, upperY, splitX, lowerY, 2.0f);
         g.drawLine (splitX, upperY, mergeX, upperY, 2.0f);
@@ -1732,17 +1732,17 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::paint (juce::G
         g.setColour (colour);
         g.fillPath (arrow);
         g.setFont (gp200ui::semibold (11.0f));
-        g.drawText (label, juce::Rectangle<int> (static_cast<int> (x) - 25, pointsUp ? 1 : getHeight () - 14, 50, 13),
+        g.drawText (label, juce::Rectangle<int> (static_cast<int> (x) - 25, pointsUp ? (parallelMode ? 29 : 1) : getHeight () - 14, 50, 13),
                     juce::Justification::centred);
     };
-    drawLoopMarker (sendMarkerPosition, 15, juce::Colour (0xff32a8ff), parallelMode ? "SPLIT" : "SEND", true);
+    drawLoopMarker (sendMarkerPosition, parallelMode ? 43 : 15, juce::Colour (0xff32a8ff), parallelMode ? "SPLIT" : "SEND", true);
     drawLoopMarker (returnMarkerPosition, getHeight () - 14, juce::Colour (0xffbd5cff), parallelMode ? "MIX" : "RETURN", false);
 
     if (draggedLoopMarker >= 0 && draggedLoopPosition >= 0)
     {
         const auto x = getLoopMarkerX (draggedLoopPosition);
         g.setColour (juce::Colours::white.withAlpha (0.35f));
-        g.drawLine (static_cast<float> (x), 19.0f, static_cast<float> (x), static_cast<float> (getHeight () - 19), 1.0f);
+        g.drawLine (static_cast<float> (x), parallelMode ? 47.0f : 19.0f, static_cast<float> (x), static_cast<float> (getHeight () - 19), 1.0f);
     }
 
     if (blockDrag)
@@ -1920,15 +1920,13 @@ addAndMakeVisible (soundCloneButton);
     addAndMakeVisible (presetNameEditor);
     addAndMakeVisible (tunerButton);
     addAndMakeVisible (seriesParallelButton);
-    addAndMakeVisible (chainBlendLabel); addAndMakeVisible (chainBlendSlider); addAndMakeVisible (newBlendButton);
+    addAndMakeVisible (chainBlendLabel); addAndMakeVisible (chainBlendSlider);
     chainBlendLabel.setText ("BLEND", juce::dontSendNotification);
     chainBlendSlider.setSliderStyle (juce::Slider::LinearHorizontal);
     chainBlendSlider.setRange (0.0,100.0,1.0);
     chainBlendSlider.setTextBoxStyle (juce::Slider::TextBoxRight,false,84,20);
     chainBlendSlider.textFromValueFunction=[](double v) { const int b=juce::roundToInt(v); return b==0?juce::String("SOLO A"):b==100?juce::String("SOLO B"):b==50?juce::String("CENTRO"):juce::String("POS ")+juce::String(b); };
     chainBlendSlider.onValueChange=[this] { chainBlendQueuedValue=static_cast<float>(chainBlendSlider.getValue());chainBlendQueued=true; };
-    newBlendButton.setTooltip ("Explicitly enables independent BLEND in this preset. Does not STORE. Requires FIX33 firmware.");
-    newBlendButton.onClick=[this] { if(midiConnection.sendIndependentBlend(50.0f,true,chainBlendSlot)) { chainBlendQueued=false;effectsStatusText="NEW BLEND sent; waiting for pedal";repaint(); } };
 
     addAndMakeVisible (allBlocksOffButton);
     addAndMakeVisible (autoCabButton);
@@ -2154,7 +2152,7 @@ storePresetButton.setColour (
 
     tunerButton.onClick = [this] { toggleTuner (); };
 
-    seriesParallelButton.setTooltip ("CHAIN on/off. Native Series/Parallel remain separate. Independent BLEND requires FIX33 firmware.");
+    seriesParallelButton.setTooltip ("CHAIN on/off. Native Series/Parallel remain separate. Independent BLEND requires FIX34 firmware.");
     seriesParallelButton.onClick = [this] { toggleSeriesParallel (); };
 
     allBlocksOffButton.onClick = [this] { toggleAllBlocksOff (); };
@@ -2625,7 +2623,7 @@ exportPrstButton.setBounds (
     buttonWidth,
     buttonHeight - prstButtonHeight - prstButtonGap);
 
-    importIRButton.setBounds (418, 191, 130, 28);
+    importIRButton.setBounds (563, 191, 135, 28);
 
     // ============================================================
     // Patch settings
@@ -2643,10 +2641,12 @@ tapTempoButton.setBounds (882, 150, 46, 24);
     tunerButton.setBounds (30, 191, 130, 28);
 allBlocksOffButton.setBounds (170, 191, 120, 28);
 autoCabButton.setBounds (300, 191, 108, 28);
-seriesParallelButton.setBounds (563, 191, 135, 28);
-chainBlendLabel.setBounds (30,222,52,20);
-chainBlendSlider.setBounds (88,222,236,20);
-newBlendButton.setBounds (334,222,106,20);
+seriesParallelButton.setBounds (418, 191, 130, 28);
+// Overlay in the clear upper-right corner of the routing panel.
+chainBlendLabel.setBounds (getWidth () - 284, 250, 48, 22);
+chainBlendSlider.setBounds (getWidth () - 232, 250, 208, 22);
+chainBlendLabel.toFront (false);
+chainBlendSlider.toFront (false);
 toneMatchButton.setBounds (708, 191, 110, 28);
 soundCloneButton.setBounds (828, 191, 110, 28);
 
@@ -2660,8 +2660,8 @@ tunerDisplay.setBounds (
     // Effects list
     // ============================================================
 
-    const auto ribbonHeight = parallelRoutingSelected ? 160 : 116;
-    const auto effectsTop = parallelRoutingSelected ? 416 : 372;
+    const auto ribbonHeight = parallelRoutingSelected ? 188 : 116;
+    const auto effectsTop = parallelRoutingSelected ? 444 : 372;
     effectChainRibbon.setBounds (20, 246, getWidth () - 40, ribbonHeight);
 
     const bool hasSelectedBlock = selectedEffectBlockIndex >= 0;
@@ -4378,21 +4378,37 @@ void AudioPluginAudioProcessorEditor::updateTunerButtonText ()
 
 void AudioPluginAudioProcessorEditor::syncChainBlendControls ()
 {
-    const auto state=midiConnection.getRoutingStateSnapshot();
-    if (chainBlendSlot!=state.slot || !state.connected) { chainBlendQueued=false;chainBlendSlot=state.slot; }
-    const bool chain=state.connected && state.slot==sprDeviceSlot && gp200::routingModeIsChain(sprDeviceMode);
-    const auto p=gp200::GP200PresetCodec::decodeLivePresetDump(state.data);
-    const bool marked=gp200::hasIndependentBlend(p);
-    chainBlendLabel.setVisible(chain);chainBlendSlider.setVisible(chain);newBlendButton.setVisible(chain && !marked);
-    const bool ready=chain && state.live && state.modeFresh && !presetRestoreInProgress && !midiConnection.isRoutingTransactionBusy() && !midiConnection.isBlendWritePending();
-    chainBlendSlider.setEnabled(ready && marked);newBlendButton.setEnabled(ready && !marked);
-    if (!chain || presetRestoreInProgress || midiConnection.isRoutingTransactionBusy()) chainBlendQueued=false;
-    if (ready && marked && chainBlendQueued) {
-        if(midiConnection.sendIndependentBlend(chainBlendQueuedValue,false,chainBlendSlot)) chainBlendQueued=false;
+    const auto state = midiConnection.getRoutingStateSnapshot ();
+    if (chainBlendSlot != state.slot || !state.connected)
+    { chainBlendQueued = false; chainBlendSlot = state.slot; }
+    const bool chain = state.connected && state.slot == sprDeviceSlot
+        && gp200::routingModeIsChain (sprDeviceMode);
+    const auto preset = gp200::GP200PresetCodec::decodeLivePresetDump (state.data);
+    const bool marked = gp200::hasIndependentBlend (preset);
+    const bool pending = midiConnection.isBlendWritePending ();
+    chainBlendLabel.setVisible (chain);
+    chainBlendSlider.setVisible (chain);
+    const bool ready = chain && state.live && state.modeFresh && preset.isValid
+        && !presetRestoreInProgress && !midiConnection.isRoutingTransactionBusy ();
+    // Keep dragging available while the previous write awaits a physical readback.
+    chainBlendSlider.setEnabled (ready || (chain && pending && !presetRestoreInProgress
+        && !midiConnection.isRoutingTransactionBusy ()));
+    if (!chain || presetRestoreInProgress || midiConnection.isRoutingTransactionBusy ())
+        chainBlendQueued = false;
+    if (ready && !pending && chainBlendQueued)
+    {
+        // The first user edit initializes independent BLEND; merely loading does not.
+        if (midiConnection.sendIndependentBlend (chainBlendQueuedValue, !marked, chainBlendSlot))
+            chainBlendQueued = false;
     }
-    if (!chainBlendQueued && !chainBlendSlider.isMouseButtonDown() && marked)
-        chainBlendSlider.setValue(p.effects[10].params[14],juce::dontSendNotification);
-    chainBlendLabel.setTooltip(marked?"Independent blend. VOL retains volume. Position is not a gain percentage.":"Legacy preset: independent BLEND is OFF. NEW BLEND enables it explicitly; existing VOL behavior is preserved.");
+    if (!chainBlendQueued && !midiConnection.isBlendWritePending ()
+        && !chainBlendSlider.isMouseButtonDown () && preset.isValid)
+    {
+        const float value = marked ? preset.effects[10].params[14]
+            : gp200::legacyVolumeIsBlend (preset) ? preset.effects[10].params[0] : 50.0f;
+        chainBlendSlider.setValue (std::clamp (value, 0.0f, 100.0f), juce::dontSendNotification);
+    }
+    chainBlendLabel.setTooltip ("A / B blend position. The first edit initializes independent BLEND. VOL retains volume. Requires FIX34 firmware.");
 }
 
 void AudioPluginAudioProcessorEditor::toggleSeriesParallel ()
@@ -5287,8 +5303,8 @@ void AudioPluginAudioProcessorEditor::scheduleEditorHeightUpdate ()
 
 void AudioPluginAudioProcessorEditor::updateEditorHeight ()
 {
-    const int compactHeight = parallelRoutingSelected ? 434 : 390;
-    const int editorTop = parallelRoutingSelected ? 416 : 372;
+    const int compactHeight = parallelRoutingSelected ? 462 : 390;
+    const int editorTop = parallelRoutingSelected ? 444 : 372;
     constexpr int editorBottomMargin = 20;
     constexpr int maximumHeight = 900;
 

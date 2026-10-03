@@ -321,7 +321,6 @@ CompareSnapshot selectedCompareSnapshot{
     juce::TextButton tunerButton{"Tuner OFF"};
 	juce::Label chainBlendLabel;
     juce::Slider chainBlendSlider;
-    juce::TextButton newBlendButton{"NEW BLEND"};
     bool chainBlendQueued{false};
     int chainBlendSlot{-1};
     float chainBlendQueuedValue{50.0f};

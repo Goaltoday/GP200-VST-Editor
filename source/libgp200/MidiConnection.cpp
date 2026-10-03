@@ -1783,7 +1783,7 @@ void MidiConnection::processBlendReadback ()
             ? hasIndependentBlend(p) && p.effects[10].params[14] == blendWriteExpected
             : std::bit_cast<std::uint32_t>(p.effects[10].params[13]) == 0);
         blendWritePending = false;
-        lastMessageText = matches ? "BLEND confirmed by pedal" : "BLEND not confirmed: actual pedal value recovered; requires FIX33 firmware";
+        lastMessageText = matches ? "BLEND confirmed by pedal" : "BLEND not confirmed: actual pedal value recovered; requires FIX34 firmware";
         return;
     }
     if (juce::Time::getMillisecondCounterHiRes () >= blendWriteDeadline) {
@@ -1805,8 +1805,8 @@ bool MidiConnection::sendIndependentBlend (float value, bool activate, int expec
     const auto p = GP200PresetCodec::decodeLivePresetDump(currentPresetDecodedData);
     if (!p.isValid || (!hasIndependentBlend(p) && !activate)) return false;
     if (!hasIndependentBlend(p) && activate) {
-        value = legacyVolumeIsBlend(p) && std::isfinite(p.effects[10].params[0]) && p.effects[10].params[0]>=0.0f && p.effects[10].params[0]<=100.0f
-            ? p.effects[10].params[0] : 50.0f;
+        // This is a deliberate slider edit: apply the requested value, not the
+        // old VOL value. Loading a preset alone never initializes the signature.
         if (legacyVolumeIsBlend(p) && !sendParamChange(10,0,p.effects[10].effectId,100.0f)) return false;
     }
     if (!sendParamChange(10,14,p.effects[10].effectId,value)
@@ -2703,7 +2703,7 @@ void MidiConnection::scheduleLivePresetRefresh ()
 
 void MidiConnection::resetPresetDumpCaptureForSlot (int slot)
 {
-    if (routingModeSnapshot.slot != slot) { nativeRoutingMode = 1; blendWritePending = false; }
+    if (routingModeSnapshot.slot != slot) { nativeRoutingMode = 0; blendWritePending = false; }
     if (routingModeSnapshot.slot != slot)
     {
         routingModeSnapshot.mode = -1; routingModeSnapshot.slot = slot;
