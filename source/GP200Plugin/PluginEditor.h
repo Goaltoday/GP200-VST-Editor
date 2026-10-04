@@ -322,6 +322,8 @@ CompareSnapshot selectedCompareSnapshot{
 	juce::Label chainBlendLabel;
     juce::Slider chainBlendSlider;
     bool chainBlendQueued{false};
+    bool chainBlendEditSessionReady{false};
+    double chainBlendSendDueMs{0.0};
     int chainBlendSlot{-1};
     float chainBlendQueuedValue{50.0f};
     juce::TextButton seriesParallelButton{"CHAIN"};

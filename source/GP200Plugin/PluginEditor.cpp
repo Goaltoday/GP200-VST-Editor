@@ -1926,7 +1926,7 @@ addAndMakeVisible (soundCloneButton);
     chainBlendSlider.setRange (0.0,100.0,1.0);
     chainBlendSlider.setTextBoxStyle (juce::Slider::TextBoxRight,false,84,20);
     chainBlendSlider.textFromValueFunction=[](double v) { const int b=juce::roundToInt(v); return b==0?juce::String("SOLO A"):b==100?juce::String("SOLO B"):b==50?juce::String("CENTRO"):juce::String("POS ")+juce::String(b); };
-    chainBlendSlider.onValueChange=[this] { chainBlendQueuedValue=static_cast<float>(chainBlendSlider.getValue());chainBlendQueued=true; };
+    chainBlendSlider.onValueChange=[this] { chainBlendQueuedValue=static_cast<float>(chainBlendSlider.getValue());chainBlendQueued=true; chainBlendSendDueMs=juce::Time::getMillisecondCounterHiRes()+150.0; };
 
     addAndMakeVisible (allBlocksOffButton);
     addAndMakeVisible (autoCabButton);
@@ -4380,7 +4380,7 @@ void AudioPluginAudioProcessorEditor::syncChainBlendControls ()
 {
     const auto state = midiConnection.getRoutingStateSnapshot ();
     if (chainBlendSlot != state.slot || !state.connected)
-    { chainBlendQueued = false; chainBlendSlot = state.slot; }
+    { chainBlendQueued = false; chainBlendEditSessionReady = false; chainBlendSlot = state.slot; }
     const bool chain = state.connected && state.slot == sprDeviceSlot
         && gp200::routingModeIsChain (sprDeviceMode);
     const auto preset = gp200::GP200PresetCodec::decodeLivePresetDump (state.data);
@@ -4390,18 +4390,29 @@ void AudioPluginAudioProcessorEditor::syncChainBlendControls ()
     chainBlendSlider.setVisible (chain);
     const bool ready = chain && state.live && state.modeFresh && preset.isValid
         && !presetRestoreInProgress && !midiConnection.isRoutingTransactionBusy ();
-    // Keep dragging available while the previous write awaits a physical readback.
-    chainBlendSlider.setEnabled (ready || (chain && pending && !presetRestoreInProgress
-        && !midiConnection.isRoutingTransactionBusy ()));
-    if (!chain || presetRestoreInProgress || midiConnection.isRoutingTransactionBusy ())
+    // A same-slot refresh temporarily clears live/modeFresh. Retain the
+    // confirmed editing session, but never send until fresh state returns.
+    const bool interrupted = !chain || presetRestoreInProgress
+        || midiConnection.isRoutingTransactionBusy ();
+    if (interrupted)
+    {
         chainBlendQueued = false;
-    if (ready && !pending && chainBlendQueued)
+        chainBlendEditSessionReady = false;
+    }
+    else if (ready)
+        chainBlendEditSessionReady = true;
+    chainBlendSlider.setEnabled (!interrupted && (ready || pending || chainBlendEditSessionReady));
+    // Coalesce rapid drag changes; releasing the mouse sends the final gesture
+    // immediately once the transport is ready.
+    const bool gestureDue = !chainBlendSlider.isMouseButtonDown ()
+        || juce::Time::getMillisecondCounterHiRes () >= chainBlendSendDueMs;
+    if (ready && !pending && chainBlendQueued && gestureDue)
     {
         // The first user edit initializes independent BLEND; merely loading does not.
         if (midiConnection.sendIndependentBlend (chainBlendQueuedValue, !marked, chainBlendSlot))
             chainBlendQueued = false;
     }
-    if (!chainBlendQueued && !midiConnection.isBlendWritePending ()
+    if (ready && !chainBlendQueued && !midiConnection.isBlendWritePending ()
         && !chainBlendSlider.isMouseButtonDown () && preset.isValid)
     {
         const float value = marked ? preset.effects[10].params[14]

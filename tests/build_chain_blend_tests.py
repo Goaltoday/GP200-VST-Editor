@@ -9,7 +9,7 @@ struct BlendLabel { bool visible=false;void setVisible(bool x){visible=x;}void s
 struct AudioPluginAudioProcessorEditor {
  gp200::MidiConnection midiConnection;
  BlendSlider chainBlendSlider;BlendLabel chainBlendLabel;
- bool chainBlendQueued=false,presetRestoreInProgress=false;int chainBlendSlot=-1,sprDeviceSlot=0,sprDeviceMode=0x85;float chainBlendQueuedValue=50;
+ bool chainBlendQueued=false,chainBlendEditSessionReady=false,presetRestoreInProgress=false;double chainBlendSendDueMs=0;int chainBlendSlot=-1,sprDeviceSlot=0,sprDeviceMode=0x85;float chainBlendQueuedValue=50;
  void syncChainBlendControls();
  enum class PresetRestoreStepType {PatchVolume,PatchTempo,EffectChange,ParamChange,ToggleEffect,ReorderEffects,RoutingMode};
  struct PresetRestoreStep {PresetRestoreStepType type=PresetRestoreStepType::ParamChange;int blockIndex=-1,paramIndex=-1;juce::uint32 effectId=0;float value=0;bool shouldBeOn=false;gp200::RoutingOrder routingOrder{};int fxLoopSend=4,fxLoopReturn=4,routingMode=-1;};
@@ -57,6 +57,14 @@ for(float bad:{-1.f,101.f,std::numeric_limits<float>::quiet_NaN(),std::numeric_l
  // An in-flight read may hide the live flag; keep the drag available and its latest value queued.
  m.currentPresetDataIsLive=false;e.chainBlendQueued=true;e.chainBlendQueuedValue=73;e.chainBlendSlider.value=73;e.syncChainBlendControls();assert(e.chainBlendSlider.enabled&&e.chainBlendQueued&&e.chainBlendSlider.value==73);
  m.currentPresetDataIsLive=true;++m.livePresetRevision;m.processBlendReadback();e.syncChainBlendControls();assert(m.blendWritePending&&m.blendWriteExpected==73&&!e.chainBlendQueued&&e.chainBlendSlider.value==73);count++;}
+// Same-slot refresh and timeout recovery preserve editing without unsafe writes.
+{AudioPluginAudioProcessorEditor e;auto& m=e.midiConnection;m.currentPresetDecodedData=data();e.syncChainBlendControls();assert(e.chainBlendEditSessionReady);
+ m.currentPresetDataIsLive=false;m.currentPresetDecodedData.setSize(0);e.chainBlendQueued=true;e.chainBlendQueuedValue=81;e.chainBlendSlider.value=81;e.syncChainBlendControls();assert(e.chainBlendSlider.enabled&&e.chainBlendQueued&&m.parameterWrites.empty()&&e.chainBlendSlider.value==81);
+ m.currentPresetDecodedData=data();m.currentPresetDataIsLive=true;e.syncChainBlendControls();assert(m.blendWriteExpected==81&&m.blendWritePending);count++;}
+// No editing session may be enabled before the first valid live read.
+{AudioPluginAudioProcessorEditor e;auto& m=e.midiConnection;m.currentPresetDataIsLive=false;e.syncChainBlendControls();assert(!e.chainBlendSlider.enabled);count++;}
+// Rapid drag gestures coalesce; release sends the latest value.
+{AudioPluginAudioProcessorEditor e;auto& m=e.midiConnection;m.currentPresetDecodedData=data();e.syncChainBlendControls();e.chainBlendSlider.down=true;e.chainBlendQueued=true;e.chainBlendQueuedValue=64;e.chainBlendSendDueMs=juce::Time::now+150;e.syncChainBlendControls();assert(e.chainBlendQueued&&m.parameterWrites.empty());e.chainBlendSlider.down=false;e.syncChainBlendControls();assert(m.blendWriteExpected==64&&m.blendWritePending);count++;}
 // Switching slot drops an unsent gesture rather than applying it to the new preset.
 {AudioPluginAudioProcessorEditor e;auto& m=e.midiConnection;m.currentPresetDecodedData=data();e.syncChainBlendControls();e.chainBlendQueued=true;e.chainBlendQueuedValue=99;m.currentSlot=1;e.syncChainBlendControls();assert(!e.chainBlendQueued&&m.parameterWrites.empty());count++;}
 // Routing/Recall cancel editing and never initialize metadata incidentally.
