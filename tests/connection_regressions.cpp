@@ -56,7 +56,7 @@ void processBlendReadback ();
 bool isBlendWritePending () const;
 bool sendIndependentBlend (float value, bool activate, int expectedSlot);
 RoutingRequestSnapshot getRoutingRequestSnapshot () const;
-RoutingStateSnapshot getRoutingStateSnapshot () const;
+RoutingStateSnapshot getRoutingStateSnapshot (bool includeSavePermission = true) const;
 void timerCallback ();
 bool sendFlexibleRouting (const RoutingOrder& order, int send, int boundary, int ret, bool parallel, int expectedSlot = -1, bool modeOnly = false);
 bool canSaveCurrentPreset () const;
@@ -140,11 +140,11 @@ MidiConnection::RoutingRequestSnapshot MidiConnection::getRoutingRequestSnapshot
     const juce::ScopedLock lock (stateLock);
     return { routingStage >= 1 && routingStage <= 5, routingSlot, routingOrder, routingSend, routingBoundary, routingReturn, routingValue };
 }
-MidiConnection::RoutingStateSnapshot MidiConnection::getRoutingStateSnapshot () const
+MidiConnection::RoutingStateSnapshot MidiConnection::getRoutingStateSnapshot (bool includeSavePermission) const
 {
     const juce::ScopedLock lock (stateLock);
     return { midiInput != nullptr && midiOutput != nullptr, currentSlot, currentPresetDataIsLive,
-        routingModeSnapshot, currentPresetDecodedData, presetRevision, livePresetRevision, canSaveCurrentPreset (),
+        routingModeSnapshot, currentPresetDecodedData, presetRevision, livePresetRevision, includeSavePermission && canSaveCurrentPreset (),
         routingModeSnapshot.slot == currentSlot && routingModeSnapshot.revision > presetModeBaseline };
 }
 void MidiConnection::timerCallback ()
@@ -908,7 +908,7 @@ void AudioPluginAudioProcessorEditor::sendFlexibleRouteFromRibbon (bool modeOnly
 }
 void AudioPluginAudioProcessorEditor::syncFlexibleRoutingFromDevice ()
 {
-    const auto state = midiConnection.getRoutingStateSnapshot ();
+    const auto state = midiConnection.getRoutingStateSnapshot (false);
     if (!state.connected || !sprWasConnected || state.slot != sprDeviceSlot)
     {
         sprWasConnected = state.connected; sprDeviceSlot = state.slot;
@@ -923,11 +923,11 @@ void AudioPluginAudioProcessorEditor::syncFlexibleRoutingFromDevice ()
         repaint (); return;
     }
     if (!state.live || !state.modeFresh || state.mode.slot != state.slot || !gp200::validRoutingModeValue (state.mode.mode)) return;
+    if (state.presetRevision == sprAppliedPresetRevision && state.mode.mode == sprDeviceMode) return;
     const auto preset = gp200::GP200PresetCodec::decodeLivePresetDump (state.data);
     const auto boundary = gp200::isExtendedRoutingMode (state.mode.mode) ? state.mode.mode & 15
         : juce::jlimit (preset.fxLoopSend, preset.fxLoopReturn, effectChainRibbon.getBoundary ());
     if (!preset.isValid || !gp200::validFlexibleRouting (preset.routingOrder, preset.fxLoopSend, boundary, preset.fxLoopReturn)) return;
-    if (state.presetRevision == sprAppliedPresetRevision && state.mode.mode == sprDeviceMode) return;
     sprAppliedPresetRevision = state.presetRevision; sprDeviceMode = state.mode.mode;
     sprConfirmedPreset = preset; sprConfirmedBoundary = boundary; sprConfirmedMode = state.mode.mode;
     effectChainRibbon.releaseRoutingDraft ();

@@ -2342,11 +2342,11 @@ juce::MemoryBlock MidiConnection::getCurrentPresetDumpDataCopy () const
     return currentPresetDecodedData;
 }
 
-MidiConnection::RoutingStateSnapshot MidiConnection::getRoutingStateSnapshot () const
+MidiConnection::RoutingStateSnapshot MidiConnection::getRoutingStateSnapshot (bool includeSavePermission) const
 {
     const juce::ScopedLock lock (stateLock);
     return { midiInput != nullptr && midiOutput != nullptr, currentSlot, currentPresetDataIsLive,
-        routingModeSnapshot, currentPresetDecodedData, presetRevision, livePresetRevision, canSaveCurrentPreset (),
+        routingModeSnapshot, currentPresetDecodedData, presetRevision, livePresetRevision, includeSavePermission && canSaveCurrentPreset (),
         routingModeSnapshot.slot == currentSlot && routingModeSnapshot.revision > presetModeBaseline };
 }
 
@@ -3312,13 +3312,13 @@ juce::String MidiConnection::sanitizePresetNameForStore (const juce::String& pre
 
 void MidiConnection::handleIncomingMidiMessage (juce::MidiInput*, const juce::MidiMessage& message)
 {
-    const juce::ScopedLock lock (stateLock);
     if (message.isSysEx ())
     {
         handleIncomingSysEx (message);
         return;
     }
 
+    const juce::ScopedLock lock (stateLock);
     lastMessageText = "Received non-SysEx MIDI message";
 }
 
@@ -3353,6 +3353,7 @@ void MidiConnection::handleIncomingSysEx (const juce::MidiMessage& message)
 
     hex << "F7";
 
+    const juce::ScopedLock lock (stateLock);
     lastMessageText = hex;
 
     parseGP200SysEx (fullMessage.data (), static_cast<int> (fullMessage.size ()));

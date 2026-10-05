@@ -67,7 +67,7 @@ void processBlendReadback ();
 bool isBlendWritePending () const;
 bool sendIndependentBlend (float value, bool activate, int expectedSlot);
 RoutingRequestSnapshot getRoutingRequestSnapshot () const;
-RoutingStateSnapshot getRoutingStateSnapshot () const;
+RoutingStateSnapshot getRoutingStateSnapshot (bool includeSavePermission = true) const;
 void timerCallback ();
 bool sendFlexibleRouting (const RoutingOrder& order, int send, int boundary, int ret, bool parallel, int expectedSlot = -1, bool modeOnly = false);
 bool canSaveCurrentPreset () const;
@@ -151,11 +151,11 @@ MidiConnection::RoutingRequestSnapshot MidiConnection::getRoutingRequestSnapshot
     const juce::ScopedLock lock (stateLock);
     return { routingStage >= 1 && routingStage <= 5, routingSlot, routingOrder, routingSend, routingBoundary, routingReturn, routingValue };
 }
-MidiConnection::RoutingStateSnapshot MidiConnection::getRoutingStateSnapshot () const
+MidiConnection::RoutingStateSnapshot MidiConnection::getRoutingStateSnapshot (bool includeSavePermission) const
 {
     const juce::ScopedLock lock (stateLock);
     return { midiInput != nullptr && midiOutput != nullptr, currentSlot, currentPresetDataIsLive,
-        routingModeSnapshot, currentPresetDecodedData, presetRevision, livePresetRevision, canSaveCurrentPreset (),
+        routingModeSnapshot, currentPresetDecodedData, presetRevision, livePresetRevision, includeSavePermission && canSaveCurrentPreset (),
         routingModeSnapshot.slot == currentSlot && routingModeSnapshot.revision > presetModeBaseline };
 }
 void MidiConnection::timerCallback ()

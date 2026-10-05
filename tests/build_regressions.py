@@ -5,6 +5,7 @@ names=[('processBlendReadback','void'),('isBlendWritePending','bool'),('sendInde
 methods=[];decl=[]
 for name,ret in names:
  a=s.index('MidiConnection::'+name+' (');b=s.index('\n}',a)+2;body=s[a:b];methods.append(ret+' '+body);signature=body[:body.index('\n{')].replace('MidiConnection::','')
+ if name == 'getRoutingStateSnapshot': signature=signature.replace('(bool includeSavePermission)', '(bool includeSavePermission = true)')
  if name == 'endPresetRestoreTransaction': signature=signature.replace('int expectedRoutingMode)', 'int expectedRoutingMode = -1)')
  if name in ['sendFlexibleRouting']: signature=signature.replace('int expectedSlot, bool modeOnly)', 'int expectedSlot = -1, bool modeOnly = false)')
  decl.append(('static ' if name in ['getChunkOffset','assemblePresetReadChunks','nibbleDecode','buildLiveReadRequest','buildStateDumpRequest','buildReorderEffects','nibbleEncode'] else '')+ret.replace('MidiConnection::','')+' '+signature+';')

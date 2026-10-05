@@ -38,7 +38,8 @@ class MidiConnection final : private juce::MidiInputCallback, private juce::Time
     struct RoutingModeSnapshot { int mode{-1}; int slot{-1}; std::uint64_t revision{0}; };
     RoutingModeSnapshot getRoutingModeSnapshot () const;
     struct RoutingStateSnapshot { bool connected{false}; int slot{-1}; bool live{false}; RoutingModeSnapshot mode; juce::MemoryBlock data; std::uint64_t presetRevision{0}, liveRevision{0}; bool canSave{false}, modeFresh{false}; };
-    RoutingStateSnapshot getRoutingStateSnapshot () const;
+    // UI-only callers can skip save validation; canSave is then false.
+    RoutingStateSnapshot getRoutingStateSnapshot (bool includeSavePermission = true) const;
     bool requestRoutingModeFromGP200 ();
 
     bool requestAssignmentNamesFromGP200 ();

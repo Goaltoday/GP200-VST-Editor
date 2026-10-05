@@ -4378,12 +4378,21 @@ void AudioPluginAudioProcessorEditor::updateTunerButtonText ()
 
 void AudioPluginAudioProcessorEditor::syncChainBlendControls ()
 {
-    const auto state = midiConnection.getRoutingStateSnapshot ();
+    const auto state = midiConnection.getRoutingStateSnapshot (false);
     if (chainBlendSlot != state.slot || !state.connected)
     { chainBlendQueued = false; chainBlendEditSessionReady = false; chainBlendSlot = state.slot; }
     const bool chain = state.connected && state.slot == sprDeviceSlot
         && gp200::routingModeIsChain (sprDeviceMode);
-    const auto preset = gp200::GP200PresetCodec::decodeLivePresetDump (state.data);
+    if (!chainBlendDecodedValid || state.presetRevision != chainBlendDecodedRevision
+        || state.slot != chainBlendDecodedSlot || state.connected != chainBlendDecodedConnected)
+    {
+        chainBlendDecodedPreset = gp200::GP200PresetCodec::decodeLivePresetDump (state.data);
+        chainBlendDecodedRevision = state.presetRevision;
+        chainBlendDecodedSlot = state.slot;
+        chainBlendDecodedConnected = state.connected;
+        chainBlendDecodedValid = true;
+    }
+    const auto& preset = chainBlendDecodedPreset;
     const bool marked = gp200::hasIndependentBlend (preset);
     const bool pending = midiConnection.isBlendWritePending ();
     chainBlendLabel.setVisible (chain);
@@ -4478,7 +4487,7 @@ void AudioPluginAudioProcessorEditor::sendFlexibleRouteFromRibbon (bool modeOnly
 
 void AudioPluginAudioProcessorEditor::syncFlexibleRoutingFromDevice ()
 {
-    const auto state = midiConnection.getRoutingStateSnapshot ();
+    const auto state = midiConnection.getRoutingStateSnapshot (false);
     if (!state.connected || !sprWasConnected || state.slot != sprDeviceSlot)
     {
         sprWasConnected = state.connected; sprDeviceSlot = state.slot;
@@ -4493,11 +4502,11 @@ void AudioPluginAudioProcessorEditor::syncFlexibleRoutingFromDevice ()
         repaint (); return;
     }
     if (!state.live || !state.modeFresh || state.mode.slot != state.slot || !gp200::validRoutingModeValue (state.mode.mode)) return;
+    if (state.presetRevision == sprAppliedPresetRevision && state.mode.mode == sprDeviceMode) return;
     const auto preset = gp200::GP200PresetCodec::decodeLivePresetDump (state.data);
     const auto boundary = gp200::isExtendedRoutingMode (state.mode.mode) ? state.mode.mode & 15
         : juce::jlimit (preset.fxLoopSend, preset.fxLoopReturn, effectChainRibbon.getBoundary ());
     if (!preset.isValid || !gp200::validFlexibleRouting (preset.routingOrder, preset.fxLoopSend, boundary, preset.fxLoopReturn)) return;
-    if (state.presetRevision == sprAppliedPresetRevision && state.mode.mode == sprDeviceMode) return;
     sprAppliedPresetRevision = state.presetRevision; sprDeviceMode = state.mode.mode;
     sprConfirmedPreset = preset; sprConfirmedBoundary = boundary; sprConfirmedMode = state.mode.mode;
     effectChainRibbon.releaseRoutingDraft ();
@@ -4835,7 +4844,6 @@ void AudioPluginAudioProcessorEditor::updateEffectBlocksUI ()
     }
     else if (midiConnection.getCurrentPresetDumpSize () > 0)
     {
-        presetDataForDisplay = midiConnection.getCurrentPresetDumpDataCopy ();
         sourceText = "Current GP-200 preset";
         presetRevision = midiConnection.getPresetRevision ();
     }
@@ -4892,6 +4900,9 @@ void AudioPluginAudioProcessorEditor::updateEffectBlocksUI ()
 
         return;
     }
+
+    if (midiConnection.isConnected ())
+        presetDataForDisplay = midiConnection.getCurrentPresetDumpDataCopy ();
 
     const auto preset =
         !midiConnection.isConnected ()

@@ -24,7 +24,7 @@ namespace gp200 {
 using RoutingOrder=std::array<int,11>;
 struct GP200EffectSlot {int blockIndex=0,slotIndex=0;bool enabled=true;juce::uint32 effectId=0x06000003;std::array<float,15> params{};};
 struct GP200Preset {std::array<GP200EffectSlot,11> effects{};bool isValid=false;RoutingOrder routingOrder{};int fxLoopSend=0,fxLoopReturn=0;};
-struct GP200PresetCodec {static juce::String blockNameForSlotIndex(int){return "BLOCK";}static GP200Preset decodeLivePresetDump(const juce::MemoryBlock& b){GP200Preset p;if(b.getSize()<912)return p;p.isValid=true;auto x=(const juce::uint8*)b.getData();p.fxLoopSend=x[106];p.fxLoopReturn=x[107];for(int i=0;i<11;i++){p.routingOrder[i]=x[108+i];p.effects[i].blockIndex=i;std::memcpy(p.effects[i].params.data(),x+effectBlockStart+i*effectBlockSize+paramsOffset,60);}return p;}};
+struct GP200PresetCodec {static inline int decodeCalls=0;static juce::String blockNameForSlotIndex(int){return "BLOCK";}static GP200Preset decodeLivePresetDump(const juce::MemoryBlock& b){++decodeCalls;GP200Preset p;if(b.getSize()<912)return p;p.isValid=true;auto x=(const juce::uint8*)b.getData();p.fxLoopSend=x[106];p.fxLoopReturn=x[107];for(int i=0;i<11;i++){p.routingOrder[i]=x[108+i];p.effects[i].blockIndex=i;std::memcpy(p.effects[i].params.data(),x+effectBlockStart+i*effectBlockSize+paramsOffset,60);}return p;}};
 struct Scanner {bool pending=false;void cancel(){pending=false;}bool hasPendingRequest(){return pending;}void setCachedName(int,juce::String){}};
 struct MidiConnection {
 int input=0;int* midiInput=&input;
@@ -57,7 +57,7 @@ void processBlendReadback ();
 bool isBlendWritePending () const;
 bool sendIndependentBlend (float value, bool activate, int expectedSlot);
 RoutingRequestSnapshot getRoutingRequestSnapshot () const;
-RoutingStateSnapshot getRoutingStateSnapshot () const;
+RoutingStateSnapshot getRoutingStateSnapshot (bool includeSavePermission = true) const;
 void timerCallback ();
 bool sendFlexibleRouting (const RoutingOrder& order, int send, int boundary, int ret, bool parallel, int expectedSlot = -1, bool modeOnly = false);
 bool canSaveCurrentPreset () const;
@@ -141,11 +141,11 @@ MidiConnection::RoutingRequestSnapshot MidiConnection::getRoutingRequestSnapshot
     const juce::ScopedLock lock (stateLock);
     return { routingStage >= 1 && routingStage <= 5, routingSlot, routingOrder, routingSend, routingBoundary, routingReturn, routingValue };
 }
-MidiConnection::RoutingStateSnapshot MidiConnection::getRoutingStateSnapshot () const
+MidiConnection::RoutingStateSnapshot MidiConnection::getRoutingStateSnapshot (bool includeSavePermission) const
 {
     const juce::ScopedLock lock (stateLock);
     return { midiInput != nullptr && midiOutput != nullptr, currentSlot, currentPresetDataIsLive,
-        routingModeSnapshot, currentPresetDecodedData, presetRevision, livePresetRevision, canSaveCurrentPreset (),
+        routingModeSnapshot, currentPresetDecodedData, presetRevision, livePresetRevision, includeSavePermission && canSaveCurrentPreset (),
         routingModeSnapshot.slot == currentSlot && routingModeSnapshot.revision > presetModeBaseline };
 }
 void MidiConnection::timerCallback ()
@@ -861,7 +861,8 @@ struct BlendLabel { bool visible=false;void setVisible(bool x){visible=x;}void s
 struct AudioPluginAudioProcessorEditor {
  gp200::MidiConnection midiConnection;
  BlendSlider chainBlendSlider;BlendLabel chainBlendLabel;
- bool chainBlendQueued=false,presetRestoreInProgress=false;int chainBlendSlot=-1,sprDeviceSlot=0,sprDeviceMode=0x85;float chainBlendQueuedValue=50;
+ bool chainBlendQueued=false,chainBlendEditSessionReady=false,presetRestoreInProgress=false;double chainBlendSendDueMs=0;int chainBlendSlot=-1,sprDeviceSlot=0,sprDeviceMode=0x85;float chainBlendQueuedValue=50;
+ gp200::GP200Preset chainBlendDecodedPreset;std::uint64_t chainBlendDecodedRevision=0;int chainBlendDecodedSlot=-2;bool chainBlendDecodedValid=false,chainBlendDecodedConnected=false;
  void syncChainBlendControls();
  enum class PresetRestoreStepType {PatchVolume,PatchTempo,EffectChange,ParamChange,ToggleEffect,ReorderEffects,RoutingMode};
  struct PresetRestoreStep {PresetRestoreStepType type=PresetRestoreStepType::ParamChange;int blockIndex=-1,paramIndex=-1;juce::uint32 effectId=0;float value=0;bool shouldBeOn=false;gp200::RoutingOrder routingOrder{};int fxLoopSend=4,fxLoopReturn=4,routingMode=-1;};
@@ -1024,30 +1025,50 @@ void AudioPluginAudioProcessorEditor::buildFullPresetRestoreSteps (const gp200::
 }
 void AudioPluginAudioProcessorEditor::syncChainBlendControls ()
 {
-    const auto state = midiConnection.getRoutingStateSnapshot ();
+    const auto state = midiConnection.getRoutingStateSnapshot (false);
     if (chainBlendSlot != state.slot || !state.connected)
-    { chainBlendQueued = false; chainBlendSlot = state.slot; }
+    { chainBlendQueued = false; chainBlendEditSessionReady = false; chainBlendSlot = state.slot; }
     const bool chain = state.connected && state.slot == sprDeviceSlot
         && gp200::routingModeIsChain (sprDeviceMode);
-    const auto preset = gp200::GP200PresetCodec::decodeLivePresetDump (state.data);
+    if (!chainBlendDecodedValid || state.presetRevision != chainBlendDecodedRevision
+        || state.slot != chainBlendDecodedSlot || state.connected != chainBlendDecodedConnected)
+    {
+        chainBlendDecodedPreset = gp200::GP200PresetCodec::decodeLivePresetDump (state.data);
+        chainBlendDecodedRevision = state.presetRevision;
+        chainBlendDecodedSlot = state.slot;
+        chainBlendDecodedConnected = state.connected;
+        chainBlendDecodedValid = true;
+    }
+    const auto& preset = chainBlendDecodedPreset;
     const bool marked = gp200::hasIndependentBlend (preset);
     const bool pending = midiConnection.isBlendWritePending ();
     chainBlendLabel.setVisible (chain);
     chainBlendSlider.setVisible (chain);
     const bool ready = chain && state.live && state.modeFresh && preset.isValid
         && !presetRestoreInProgress && !midiConnection.isRoutingTransactionBusy ();
-    // Keep dragging available while the previous write awaits a physical readback.
-    chainBlendSlider.setEnabled (ready || (chain && pending && !presetRestoreInProgress
-        && !midiConnection.isRoutingTransactionBusy ()));
-    if (!chain || presetRestoreInProgress || midiConnection.isRoutingTransactionBusy ())
+    // A same-slot refresh temporarily clears live/modeFresh. Retain the
+    // confirmed editing session, but never send until fresh state returns.
+    const bool interrupted = !chain || presetRestoreInProgress
+        || midiConnection.isRoutingTransactionBusy ();
+    if (interrupted)
+    {
         chainBlendQueued = false;
-    if (ready && !pending && chainBlendQueued)
+        chainBlendEditSessionReady = false;
+    }
+    else if (ready)
+        chainBlendEditSessionReady = true;
+    chainBlendSlider.setEnabled (!interrupted && (ready || pending || chainBlendEditSessionReady));
+    // Coalesce rapid drag changes; releasing the mouse sends the final gesture
+    // immediately once the transport is ready.
+    const bool gestureDue = !chainBlendSlider.isMouseButtonDown ()
+        || juce::Time::getMillisecondCounterHiRes () >= chainBlendSendDueMs;
+    if (ready && !pending && chainBlendQueued && gestureDue)
     {
         // The first user edit initializes independent BLEND; merely loading does not.
         if (midiConnection.sendIndependentBlend (chainBlendQueuedValue, !marked, chainBlendSlot))
             chainBlendQueued = false;
     }
-    if (!chainBlendQueued && !midiConnection.isBlendWritePending ()
+    if (ready && !chainBlendQueued && !midiConnection.isBlendWritePending ()
         && !chainBlendSlider.isMouseButtonDown () && preset.isValid)
     {
         const float value = marked ? preset.effects[10].params[14]
@@ -1061,6 +1082,14 @@ using namespace gp200;
 juce::MemoryBlock data(){juce::MemoryBlock b;b.setSize(1176);b.v[106]=2;b.v[107]=8;for(int i=0;i<11;i++)b.v[108+i]=i;return b;}
 void field(juce::MemoryBlock& b,int param,float value){std::memcpy(b.v.data()+effectBlockStart+10*effectBlockSize+paramsOffset+param*4,&value,4);}
 int main(){int count=0;
+{ AudioPluginAudioProcessorEditor e;auto& m=e.midiConnection;
+ m.currentPresetDecodedData=data();field(m.currentPresetDecodedData,13,blendTagFloat());field(m.currentPresetDecodedData,14,21);
+ const auto before=GP200PresetCodec::decodeCalls;e.syncChainBlendControls();assert(e.chainBlendSlider.value==21);
+ for(int i=0;i<120;i++){e.syncChainBlendControls();}assert(GP200PresetCodec::decodeCalls==before+1);
+ field(m.currentPresetDecodedData,14,79);++m.presetRevision;e.syncChainBlendControls();assert(e.chainBlendSlider.value==79);assert(GP200PresetCodec::decodeCalls==before+2);
+ m.currentSlot=1;e.syncChainBlendControls();assert(GP200PresetCodec::decodeCalls==before+3);count+=123;
+}
+
 for(int m=0;m<256;m++){assert(routingModeIsChain(m)==(m>=128&&m<=139));count++;}
 for(int v=0;v<=100;v++){
  auto b=data();field(b,13,blendTagFloat());field(b,14,float(v));field(b,0,73);
@@ -1094,6 +1123,14 @@ for(float bad:{-1.f,101.f,std::numeric_limits<float>::quiet_NaN(),std::numeric_l
  // An in-flight read may hide the live flag; keep the drag available and its latest value queued.
  m.currentPresetDataIsLive=false;e.chainBlendQueued=true;e.chainBlendQueuedValue=73;e.chainBlendSlider.value=73;e.syncChainBlendControls();assert(e.chainBlendSlider.enabled&&e.chainBlendQueued&&e.chainBlendSlider.value==73);
  m.currentPresetDataIsLive=true;++m.livePresetRevision;m.processBlendReadback();e.syncChainBlendControls();assert(m.blendWritePending&&m.blendWriteExpected==73&&!e.chainBlendQueued&&e.chainBlendSlider.value==73);count++;}
+// Same-slot refresh and timeout recovery preserve editing without unsafe writes.
+{AudioPluginAudioProcessorEditor e;auto& m=e.midiConnection;m.currentPresetDecodedData=data();e.syncChainBlendControls();assert(e.chainBlendEditSessionReady);
+ m.currentPresetDataIsLive=false;m.currentPresetDecodedData.setSize(0);e.chainBlendQueued=true;e.chainBlendQueuedValue=81;e.chainBlendSlider.value=81;e.syncChainBlendControls();assert(e.chainBlendSlider.enabled&&e.chainBlendQueued&&m.parameterWrites.empty()&&e.chainBlendSlider.value==81);
+ m.currentPresetDecodedData=data();m.currentPresetDataIsLive=true;e.syncChainBlendControls();assert(m.blendWriteExpected==81&&m.blendWritePending);count++;}
+// No editing session may be enabled before the first valid live read.
+{AudioPluginAudioProcessorEditor e;auto& m=e.midiConnection;m.currentPresetDataIsLive=false;e.syncChainBlendControls();assert(!e.chainBlendSlider.enabled);count++;}
+// Rapid drag gestures coalesce; release sends the latest value.
+{AudioPluginAudioProcessorEditor e;auto& m=e.midiConnection;m.currentPresetDecodedData=data();e.syncChainBlendControls();e.chainBlendSlider.down=true;e.chainBlendQueued=true;e.chainBlendQueuedValue=64;e.chainBlendSendDueMs=juce::Time::now+150;e.syncChainBlendControls();assert(e.chainBlendQueued&&m.parameterWrites.empty());e.chainBlendSlider.down=false;e.syncChainBlendControls();assert(m.blendWriteExpected==64&&m.blendWritePending);count++;}
 // Switching slot drops an unsent gesture rather than applying it to the new preset.
 {AudioPluginAudioProcessorEditor e;auto& m=e.midiConnection;m.currentPresetDecodedData=data();e.syncChainBlendControls();e.chainBlendQueued=true;e.chainBlendQueuedValue=99;m.currentSlot=1;e.syncChainBlendControls();assert(!e.chainBlendQueued&&m.parameterWrites.empty());count++;}
 // Routing/Recall cancel editing and never initialize metadata incidentally.

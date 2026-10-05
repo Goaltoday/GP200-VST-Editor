@@ -10,6 +10,7 @@ struct AudioPluginAudioProcessorEditor {
  gp200::MidiConnection midiConnection;
  BlendSlider chainBlendSlider;BlendLabel chainBlendLabel;
  bool chainBlendQueued=false,chainBlendEditSessionReady=false,presetRestoreInProgress=false;double chainBlendSendDueMs=0;int chainBlendSlot=-1,sprDeviceSlot=0,sprDeviceMode=0x85;float chainBlendQueuedValue=50;
+ gp200::GP200Preset chainBlendDecodedPreset;std::uint64_t chainBlendDecodedRevision=0;int chainBlendDecodedSlot=-2;bool chainBlendDecodedValid=false,chainBlendDecodedConnected=false;
  void syncChainBlendControls();
  enum class PresetRestoreStepType {PatchVolume,PatchTempo,EffectChange,ParamChange,ToggleEffect,ReorderEffects,RoutingMode};
  struct PresetRestoreStep {PresetRestoreStepType type=PresetRestoreStepType::ParamChange;int blockIndex=-1,paramIndex=-1;juce::uint32 effectId=0;float value=0;bool shouldBeOn=false;gp200::RoutingOrder routingOrder{};int fxLoopSend=4,fxLoopReturn=4,routingMode=-1;};
@@ -72,5 +73,16 @@ for(float bad:{-1.f,101.f,std::numeric_limits<float>::quiet_NaN(),std::numeric_l
 std::cout<<count<<" CHAIN/BLEND production restore and transport checks passed; JUCE ports/codec/known-parameter DB simulated\n";
 }
 '''
+base=base.replace('struct GP200PresetCodec {', 'struct GP200PresetCodec {static inline int decodeCalls=0;')
+base=base.replace('decodeLivePresetDump(const juce::MemoryBlock& b){', 'decodeLivePresetDump(const juce::MemoryBlock& b){++decodeCalls;')
+base=base.replace('int main(){int count=0;', '''int main(){int count=0;
+{ AudioPluginAudioProcessorEditor e;auto& m=e.midiConnection;
+ m.currentPresetDecodedData=data();field(m.currentPresetDecodedData,13,blendTagFloat());field(m.currentPresetDecodedData,14,21);
+ const auto before=GP200PresetCodec::decodeCalls;e.syncChainBlendControls();assert(e.chainBlendSlider.value==21);
+ for(int i=0;i<120;i++){e.syncChainBlendControls();}assert(GP200PresetCodec::decodeCalls==before+1);
+ field(m.currentPresetDecodedData,14,79);++m.presetRevision;e.syncChainBlendControls();assert(e.chainBlendSlider.value==79);assert(GP200PresetCodec::decodeCalls==before+2);
+ m.currentSlot=1;e.syncChainBlendControls();assert(GP200PresetCodec::decodeCalls==before+3);count+=123;
+}
+''')
 base=base.replace('#include <thread>','#include <thread>\n#include <limits>')
 (r/'chain_blend_test.cpp').write_text(base)

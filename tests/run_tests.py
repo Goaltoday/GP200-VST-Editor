@@ -1,6 +1,7 @@
 from pathlib import Path
 import subprocess,tempfile
 r=Path(__file__).resolve().parent
+subprocess.run(['python3',str(r/'build_regressions.py')],check=True)
 subprocess.run(['python3',str(r/'build_snapshot_tests.py')],check=True)
 subprocess.run(['python3',str(r/'build_drag_tests.py')],check=True)
 subprocess.run(['python3',str(r/'build_chain_blend_tests.py')],check=True)
