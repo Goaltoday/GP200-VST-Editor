@@ -10,6 +10,7 @@
 #pragma once
 
 #include "GP200Preset.h"
+#include "GP200ModSyncProtocol.h"
 #include "GP200IR.h"
 #include "GP200SoundClone.h"
 #include "GP200PresetNameScanner.h"
@@ -22,7 +23,7 @@
 
 namespace gp200
 {
-class MidiConnection final : private juce::MidiInputCallback
+class MidiConnection final : private juce::MidiInputCallback, private juce::Timer
 {
   public:
     MidiConnection ();
@@ -34,6 +35,13 @@ class MidiConnection final : private juce::MidiInputCallback
     bool isConnected () const;
 
     bool requestCurrentPresetFromGP200 ();
+    struct RoutingModeSnapshot { int mode{-1}; int slot{-1}; std::uint64_t revision{0}; };
+    RoutingModeSnapshot getRoutingModeSnapshot () const;
+    struct RoutingStateSnapshot { bool connected{false}; int slot{-1}; bool live{false}; RoutingModeSnapshot mode; juce::MemoryBlock data; std::uint64_t presetRevision{0}, liveRevision{0}; bool canSave{false}, modeFresh{false}; };
+    // UI-only callers can skip save validation; canSave is then false.
+    RoutingStateSnapshot getRoutingStateSnapshot (bool includeSavePermission = true) const;
+    bool requestRoutingModeFromGP200 ();
+
     bool requestAssignmentNamesFromGP200 ();
     void processStartupHandshake ();
     void processPendingLivePresetRefresh ();
@@ -59,6 +67,12 @@ class MidiConnection final : private juce::MidiInputCallback
     void invalidatePresetNameCacheSlot (int slot);
 
     bool startIRUpload (const juce::File& wavFile, int zeroBasedUserIRSlot);
+    bool startFactoryCabUpload (const juce::File& wavFile, int zeroBasedFactoryCabIndex);
+    bool startFactoryAmpUpload (const juce::File& cloFile,
+                                int zeroBasedFactoryAmpIndex,
+                                const juce::String& requestedDisplayName);
+    bool startFactoryAmpRename (int zeroBasedFactoryAmpIndex,
+                                const juce::String& requestedDisplayName);
     void processIRUpload ();
     bool isIRUploadInProgress () const;
     juce::String getIRUploadStatusText () const;
@@ -79,6 +93,17 @@ class MidiConnection final : private juce::MidiInputCallback
     bool sendEffectChange (int blockIndex, juce::uint32 effectId);
     bool sendAutoCabMatch (bool shouldBeEnabled);
     bool sendParamChange (int blockIndex, int paramIndex, juce::uint32 effectId, float value);
+    bool sendIndependentBlend (float value, bool activate, int expectedSlot);
+    bool isBlendWritePending () const;
+    void processBlendReadback ();
+    bool sendSeriesParallel (bool parallel);
+    bool sendRoutingModeValue (juce::uint8 value);
+    bool sendFlexibleRouting (const RoutingOrder& order, int send, int boundary, int ret, bool parallel, int expectedSlot = -1, bool modeOnly = false);
+    bool canSaveCurrentPreset () const;
+    bool isRoutingTransactionBusy () const;
+    juce::String getRoutingTransactionStatus () const;
+    struct RoutingRequestSnapshot { bool active{false}; int slot{-1}; RoutingOrder order{}; int send{0}, boundary{0}, ret{0}, mode{1}; };
+    RoutingRequestSnapshot getRoutingRequestSnapshot () const;
     bool sendReorderEffects (const RoutingOrder& routingOrder, int fxLoopSend, int fxLoopReturn);
     bool storeCurrentPresetToGP200 ();
 
@@ -102,6 +127,7 @@ class MidiConnection final : private juce::MidiInputCallback
     juce::MemoryBlock getCurrentPresetDumpDataCopy () const;
 
     std::uint64_t getPresetRevision () const;
+    std::uint64_t getLivePresetRevision () const;
     std::uint64_t getAssignmentNamesRevision () const;
 
     void adoptCurrentPresetSnapshot (int slot,
@@ -113,9 +139,38 @@ class MidiConnection final : private juce::MidiInputCallback
     // Suspend automatic preset/state reads while Recall from DAW or PRST import
     // is actively rebuilding the GP-200 edit buffer.
     void beginPresetRestoreTransaction ();
-    void endPresetRestoreTransaction ();
+    void endPresetRestoreTransaction (int expectedRoutingMode = -1);
+    bool sendPresetRestoreRoutingMode (int expectedSlot, int mode);
 
   private:
+    void timerCallback () override;
+    void processRoutingTransaction ();
+    void failRoutingTransaction (const juce::String& reason);
+    void processPresetReadRecovery ();
+    int routingStage{0}; // 1 order, 2 final mode, 3 mode reply, 4 preset, 5 final query, 6 recovery
+    int routingSlot{-1}, routingSend{0}, routingBoundary{0}, routingReturn{0}, routingValue{1};
+    RoutingOrder routingOrder{};
+    std::uint64_t routingGeneration{0}, slotGeneration{0}, routingModeBaseline{0}, routingLiveBaseline{0}, presetModeBaseline{0};
+    double routingNextMs{0}, routingDeadlineMs{0}, routingQueryMs{0};
+    juce::String routingTransactionStatus{"SPR: idle"};
+    double presetReadStartedMs{0}, presetReadResumeMs{0}, modePollMs{0};
+    int presetReadRetries{0};
+    bool presetReadIsLive{false};
+    bool isFactoryAmpDestinationInactiveLocked (int zeroBasedFactoryAmpIndex) const;
+    bool processModSyncStartup (double nowMs);
+    bool handleModSyncResponse (const juce::uint8* data, int size);
+    void finishModSyncFailure (const juce::String& reason);
+    void applyModSyncSnapshot ();
+    juce::String modSyncStatus{"MOD_SYNC: waiting for startup"};
+    int modSyncTargetPages{19};
+    bool modSyncAttempted{false}; // Repeated on MIDI reconnect; editor reopen alone does not restart it.
+    bool modSyncActive{false};
+    bool modSyncWaiting{false};
+    int modSyncPage{0}, modSyncRetries{0};
+    double modSyncSentMs{0};
+    std::uint32_t modSyncNonce{0};
+    std::array<modsync::Page,modsync::pageCount> modSyncPages{};
+
     struct AssignmentNameQuery
     {
         int section{-1};
@@ -126,6 +181,7 @@ class MidiConnection final : private juce::MidiInputCallback
     void handleIncomingMidiMessage (juce::MidiInput* source, const juce::MidiMessage& message) override;
 
     void handleIncomingSysEx (const juce::MidiMessage& message);
+    bool handleRoutingChangeNotification (const juce::uint8* data, int size);
     void parseGP200SysEx (const juce::uint8* data, int size);
     bool handleSoundCloneUploadAck (const juce::uint8* data, int size);
     void completeSoundCloneUpload ();
@@ -217,12 +273,21 @@ class MidiConnection final : private juce::MidiInputCallback
     double currentStateRequestSentMs{0.0};
     bool liveRefreshPending{false};
     bool presetRestoreTransactionActive{false};
+    std::uint64_t presetRestoreSlotGeneration{0};
     double liveRefreshDueMs{0.0};
     int lastRequestedNameSlot{-1};
 
     int presetDumpSlot{-1};
     std::vector<std::vector<juce::uint8>> presetReadChunks;
     juce::MemoryBlock currentPresetDecodedData;
+    // A loaded CHAIN preset has no saved previous native mode. Parallel keeps the dry path.
+    int nativeRoutingMode{0};
+    bool blendWritePending{false};
+    int blendWriteSlot{-1};
+    std::uint64_t blendWriteBaseline{0};
+    float blendWriteExpected{50.0f};
+    bool blendWriteMarked{false};
+    double blendWriteDeadline{0.0};
     bool currentPresetDataIsLive{false};
     juce::String currentPresetDumpStatusText{"Current full preset data: not captured"};
 
@@ -234,6 +299,8 @@ class MidiConnection final : private juce::MidiInputCallback
     std::array<juce::String, snapToneCount> snapToneNames{};
     juce::String assignmentNamesStatusText{"Assignment names: not requested"};
 
+    RoutingModeSnapshot routingModeSnapshot;
+    std::uint64_t livePresetRevision{0};
     std::uint64_t presetRevision{0};
     std::uint64_t assignmentNamesRevision{0};
 
@@ -241,8 +308,12 @@ class MidiConnection final : private juce::MidiInputCallback
     GP200IRUpload irUpload;
     IRUploadPhase irUploadPhase{IRUploadPhase::Idle};
     int irUploadChunkIndex{0};
+    int hot1FactoryAmpUploadIndex{-1};
+    juce::String hot1FactoryAmpSourceFile;
+    bool hot2FactoryAmpRename{false};
     double irUploadNextActionMs{0.0};
     juce::String irUploadStatusText{"IR upload: idle"};
+    juce::String irUploadLabel{"User IR"};
 
     enum class SoundCloneUploadPhase { Idle, WaitingAfterPrepare, SendingChunks, WaitingForAck };
     GP200SoundCloneUpload soundCloneUpload;

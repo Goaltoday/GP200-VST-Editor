@@ -1,3 +1,4 @@
+#include <set>
 /*
     GP200 VST
 
@@ -8,8 +9,13 @@
     SPDX-License-Identifier: GPL-3.0-or-later
 */
 #include "MidiConnection.h"
+#include "GP200FlexibleRouting.h"
+#include "GP200ChainBlend.h"
+#include "GP200EffectDatabase.h"
 #include "GP200EffectParamDatabase.h"
 #include "MidiDeviceScanner.h"
+#include "GP200ModSync.h"
+#include "GP200Constants.h"
 
 #include <algorithm>
 #include <array>
@@ -21,8 +27,48 @@ namespace gp200
 {
 MidiConnection::MidiConnection () = default;
 
+void MidiConnection::timerCallback ()
+{
+    if (!isConnected ()) { stopTimer (); return; }
+    const juce::ScopedLock lock (stateLock);
+    // These operations belong to the connection, never to the editor window.
+    processIRUpload ();
+    processSoundCloneUpload ();
+    if (irUploadPhase != IRUploadPhase::Idle || soundCloneUploadPhase != SoundCloneUploadPhase::Idle || presetRestoreTransactionActive)
+    {
+        if (modSyncActive) finishModSyncFailure ("interrupted by a transfer");
+        if (routingStage > 0 && routingStage != 6) failRoutingTransaction ("interrupted by a transfer");
+        return;
+    }
+    processPresetReadRecovery ();
+    processRoutingTransaction ();
+    processBlendReadback ();
+    if (routingStage == 1 || routingStage == 2) return;
+    if (startupHandshakePhase == StartupHandshakePhase::Idle) requestCurrentPresetFromGP200 ();
+    processStartupHandshake ();
+    if (!modSyncActive)
+    {
+        if (currentStateRequestQueued && !currentStateRequestPending && presetDumpSlot < 0
+            && !livePresetReadPending && !presetNameScanner.hasPendingRequest ()
+            && startupHandshakePhase == StartupHandshakePhase::Ready)
+            sendStateDumpRequestUnlocked ();
+        processPendingLivePresetRefresh ();
+        requestPresetNameForCurrentSlotIfNeeded ();
+        const auto now = juce::Time::getMillisecondCounterHiRes ();
+        if (currentPresetDataIsLive && routingStage == 0 && !presetNameScanner.hasPendingRequest () && now >= modePollMs)
+        {
+            requestRoutingModeFromGP200 (); modePollMs = now + 1200.0;
+        }
+        processPresetNameScan ();
+    }
+}
+
+
+
+
 MidiConnection::~MidiConnection ()
 {
+    stopTimer ();
     disconnect ();
 }
 
@@ -53,6 +99,7 @@ bool MidiConnection::connectToGP200 ()
 
     {
         const juce::ScopedLock lock (stateLock);
+        modSyncAttempted = false; modSyncTargetPages = 19;
         midiInput = std::move (newInput);
         midiOutput = std::move (newOutput);
         statusText = "Connected to GP-200: IN=" + selectedInput.name + " OUT=" + selectedOutput.name;
@@ -60,11 +107,13 @@ bool MidiConnection::connectToGP200 ()
     }
 
     midiInput->start ();
+    startTimer (40); // Only after both MIDI ports are open.
     return true;
 }
 
 void MidiConnection::disconnect ()
 {
+    stopTimer ();
     std::unique_ptr<juce::MidiInput> inputToStop;
 
     {
@@ -78,10 +127,15 @@ void MidiConnection::disconnect ()
 
     const juce::ScopedLock lock (stateLock);
 
+    if (modSyncActive) finishModSyncFailure ("disconnected");
     presetNameScanner.cancel ();
 
     statusText = "Not connected";
+    routingModeSnapshot.mode = -1; routingModeSnapshot.slot = -1;
+    ++routingModeSnapshot.revision;
     currentSlot = -1;
+    ++slotGeneration; routingStage = 0; presetRestoreTransactionActive = false;
+    presetReadRetries = 0; presetReadResumeMs = 0; modePollMs = 0;
     currentPresetName = "unknown";
 
     startupHandshakePhase = StartupHandshakePhase::Idle;
@@ -131,6 +185,9 @@ bool MidiConnection::isConnected () const
 bool MidiConnection::startIRUpload (const juce::File& wavFile, int zeroBasedUserIRSlot)
 {
     const juce::ScopedLock lock (stateLock);
+    if (routingStage != 0 || presetRestoreTransactionActive)
+    { lastMessageText = "Transfer not started: routing or Recall busy"; return false; }
+
     if (midiOutput == nullptr)
     {
         irUploadStatusText = "IR upload failed: MIDI output not open";
@@ -155,11 +212,199 @@ bool MidiConnection::startIRUpload (const juce::File& wavFile, int zeroBasedUser
     }
 
     irUpload = std::move (prepared);
+    irUploadLabel = "User IR " + juce::String (zeroBasedUserIRSlot + 1);
     irUploadChunkIndex = 0;
     midiOutput->sendMessageNow (irUpload.prepareMessage);
     irUploadPhase = IRUploadPhase::WaitingAfterPrepare;
     irUploadNextActionMs = juce::Time::getMillisecondCounterHiRes () + 200.0;
-    irUploadStatusText = "IR upload: preparing User IR " + juce::String (zeroBasedUserIRSlot + 1);
+    irUploadStatusText = irUploadLabel + ": preparing";
+    lastMessageText = irUploadStatusText;
+    return true;
+}
+
+bool MidiConnection::startFactoryCabUpload (const juce::File& wavFile,
+                                            int zeroBasedFactoryCabIndex)
+{
+    const juce::ScopedLock lock (stateLock);
+    if (routingStage != 0 || presetRestoreTransactionActive)
+    { lastMessageText = "Transfer not started: routing or Recall busy"; return false; }
+
+    if (midiOutput == nullptr)
+    {
+        irUploadStatusText = "Factory CAB upload failed: MIDI output not open";
+        lastMessageText = irUploadStatusText;
+        return false;
+    }
+    if (irUploadPhase != IRUploadPhase::Idle ||
+        soundCloneUploadPhase != SoundCloneUploadPhase::Idle)
+    {
+        irUploadStatusText = "Factory CAB upload unavailable: another transfer is in progress";
+        lastMessageText = irUploadStatusText;
+        return false;
+    }
+
+    GP200IRUpload prepared;
+    const auto result = GP200IR::buildFactoryCabUpload (wavFile,
+                                                        zeroBasedFactoryCabIndex,
+                                                        prepared);
+    if (result.failed ())
+    {
+        irUploadStatusText = "Factory CAB upload failed: " + result.getErrorMessage ();
+        lastMessageText = irUploadStatusText;
+        return false;
+    }
+
+    irUpload = std::move (prepared);
+    irUploadLabel = "Factory CAB " + juce::String (zeroBasedFactoryCabIndex + 1);
+    irUploadChunkIndex = 0;
+    midiOutput->sendMessageNow (irUpload.prepareMessage);
+    irUploadPhase = IRUploadPhase::WaitingAfterPrepare;
+    irUploadNextActionMs = juce::Time::getMillisecondCounterHiRes () + 200.0;
+    irUploadStatusText = irUploadLabel + ": preparing";
+    lastMessageText = irUploadStatusText;
+    return true;
+}
+
+bool MidiConnection::isFactoryAmpDestinationInactiveLocked (int zeroBasedFactoryAmpIndex) const
+{
+    if (!juce::isPositiveAndBelow (zeroBasedFactoryAmpIndex, 71)
+        || !currentPresetDataIsLive
+        || presetRestoreTransactionActive
+        || currentPresetDecodedData.getSize ()
+               < effectBlockStart + effectBlockCount * effectBlockSize)
+        return false;
+
+    const auto ampEffects = GP200EffectDatabase::getEffectsForModule ("AMP");
+    juce::uint32 targetEffectId = 0;
+    int factoryIndex = 0;
+    for (const auto& effect : ampEffects)
+    {
+        if ((effect.effectId & 0xFF000000u) == 0x0F000000u)
+            continue;
+        if (factoryIndex++ == zeroBasedFactoryAmpIndex)
+        {
+            targetEffectId = effect.effectId;
+            break;
+        }
+    }
+    if (targetEffectId == 0)
+        return false;
+
+    const auto* data = static_cast<const juce::uint8*> (currentPresetDecodedData.getData ());
+    for (std::size_t block = 0; block < effectBlockCount; ++block)
+    {
+        const auto offset = effectBlockStart + block * effectBlockSize + effectIdOffset;
+        if (juce::ByteOrder::littleEndianInt (data + offset) == targetEffectId)
+            return false;
+    }
+    return true;
+}
+
+bool MidiConnection::startFactoryAmpUpload (const juce::File& cloFile,
+                                            int zeroBasedFactoryAmpIndex,
+                                            const juce::String& requestedDisplayName)
+{
+    const juce::ScopedLock lock (stateLock);
+    if (routingStage != 0 || presetRestoreTransactionActive)
+    { lastMessageText = "Transfer not started: routing or Recall busy"; return false; }
+
+    if (midiOutput == nullptr)
+    {
+        irUploadStatusText = "Factory AMP upload failed: MIDI output not open";
+        lastMessageText = irUploadStatusText;
+        return false;
+    }
+    if (irUploadPhase != IRUploadPhase::Idle ||
+        soundCloneUploadPhase != SoundCloneUploadPhase::Idle)
+    {
+        irUploadStatusText = "Factory AMP upload unavailable: another transfer is in progress";
+        lastMessageText = irUploadStatusText;
+        return false;
+    }
+
+    if (!isFactoryAmpDestinationInactiveLocked (zeroBasedFactoryAmpIndex))
+    {
+        irUploadStatusText = "HOT1: select a different AMP and wait for the live preset before uploading; bypass is not enough";
+        lastMessageText = irUploadStatusText;
+        return false;
+    }
+
+    GP200IRUpload prepared;
+    const auto result = GP200SoundClone::buildFactoryAmpUpload (cloFile,
+                                                                zeroBasedFactoryAmpIndex,
+                                                                requestedDisplayName,
+                                                                prepared);
+    if (result.failed ())
+    {
+        irUploadStatusText = "Factory AMP upload failed: " + result.getErrorMessage ();
+        lastMessageText = irUploadStatusText;
+        return false;
+    }
+
+    if (!GP200SoundClone::factoryAmpUploadHasHot1Marker (prepared))
+    {
+        irUploadStatusText = "HOT1 build mismatch: the encoded activation marker is missing; clean-rebuild the VST with all HOT1 files";
+        lastMessageText = irUploadStatusText;
+        return false;
+    }
+
+    irUpload = std::move (prepared);
+    hot1FactoryAmpUploadIndex = zeroBasedFactoryAmpIndex;
+    hot1FactoryAmpSourceFile = cloFile.getFileName ();
+    hot2FactoryAmpRename = false;
+    irUploadLabel = "Factory AMP " + juce::String (zeroBasedFactoryAmpIndex + 1);
+    irUploadChunkIndex = 0;
+    midiOutput->sendMessageNow (irUpload.prepareMessage);
+    irUploadPhase = IRUploadPhase::WaitingAfterPrepare;
+
+    // v1.3 robustness test: only Factory AMP/CLO gets relaxed timing.
+    irUploadNextActionMs = juce::Time::getMillisecondCounterHiRes () + 250.0;
+    irUploadStatusText = irUploadLabel + ": preparing";
+    lastMessageText = irUploadStatusText;
+    return true;
+}
+
+bool MidiConnection::startFactoryAmpRename (int zeroBasedFactoryAmpIndex,
+                                            const juce::String& requestedDisplayName)
+{
+    const juce::ScopedLock lock (stateLock);
+    if (routingStage != 0 || presetRestoreTransactionActive)
+    { lastMessageText = "Transfer not started: routing or Recall busy"; return false; }
+
+    if (midiOutput == nullptr)
+    {
+        irUploadStatusText = "Factory AMP rename failed: MIDI output not open";
+        lastMessageText = irUploadStatusText;
+        return false;
+    }
+    if (irUploadPhase != IRUploadPhase::Idle ||
+        soundCloneUploadPhase != SoundCloneUploadPhase::Idle)
+    {
+        irUploadStatusText = "Factory AMP rename unavailable: another transfer is in progress";
+        lastMessageText = irUploadStatusText;
+        return false;
+    }
+
+    GP200IRUpload prepared;
+    const auto result = GP200SoundClone::buildFactoryAmpRename (
+        zeroBasedFactoryAmpIndex, requestedDisplayName, prepared);
+    if (result.failed ())
+    {
+        irUploadStatusText = "Factory AMP rename failed: " + result.getErrorMessage ();
+        lastMessageText = irUploadStatusText;
+        return false;
+    }
+
+    irUpload = std::move (prepared);
+    hot1FactoryAmpUploadIndex = zeroBasedFactoryAmpIndex;
+    hot1FactoryAmpSourceFile.clear ();
+    hot2FactoryAmpRename = true;
+    irUploadLabel = "Factory AMP rename " + juce::String (zeroBasedFactoryAmpIndex + 1);
+    irUploadChunkIndex = 0;
+    midiOutput->sendMessageNow (irUpload.prepareMessage);
+    irUploadPhase = IRUploadPhase::WaitingAfterPrepare;
+    irUploadNextActionMs = juce::Time::getMillisecondCounterHiRes () + 250.0;
+    irUploadStatusText = irUploadLabel + ": preparing";
     lastMessageText = irUploadStatusText;
     return true;
 }
@@ -174,6 +419,11 @@ void MidiConnection::processIRUpload ()
     if (now < irUploadNextActionMs)
         return;
 
+    const bool isFactoryAmpOperation = hot1FactoryAmpUploadIndex >= 0;
+    const double chunkDelayMs      = isFactoryAmpOperation ? 40.0   : 30.0;
+    const double preCommitDelayMs  = isFactoryAmpOperation ? 400.0  : 300.0;
+    const double postCommitDelayMs = isFactoryAmpOperation ? 1200.0 : 1000.0;
+
     if (irUploadPhase == IRUploadPhase::WaitingAfterPrepare ||
         irUploadPhase == IRUploadPhase::SendingChunks)
     {
@@ -182,77 +432,114 @@ void MidiConnection::processIRUpload ()
             midiOutput->sendMessageNow (irUpload.chunks[static_cast<std::size_t> (irUploadChunkIndex)]);
             ++irUploadChunkIndex;
             irUploadPhase = IRUploadPhase::SendingChunks;
-            irUploadNextActionMs = now + 30.0;
-            irUploadStatusText = "IR upload: block " + juce::String (irUploadChunkIndex) + "/" +
+            irUploadNextActionMs = now + chunkDelayMs;
+            irUploadStatusText = irUploadLabel + ": block " + juce::String (irUploadChunkIndex) + "/" +
                                  juce::String (static_cast<int> (irUpload.chunks.size ()));
             lastMessageText = irUploadStatusText;
             return;
         }
+
         irUploadPhase = IRUploadPhase::WaitingBeforeCommit;
-        irUploadNextActionMs = now + 300.0;
-        irUploadStatusText = "IR upload: waiting before commit";
+        irUploadNextActionMs = now + preCommitDelayMs;
+        irUploadStatusText = irUploadLabel + ": waiting before commit";
         return;
     }
 
     if (irUploadPhase == IRUploadPhase::WaitingBeforeCommit)
     {
+        if (isFactoryAmpOperation && !hot2FactoryAmpRename
+            && !isFactoryAmpDestinationInactiveLocked (hot1FactoryAmpUploadIndex))
+        {
+            irUploadPhase = IRUploadPhase::Idle;
+            hot1FactoryAmpUploadIndex = -1;
+            hot1FactoryAmpSourceFile.clear ();
+            hot2FactoryAmpRename = false;
+            irUpload = {};
+            irUploadStatusText = "HOT1 cancelled before commit: destination selected or live preset unavailable; no Factory AMP write requested";
+            lastMessageText = irUploadStatusText;
+            return;
+        }
+
         midiOutput->sendMessageNow (irUpload.commitMessage);
         irUploadPhase = IRUploadPhase::WaitingAfterCommit;
-        irUploadNextActionMs = now + 1000.0;
-        irUploadStatusText = "IR upload: commit sent";
+        irUploadNextActionMs = now + postCommitDelayMs;
+        irUploadStatusText = irUploadLabel + ": commit sent";
         lastMessageText = irUploadStatusText;
         return;
     }
 
-  if (irUploadPhase == IRUploadPhase::WaitingAfterCommit)
-{
-    const auto uploadedName = irUpload.displayName;
-
-    irUploadPhase = IRUploadPhase::Idle;
-    irUploadStatusText =
-        "IR upload completed: " + uploadedName;
-
-    lastMessageText = irUploadStatusText;
-    irUpload = {};
-
-    // Actualiza la lista de nombres User IR/SnapTone.
-    pendingAssignmentNameQueries.clear();
-
-    for (auto& name : userIRNames)
-        name.clear();
-
-    for (auto& name : snapToneNames)
-        name.clear();
-
-    ++assignmentNamesRevision;
-
-    constexpr int assignmentPageSize = 16;
-
-    for (int block = 0; block < assignmentPageSize; ++block)
-        pendingAssignmentNameQueries.push_back({ 0, 0, block });
-
-    for (int block = 0;
-         block < static_cast<int>(userIRCount) - assignmentPageSize;
-         ++block)
+    if (irUploadPhase == IRUploadPhase::WaitingAfterCommit)
     {
-        pendingAssignmentNameQueries.push_back({ 0, 1, block });
+        const auto uploadedName = irUpload.displayName;
+        const bool wasFactoryAmpOperation = hot1FactoryAmpUploadIndex >= 0;
+        const bool wasFactoryAmpRename = hot2FactoryAmpRename;
+        const auto completedFactoryAmpIndex = hot1FactoryAmpUploadIndex;
+        const auto completedFactoryAmpSourceFile = hot1FactoryAmpSourceFile;
+
+        irUploadPhase = IRUploadPhase::Idle;
+        hot1FactoryAmpUploadIndex = -1;
+        hot1FactoryAmpSourceFile.clear ();
+        hot2FactoryAmpRename = false;
+        irUploadStatusText = irUploadLabel + " completed: " + uploadedName;
+        lastMessageText = irUploadStatusText;
+        irUpload = {};
+
+        // Avoid immediate extra MIDI traffic after the custom Factory AMP
+        // flash/readback/hot-activation transaction.
+        if (wasFactoryAmpOperation)
+        {
+            const auto ampEffects = GP200EffectDatabase::getEffectsForModule ("AMP");
+            int factoryIndex = 0;
+            for (const auto& effect : ampEffects)
+            {
+                if ((effect.effectId & 0xFF000000u) == 0x0F000000u)
+                    continue;
+                if (factoryIndex++ == completedFactoryAmpIndex)
+                {
+                    auto sourceFile = completedFactoryAmpSourceFile;
+                    if (wasFactoryAmpRename && sourceFile.isEmpty ())
+                        sourceFile = GP200ModSync::getSourceFile (effect.effectId);
+                    GP200ModSync::recordFactoryAmpOverride (effect.effectId, uploadedName, sourceFile);
+                    break;
+                }
+            }
+            irUploadStatusText = wasFactoryAmpRename
+                ? irUploadLabel + ": name written; MOD_SYNC will confirm it on the next connection"
+                : irUploadLabel + ": transfer sent (no activation ACK); select the destination AMP now";
+            lastMessageText = irUploadStatusText;
+            return;
+        }
+
+        pendingAssignmentNameQueries.clear ();
+
+        for (auto& name : userIRNames)
+            name.clear ();
+
+        for (auto& name : snapToneNames)
+            name.clear ();
+
+        ++assignmentNamesRevision;
+
+        constexpr int assignmentPageSize = 16;
+
+        for (int block = 0; block < assignmentPageSize; ++block)
+            pendingAssignmentNameQueries.push_back ({ 0, 0, block });
+
+        for (int block = 0;
+             block < static_cast<int> (userIRCount) - assignmentPageSize;
+             ++block)
+        {
+            pendingAssignmentNameQueries.push_back ({ 0, 1, block });
+        }
+
+        for (int block = 0; block < static_cast<int> (snapToneCount); ++block)
+            pendingAssignmentNameQueries.push_back ({ 1, 0, block });
+
+        currentAssignmentNameQuery = {};
+        assignmentNameRequestInProgress = false;
+        assignmentNamesStatusText = "Assignment names: refreshing after " + irUploadLabel + " upload...";
+        sendNextAssignmentNameQuery ();
     }
-
-    for (int block = 0;
-         block < static_cast<int>(snapToneCount);
-         ++block)
-    {
-        pendingAssignmentNameQueries.push_back({ 1, 0, block });
-    }
-
-    currentAssignmentNameQuery = {};
-    assignmentNameRequestInProgress = false;
-
-    assignmentNamesStatusText =
-        "Assignment names: refreshing after IR upload...";
-
-    sendNextAssignmentNameQuery();
-}
 }
 
 bool MidiConnection::isIRUploadInProgress () const
@@ -268,10 +555,12 @@ juce::String MidiConnection::getIRUploadStatusText () const
 }
 
 
-
 bool MidiConnection::startSoundCloneUpload (const juce::File& cloFile, int globalSlot)
 {
     const juce::ScopedLock lock (stateLock);
+    if (routingStage != 0 || presetRestoreTransactionActive)
+    { lastMessageText = "Transfer not started: routing or Recall busy"; return false; }
+
 
     if (midiOutput == nullptr)
     {
@@ -334,9 +623,8 @@ void MidiConnection::processSoundCloneUpload ()
 
             if (soundCloneUploadChunkIndex >= static_cast<int> (soundCloneUpload.chunks.size ()))
             {
-                // The official editor does not transmit a 0x12/0x0C commit here.
-                // After the last data chunk, the GP-200 processes the model and
-                // returns 0x12/0x0C as the completion acknowledgement.
+                // Stock SnapTone route: no separate commit. The GP-200 sends
+                // 0x12/0x0C after it has processed the final model chunk.
                 soundCloneUploadPhase = SoundCloneUploadPhase::WaitingForAck;
                 soundCloneUploadNextActionMs = now + 2000.0;
                 soundCloneUploadStatusText = "Sound Clone upload: waiting for GP-200 confirmation";
@@ -345,16 +633,12 @@ void MidiConnection::processSoundCloneUpload ()
             else
             {
                 soundCloneUploadPhase = SoundCloneUploadPhase::SendingChunks;
-                // Keep the existing conservative transfer timing. The official
-                // editor is faster, but 30 ms is already known to be stable.
                 soundCloneUploadNextActionMs = now + 30.0;
             }
 
             return;
         }
 
-        // Defensive fallback: normally the final chunk switches directly to
-        // WaitingForAck above.
         soundCloneUploadPhase = SoundCloneUploadPhase::WaitingForAck;
         soundCloneUploadNextActionMs = now + 2000.0;
         soundCloneUploadStatusText = "Sound Clone upload: waiting for GP-200 confirmation";
@@ -374,10 +658,6 @@ void MidiConnection::processSoundCloneUpload ()
 
 bool MidiConnection::handleSoundCloneUploadAck (const juce::uint8* data, int size)
 {
-    // Captures from the official editor show this 38-byte 0x12/0x0C packet
-    // travelling GP-200 -> PC after the last Sound Clone chunk. Byte 22 holds
-    // the same global destination slot used by the upload (AMP 1..5 = 0..4,
-    // DIST 1..5 = 5..9).
     if (soundCloneUploadPhase != SoundCloneUploadPhase::WaitingForAck || size < 38)
         return false;
 
@@ -408,8 +688,6 @@ void MidiConnection::completeSoundCloneUpload ()
     soundCloneUpload = {};
     soundCloneUploadChunkIndex = 0;
 
-    // Keep the existing cache visible. Update the imported slot immediately,
-    // then refresh all names from the GP-200 without clearing the others.
     if (juce::isPositiveAndBelow (uploadedSlot, static_cast<int> (snapToneNames.size ())))
     {
         snapToneNames[static_cast<std::size_t> (uploadedSlot)] = uploadedName;
@@ -417,7 +695,6 @@ void MidiConnection::completeSoundCloneUpload ()
     }
 
     pendingAssignmentNameQueries.clear ();
-
     constexpr int assignmentPageSize = 16;
 
     for (int block = 0; block < assignmentPageSize; ++block)
@@ -426,9 +703,7 @@ void MidiConnection::completeSoundCloneUpload ()
     for (int block = 0;
          block < static_cast<int> (userIRCount) - assignmentPageSize;
          ++block)
-    {
         pendingAssignmentNameQueries.push_back ({ 0, 1, block });
-    }
 
     for (int block = 0; block < static_cast<int> (snapToneCount); ++block)
         pendingAssignmentNameQueries.push_back ({ 1, 0, block });
@@ -455,9 +730,8 @@ bool MidiConnection::requestCurrentPresetFromGP200 ()
 {
     const juce::ScopedLock lock (stateLock);
 
-    // Recall/PRST restore is a write transaction. Do not interleave an
-    // automatic state dump with a partially restored edit buffer.
-    if (presetRestoreTransactionActive)
+    if (presetRestoreTransactionActive || modSyncActive || routingStage == 1 || routingStage == 2
+        || irUploadPhase != IRUploadPhase::Idle || soundCloneUploadPhase != SoundCloneUploadPhase::Idle)
         return false;
 
     if (midiOutput == nullptr)
@@ -524,7 +798,8 @@ bool MidiConnection::sendEnterEditorModeUnlocked ()
 
 bool MidiConnection::sendStateDumpRequestUnlocked ()
 {
-    if (midiOutput == nullptr || presetRestoreTransactionActive)
+    if (midiOutput == nullptr || presetRestoreTransactionActive || routingStage == 1 || routingStage == 2
+        || juce::Time::getMillisecondCounterHiRes () < presetReadResumeMs)
         return false;
 
     // Preset-name reads and live preset reads both use 0x12/0x18. Do not start
@@ -556,7 +831,7 @@ void MidiConnection::processStartupHandshake ()
 {
     const juce::ScopedLock lock (stateLock);
 
-    if (midiOutput == nullptr || presetRestoreTransactionActive)
+    if (midiOutput == nullptr || presetRestoreTransactionActive || routingStage == 1 || routingStage == 2)
         return;
 
     const auto nowMs = juce::Time::getMillisecondCounterHiRes ();
@@ -585,38 +860,173 @@ void MidiConnection::processStartupHandshake ()
         return;
     }
 
-    // A current-state request can be queued while the preset-name scanner has
-    // one 0x12/0x18 reply in flight. Once that single scanner reply has
-    // completed, service the queued state request before allowing the scanner
-    // to send its next slot. Without this hand-off, currentStateRequestQueued
-    // and processPresetNameScan() can block each other indefinitely.
-    if (currentStateRequestQueued
-        && !presetNameScanner.hasPendingRequest ()
-        && presetDumpSlot < 0
-        && !livePresetReadPending)
-    {
-        sendStateDumpRequestUnlocked ();
-        return;
-    }
+    if (startupHandshakePhase == StartupHandshakePhase::Ready && currentStateRequestQueued) return;
 
     // Auxiliary User IR / SnapTone names are deliberately postponed until the
     // seven-chunk active preset has completed. This keeps startup traffic in the
     // same order as the official editor without changing how those names are
     // queried or refreshed later.
     if (startupHandshakePhase == StartupHandshakePhase::Ready
-        && !startupAssignmentNamesRequested)
+        && routingStage == 0 && !processModSyncStartup (nowMs))
+        return;
+
+    if (startupHandshakePhase == StartupHandshakePhase::Ready
+        && routingStage == 0 && !startupAssignmentNamesRequested)
     {
         startupAssignmentNamesRequested = true;
         requestAssignmentNamesFromGP200 ();
     }
 }
 
+void MidiConnection::finishModSyncFailure (const juce::String& reason)
+{
+    modSyncActive = false;
+    modSyncWaiting = false;
+    modSyncAttempted = true;
+    modSyncPages = {};
+    modSyncStatus = "MOD_SYNC: " + reason + "; cache not verified";
+    lastMessageText = modSyncStatus;
+}
+
+bool MidiConnection::processModSyncStartup (double nowMs)
+{
+    if (!modSyncActive && modSyncAttempted) return true;
+    if (!modSyncActive)
+    {
+        if (currentStateRequestPending || presetNameRequestPending || livePresetReadPending
+            || presetDumpSlot >= 0 || presetNameScanner.hasPendingRequest () || assignmentNameRequestInProgress)
+        {
+            modSyncStatus = "MOD_SYNC waiting:";
+            if (currentStateRequestPending) modSyncStatus += " state";
+            if (presetNameRequestPending) modSyncStatus += " name";
+            if (livePresetReadPending || presetDumpSlot >= 0) modSyncStatus += " preset";
+            if (presetNameScanner.hasPendingRequest ()) modSyncStatus += " name scan";
+            if (assignmentNameRequestInProgress) modSyncStatus += " assignments";
+            return false;
+        }
+        modSyncAttempted = true;
+        modSyncActive = true;
+        modSyncPage = 0;
+        modSyncRetries = 0;
+        modSyncNonce = static_cast<std::uint32_t> (juce::Random::getSystemRandom ().nextInt ());
+        modSyncPages = {};
+    }
+    if (modSyncWaiting)
+    {
+        if (nowMs - modSyncSentMs < 800.0) return false;
+        if (modSyncRetries >= 2)
+        {
+            finishModSyncFailure ("MIDI query timed out");
+            return true;
+        }
+        ++modSyncRetries;
+        modSyncWaiting = false;
+    }
+    if (modSyncPage == modSyncTargetPages)
+    {
+        applyModSyncSnapshot ();
+        modSyncActive = false;
+        modSyncPages = {};
+        return true;
+    }
+    const auto bytes = modsync::request (modSyncPage, modSyncNonce);
+    modSyncWaiting = true;
+    modSyncSentMs = nowMs;
+    modSyncStatus = "MOD_SYNC page " + juce::String (modSyncPage + 1) + "/" + juce::String (modSyncTargetPages) + ", retry " + juce::String (modSyncRetries);
+    midiOutput->sendMessageNow (juce::MidiMessage::createSysExMessage (bytes.data ()+1, static_cast<int> (bytes.size ()-2)));
+    return false;
+}
+
+bool MidiConnection::handleModSyncResponse (const juce::uint8* data, int size)
+{
+    modsync::Page page;
+    const auto result = modsync::decode (data, size, modSyncPage, modSyncNonce, page);
+    if (result == modsync::Decode::unrelated) return false;
+    // Consume late/duplicate/malformed MS11 frames before all stock parsers.
+    if (!modSyncActive || !modSyncWaiting) return true;
+    if (irUploadPhase != IRUploadPhase::Idle || soundCloneUploadPhase != SoundCloneUploadPhase::Idle || presetRestoreTransactionActive)
+    {
+        finishModSyncFailure ("interrupted by a transfer");
+        return true;
+    }
+    if (result != modsync::Decode::valid) return true; // Bounded timeout/retry handles corrupt frames.
+    if (modSyncPage > 0 && page.bytes[19] != modSyncPages[0].bytes[19])
+    {
+        finishModSyncFailure ("capabilities changed during snapshot");
+        return true;
+    }
+    if (modSyncPage == 0) modSyncTargetPages = (page.bytes[19]&8) ? modsync::pageCount : 19;
+    modSyncPages[static_cast<std::size_t> (modSyncPage)] = page;
+    ++modSyncPage;
+    modSyncWaiting = false;
+    modSyncRetries = 0;
+    return true;
+}
+
+void MidiConnection::applyModSyncSnapshot ()
+{
+    juce::Array<juce::var> amps, cabs;
+    for (int page = 1; page < 19; ++page)
+    {
+        const auto& bytes = modSyncPages[static_cast<std::size_t> (page)].bytes;
+        const bool isAmp = page >= 10;
+        for (int i = 0; i < bytes[18]; ++i)
+        {
+            const auto* rec = bytes.data () + 24 + i*18;
+            if (isAmp && rec[0] == 0) continue;
+            const auto index = (page - (isAmp ? 10 : 1))*8 + i;
+            const auto id = isAmp ? modsync::ampIds[static_cast<std::size_t> (index)] : 0x0a000000u + static_cast<unsigned> (index);
+            auto* entry = new juce::DynamicObject ();
+            entry->setProperty ("effect_id", static_cast<juce::int64> (id));
+            entry->setProperty ("display_name", juce::String::fromUTF8 (reinterpret_cast<const char*> (rec+2),16).trim ());
+            entry->setProperty ("source_file", "");
+            if (isAmp) { entry->setProperty ("parameter_profile", "CLO5"); entry->setProperty ("parameter_count", 5); amps.add (juce::var(entry)); }
+            else cabs.add (juce::var(entry));
+        }
+    }
+    // Complete replacement also removes AMP overrides that are now stock.
+    auto* root = new juce::DynamicObject ();
+    root->setProperty ("factory_amp_overrides", amps);
+    root->setProperty ("factory_cab_overrides", cabs);
+    bool preSaved = true;
+    if (modSyncTargetPages == modsync::pageCount)
+    {
+        juce::Array<juce::var> pre;
+        std::set<std::uint32_t> seen;
+        for (int page = 19; page < modsync::pageCount; ++page)
+        {
+            const auto& bytes = modSyncPages[static_cast<std::size_t> (page)].bytes;
+            for (int i = 0; i < bytes[18]; ++i)
+            {
+                const auto* rec = bytes.data () + 24 + i*32;
+                const auto id = modsync::read32 (rec);
+                if (!seen.insert (id).second) { finishModSyncFailure ("duplicate PRE slot"); return; }
+                if (rec[9] == 0) continue;
+                auto* entry = new juce::DynamicObject ();
+                entry->setProperty ("pre_effect_id", static_cast<juce::int64> (id));
+                entry->setProperty ("source_effect_id", static_cast<juce::int64> (modsync::read32 (rec+4)));
+                const char* modules[] = {"", "MOD", "DLY", "RVB", "WAH"};
+                entry->setProperty ("source_module", modules[rec[8]]);
+                entry->setProperty ("display_name", juce::String::fromUTF8 (reinterpret_cast<const char*> (rec+12),20).trim ());
+                entry->setProperty ("parameter_count", rec[10]);
+                entry->setProperty ("relocation_profile", "Imported automatically from GP-200");
+                pre.add (juce::var (entry));
+            }
+        }
+        if (seen.size () != 15) { finishModSyncFailure ("incomplete PRE bank"); return; }
+        auto* preRoot = new juce::DynamicObject ();
+        preRoot->setProperty ("schema", "gp200-pre-bank/v1");
+        preRoot->setProperty ("slots", pre);
+        preSaved = GP200ModSync::replacePreBankFromDevice (juce::var (preRoot));
+    }
+    const bool saved = GP200ModSync::replaceFromDevice (juce::var(root), (modSyncPages[0].bytes[19]&2) ? 2048 : 1024);
+    modSyncStatus = saved && preSaved ? "MOD_SYNC OK: 70 CAB, " + juce::String (amps.size ()) + " AMP overrides" + (modSyncTargetPages == modsync::pageCount ? ", PRE synchronized" : ", PRE requires updated firmware") : "MOD_SYNC applied; cache save failed";
+    lastMessageText = modSyncStatus;
+}
+
 void MidiConnection::collectStateDumpChunk (const juce::uint8* data, int size)
 {
-    // A late reply to a state request issued before Recall must not replace
-    // the edit buffer while the restore transaction is in progress.
-    if (presetRestoreTransactionActive
-        || startupHandshakePhase != StartupHandshakePhase::WaitingForStateDump)
+    if (startupHandshakePhase != StartupHandshakePhase::WaitingForStateDump)
         return;
 
     const int offset = getChunkOffset (data, size);
@@ -653,6 +1063,7 @@ void MidiConnection::collectStateDumpChunk (const juce::uint8* data, int size)
 
     currentStateRequestPending = false;
     currentStateRequestQueued = false;
+    if (currentSlot != slot) ++slotGeneration;
     currentSlot = slot;
 
     juce::String name;
@@ -691,13 +1102,13 @@ void MidiConnection::processPendingLivePresetRefresh ()
 {
     const juce::ScopedLock lock (stateLock);
 
-    if (presetRestoreTransactionActive
-        || !liveRefreshPending || midiOutput == nullptr || currentSlot < 0)
+    if (modSyncActive || !liveRefreshPending || midiOutput == nullptr || currentSlot < 0)
         return;
 
     const auto nowMs = juce::Time::getMillisecondCounterHiRes ();
 
-    if (nowMs < liveRefreshDueMs)
+    if (nowMs < liveRefreshDueMs || nowMs < presetReadResumeMs
+        || currentStateRequestPending || livePresetReadPending)
         return;
 
     // Do not overlap a live seven-chunk read with either another preset read
@@ -832,8 +1243,6 @@ bool MidiConnection::renameSnapToneOnGP200 (int zeroBasedIndex, const juce::Stri
                                                            static_cast<int> (bytes.size () - 2));
     midiOutput->sendMessageNow (message);
 
-    // No rename ACK has been identified in the supplied official-editor captures.
-    // Keep the UI responsive by updating the local cache immediately.
     snapToneNames[static_cast<std::size_t> (zeroBasedIndex)] = safeName;
     ++assignmentNamesRevision;
 
@@ -886,8 +1295,6 @@ bool MidiConnection::renameUserIROnGP200 (int zeroBasedIndex, const juce::String
                                                            static_cast<int> (bytes.size () - 2));
     midiOutput->sendMessageNow (message);
 
-    // No dedicated rename ACK has been identified in the supplied official-editor capture.
-    // Update the local cache immediately; the normal assignment-name refresh can verify it later.
     userIRNames[static_cast<std::size_t> (zeroBasedIndex)] = safeName;
     ++assignmentNamesRevision;
 
@@ -1292,6 +1699,12 @@ bool MidiConnection::sendReorderEffects (const RoutingOrder& routingOrder, int f
         return false;
     }
 
+    if (fxLoopSend < 0 || fxLoopSend > 11 || fxLoopReturn < fxLoopSend || fxLoopReturn > 11)
+    {
+        lastMessageText = "Cannot reorder effects: invalid FX Loop position";
+        return false;
+    }
+
     std::array<bool, effectBlockCount> seen{};
     seen.fill (false);
 
@@ -1319,16 +1732,278 @@ bool MidiConnection::sendReorderEffects (const RoutingOrder& routingOrder, int f
 
     midiOutput->sendMessageNow (message);
 
-    updateCurrentPresetRoutingOrder (routingOrder);
+    if (currentPresetDecodedData.getSize () >= routingOrderOffset + effectBlockCount &&
+        currentPresetDecodedData.getSize () > fxLoopReturnOffset)
+    {
+        auto* data = static_cast<juce::uint8*> (currentPresetDecodedData.getData ());
+        if (data != nullptr)
+        {
+            data[fxLoopSendOffset] = static_cast<juce::uint8> (fxLoopSend);
+            data[fxLoopReturnOffset] = static_cast<juce::uint8> (fxLoopReturn);
+            for (std::size_t i = 0; i < effectBlockCount; ++i)
+                data[routingOrderOffset + i] = static_cast<juce::uint8> (routingOrder[i] & 0xFF);
+            ++presetRevision;
+        }
+    }
 
     lastMessageText = "Sent effect chain reorder to GP-200";
 
     return true;
 }
 
+MidiConnection::RoutingModeSnapshot MidiConnection::getRoutingModeSnapshot () const
+{
+    const juce::ScopedLock lock (stateLock);
+    return routingModeSnapshot;
+}
+
+bool MidiConnection::requestRoutingModeFromGP200 ()
+{
+    const juce::ScopedLock lock (stateLock);
+    if (midiOutput == nullptr || modSyncActive || presetRestoreTransactionActive) return false;
+    const auto bytes = routingModeQueryMessage ();
+    midiOutput->sendMessageNow (juce::MidiMessage::createSysExMessage (bytes.data () + 1,
+        static_cast<int> (bytes.size () - 2)));
+    return true;
+}
+
+bool MidiConnection::isBlendWritePending () const
+{
+    const juce::ScopedLock lock (stateLock);
+    return blendWritePending;
+}
+
+void MidiConnection::processBlendReadback ()
+{
+    if (!blendWritePending) return;
+    if (currentSlot != blendWriteSlot || midiOutput == nullptr) { blendWritePending = false; return; }
+    if (currentPresetDataIsLive && livePresetRevision > blendWriteBaseline) {
+        const auto p = GP200PresetCodec::decodeLivePresetDump (currentPresetDecodedData);
+        const bool matches = p.isValid && (blendWriteMarked
+            ? hasIndependentBlend(p) && p.effects[10].params[14] == blendWriteExpected
+            : std::bit_cast<std::uint32_t>(p.effects[10].params[13]) == 0);
+        blendWritePending = false;
+        lastMessageText = matches ? "BLEND confirmed by pedal" : "BLEND not confirmed: actual pedal value recovered; requires FIX34 firmware";
+        return;
+    }
+    if (juce::Time::getMillisecondCounterHiRes () >= blendWriteDeadline) {
+        blendWritePending = false; currentPresetDataIsLive = false;
+        scheduleLivePresetRefresh ();
+        lastMessageText = "BLEND readback timed out";
+    }
+}
+
+bool MidiConnection::sendIndependentBlend (float value, bool activate, int expectedSlot)
+{
+    const juce::ScopedLock lock (stateLock);
+    if (!std::isfinite(value) || value < 0.0f || value > 100.0f || midiOutput == nullptr
+        || currentSlot != expectedSlot || !currentPresetDataIsLive || blendWritePending
+        || routingStage != 0 || presetRestoreTransactionActive || modSyncActive || presetDumpSlot >= 0
+        || currentStateRequestPending || irUploadPhase != IRUploadPhase::Idle || soundCloneUploadPhase != SoundCloneUploadPhase::Idle
+        || !routingModeIsChain(routingModeSnapshot.mode) || routingModeSnapshot.slot != currentSlot
+        || routingModeSnapshot.revision <= presetModeBaseline) return false;
+    const auto p = GP200PresetCodec::decodeLivePresetDump(currentPresetDecodedData);
+    if (!p.isValid || (!hasIndependentBlend(p) && !activate)) return false;
+    if (!hasIndependentBlend(p) && activate) {
+        // This is a deliberate slider edit: apply the requested value, not the
+        // old VOL value. Loading a preset alone never initializes the signature.
+        if (legacyVolumeIsBlend(p) && !sendParamChange(10,0,p.effects[10].effectId,100.0f)) return false;
+    }
+    if (!sendParamChange(10,14,p.effects[10].effectId,value)
+        || !sendParamChange(10,13,p.effects[10].effectId,blendTagFloat())) return false;
+    blendWriteExpected=value; blendWriteMarked=true; blendWriteSlot=currentSlot;
+    blendWriteBaseline=livePresetRevision; blendWriteDeadline=juce::Time::getMillisecondCounterHiRes()+6500.0;
+    blendWritePending=true; scheduleLivePresetRefresh();
+    lastMessageText="BLEND sent: awaiting pedal readback";
+    return true;
+}
+
+bool MidiConnection::sendSeriesParallel (bool parallel)
+{
+    return sendRoutingModeValue (parallel ? 0 : 1);
+}
+
+bool MidiConnection::sendRoutingModeValue (juce::uint8 value)
+{
+    const juce::ScopedLock lock (stateLock);
+    if (midiOutput == nullptr || !validRoutingModeValue (value))
+    {
+        lastMessageText = "Cannot change routing mode: MIDI output not open";
+        return false;
+    }
+    const auto bytes = flexibleRoutingModeMessage (value);
+    const auto message = juce::MidiMessage::createSysExMessage (bytes.data () + 1,
+        static_cast<int> (bytes.size () - 2));
+    midiOutput->sendMessageNow (message);
+    lastMessageText = "Sent routing mode " + juce::String (static_cast<int> (value));
+    return true;
+}
+
+bool MidiConnection::sendFlexibleRouting (const RoutingOrder& order, int send, int boundary, int ret, bool parallel, int expectedSlot, bool modeOnly)
+{
+    const juce::ScopedLock lock (stateLock);
+    // Validation and first write are atomic with respect to MIDI receive callbacks.
+    if (midiOutput == nullptr || currentSlot < 0 || (expectedSlot >= 0 && expectedSlot != currentSlot)
+        || !currentPresetDataIsLive || !validFlexibleRouting (order, send, boundary, ret)
+        || presetRestoreTransactionActive || modSyncActive || presetDumpSlot >= 0 || currentStateRequestPending
+        || irUploadPhase != IRUploadPhase::Idle || soundCloneUploadPhase != SoundCloneUploadPhase::Idle
+        || presetNameScanner.hasPendingRequest () || blendWritePending || routingStage >= 3)
+    {
+        lastMessageText = "SPR not sent: device state unavailable or operation busy";
+        return false;
+    }
+    if (modeOnly)
+    {
+        const auto preset = GP200PresetCodec::decodeLivePresetDump (currentPresetDecodedData);
+        if (routingStage != 0 || !preset.isValid || preset.routingOrder != order
+            || preset.fxLoopSend != send || preset.fxLoopReturn != ret)
+        { lastMessageText = "CHAIN not sent: routing changed; refresh device state"; return false; }
+    }
+    if (!modeOnly && !sendRoutingModeValue (1)) return false;
+    presetNameScanner.cancel ();
+    liveRefreshPending = false;
+    routingOrder = order; routingSend = send; routingBoundary = boundary; routingReturn = ret;
+    routingValue = parallel ? (0x80 | boundary) : nativeRoutingMode;
+    routingSlot = currentSlot; routingGeneration = slotGeneration;
+    routingStage = modeOnly ? 3 : 1;
+    routingNextMs = juce::Time::getMillisecondCounterHiRes () + 150.0;
+    routingDeadlineMs = routingNextMs + 6500.0;
+    if (modeOnly)
+    {
+        routingModeBaseline = routingModeSnapshot.revision;
+        routingQueryMs = routingNextMs;
+        if (!sendRoutingModeValue (static_cast<juce::uint8> (routingValue)))
+        { failRoutingTransaction ("mode send failed"); return false; }
+    }
+    routingTransactionStatus = modeOnly ? "CHAIN sent; waiting for device" : "SPR sending: Series, order, mode; waiting for device";
+    return true;
+}
+
+
+bool MidiConnection::canSaveCurrentPreset () const
+{
+    const juce::ScopedLock lock (stateLock);
+    const auto preset = GP200PresetCodec::decodeLivePresetDump (currentPresetDecodedData);
+    const int boundary = isExtendedRoutingMode (routingModeSnapshot.mode) ? routingModeSnapshot.mode & 15 : preset.fxLoopSend;
+    return preset.isValid && validFlexibleRouting (preset.routingOrder, preset.fxLoopSend, boundary, preset.fxLoopReturn)
+        && midiOutput != nullptr && currentSlot >= 0 && currentPresetDataIsLive && routingStage == 0
+        && !blendWritePending && !presetRestoreTransactionActive && !currentStateRequestPending && presetDumpSlot < 0
+        && irUploadPhase == IRUploadPhase::Idle && soundCloneUploadPhase == SoundCloneUploadPhase::Idle
+        && routingModeSnapshot.slot == currentSlot && routingModeSnapshot.revision > presetModeBaseline
+        && validRoutingModeValue (routingModeSnapshot.mode);
+}
+
+bool MidiConnection::isRoutingTransactionBusy () const
+{
+    const juce::ScopedLock lock (stateLock);
+    return routingStage != 0;
+}
+
+juce::String MidiConnection::getRoutingTransactionStatus () const
+{
+    const juce::ScopedLock lock (stateLock);
+    return routingTransactionStatus;
+}
+
+MidiConnection::RoutingRequestSnapshot MidiConnection::getRoutingRequestSnapshot () const
+{
+    const juce::ScopedLock lock (stateLock);
+    return { routingStage >= 1 && routingStage <= 5, routingSlot, routingOrder, routingSend, routingBoundary, routingReturn, routingValue };
+}
+
+void MidiConnection::failRoutingTransaction (const juce::String& reason)
+{
+    // Failure remains a save barrier until NEW device data and a NEW mode reply arrive.
+    routingStage = 6; routingLiveBaseline = livePresetRevision;
+    routingModeBaseline = routingModeSnapshot.revision;
+    routingTransactionStatus = "SPR unconfirmed: " + reason + "; recovering device state";
+    routingQueryMs = 0;
+    scheduleLivePresetRefresh ();
+}
+
+void MidiConnection::processRoutingTransaction ()
+{
+    const juce::ScopedLock lock (stateLock);
+    if (routingStage == 0 || midiOutput == nullptr) return;
+    const auto now = juce::Time::getMillisecondCounterHiRes ();
+    if (routingStage != 6 && (routingSlot != currentSlot || routingGeneration != slotGeneration))
+    { failRoutingTransaction ("preset changed"); return; }
+    if (routingStage != 6 && now >= routingDeadlineMs)
+    { failRoutingTransaction ("readback timed out"); return; }
+    if (routingStage == 1 || routingStage == 2)
+    {
+        if (now < routingNextMs) return;
+        if (routingStage == 1)
+        {
+            if (!sendReorderEffects (routingOrder, routingSend, routingReturn))
+            { failRoutingTransaction ("order send failed"); return; }
+            routingStage = 2; routingNextMs = now + 150.0;
+        }
+        else
+        {
+            routingModeBaseline = routingModeSnapshot.revision;
+            if (!sendRoutingModeValue (static_cast<juce::uint8> (routingValue)))
+            { failRoutingTransaction ("mode send failed"); return; }
+            routingStage = 3; routingQueryMs = now + 150.0;
+        }
+        return;
+    }
+    if (currentPresetDataIsLive && now >= routingQueryMs)
+    {
+        requestRoutingModeFromGP200 (); routingQueryMs = now + 700.0;
+    }
+    const bool freshMode = routingModeSnapshot.slot == currentSlot
+        && routingModeSnapshot.revision > routingModeBaseline && validRoutingModeValue (routingModeSnapshot.mode);
+    const bool modeMatches = routingModeSnapshot.mode == routingValue;
+    if (routingStage == 3 && freshMode && modeMatches)
+    {
+        routingLiveBaseline = livePresetRevision; routingStage = 4;
+        scheduleLivePresetRefresh (); return;
+    }
+    if (routingStage == 4 && currentPresetDataIsLive && livePresetRevision > routingLiveBaseline)
+    {
+        const auto preset = GP200PresetCodec::decodeLivePresetDump (currentPresetDecodedData);
+        if (!preset.isValid || preset.routingOrder != routingOrder || preset.fxLoopSend != routingSend || preset.fxLoopReturn != routingReturn)
+        { failRoutingTransaction ("device order differs"); return; }
+        routingModeBaseline = routingModeSnapshot.revision; routingStage = 5;
+        routingQueryMs = 0; return;
+    }
+    if (routingStage == 5 && freshMode && modeMatches)
+    {
+        routingStage = 0; routingTransactionStatus = "SPR routing confirmed by device";
+    }
+    else if (routingStage == 6 && currentPresetDataIsLive && livePresetRevision > routingLiveBaseline && freshMode
+        && routingModeSnapshot.revision > presetModeBaseline)
+    {
+        routingStage = 0;
+        routingTransactionStatus = "SPR recovered actual device state; requested change was not confirmed";
+    }
+}
+
+void MidiConnection::processPresetReadRecovery ()
+{
+    const juce::ScopedLock lock (stateLock);
+    const auto now = juce::Time::getMillisecondCounterHiRes ();
+    if (presetDumpSlot >= 0 && now - presetReadStartedMs >= 1500.0)
+    {
+        presetDumpSlot = -1; presetReadChunks.clear (); currentPresetDataIsLive = false;
+        ++presetRevision; lastRequestedNameSlot = -1;
+        // A quiet interval discards late replies before beginning a new capture.
+        presetReadResumeMs = now + (++presetReadRetries <= 3 ? 300.0 : 5000.0);
+        if (presetReadRetries > 3) presetReadRetries = 0;
+        presetNameRequestPending = true; livePresetReadPending = true;
+        currentPresetDumpStatusText = "Preset read incomplete: retry scheduled";
+    }
+}
+
 bool MidiConnection::storeCurrentPresetToGP200 ()
 {
     const juce::ScopedLock lock (stateLock);
+    if (!canSaveCurrentPreset ())
+    {
+        lastMessageText = "Cannot store: wait for fresh device preset and routing confirmation";
+        return false;
+    }
     if (midiOutput == nullptr)
     {
         lastMessageText = "Cannot store preset: MIDI output not open";
@@ -1359,7 +2034,7 @@ bool MidiConnection::storeCurrentPresetToGP200 ()
     presetNameScanner.setCachedName (currentSlot, presetName);
 
     lastMessageText =
-        "Stored current preset to GP-200 slot " + juce::String (currentSlot) + ": " + presetName;
+        "Store request sent to GP-200 slot " + juce::String (currentSlot) + ": " + presetName;
 
     return true;
 }
@@ -1586,6 +2261,7 @@ bool MidiConnection::sendPresetChange (int slot)
 
     midiOutput->sendMessageNow (message);
 
+    if (currentSlot != slot) ++slotGeneration;
     currentSlot = slot;
     currentPresetName = "requesting...";
     presetNameRequestPending = true;
@@ -1600,7 +2276,7 @@ bool MidiConnection::sendPresetChange (int slot)
 juce::String MidiConnection::getStatusText () const
 {
     const juce::ScopedLock lock (stateLock);
-    return statusText;
+    return statusText + " | " + modSyncStatus;
 }
 
 juce::String MidiConnection::getLastMessageText () const
@@ -1666,6 +2342,20 @@ juce::MemoryBlock MidiConnection::getCurrentPresetDumpDataCopy () const
     return currentPresetDecodedData;
 }
 
+MidiConnection::RoutingStateSnapshot MidiConnection::getRoutingStateSnapshot (bool includeSavePermission) const
+{
+    const juce::ScopedLock lock (stateLock);
+    return { midiInput != nullptr && midiOutput != nullptr, currentSlot, currentPresetDataIsLive,
+        routingModeSnapshot, currentPresetDecodedData, presetRevision, livePresetRevision, includeSavePermission && canSaveCurrentPreset (),
+        routingModeSnapshot.slot == currentSlot && routingModeSnapshot.revision > presetModeBaseline };
+}
+
+std::uint64_t MidiConnection::getLivePresetRevision () const
+{
+    const juce::ScopedLock lock (stateLock);
+    return livePresetRevision;
+}
+
 std::uint64_t MidiConnection::getPresetRevision () const
 {
     const juce::ScopedLock lock (stateLock);
@@ -1684,7 +2374,10 @@ void MidiConnection::adoptCurrentPresetSnapshot (int slot,
 {
     const juce::ScopedLock lock (stateLock);
     if (slot >= 0 && slot <= 255)
+    {
+        if (currentSlot != slot) ++slotGeneration;
         currentSlot = slot;
+    }
 
     auto safeName = sanitizePresetNameForStore (presetName);
 
@@ -1718,15 +2411,9 @@ void MidiConnection::adoptCurrentPresetSnapshot (int slot,
     liveRefreshPending = false;
     liveRefreshDueMs = 0.0;
 
-    // Recall from DAW has just established the authoritative current state.
-    // Discard any startup/current-state request that may still be queued or
-    // pending so it cannot overwrite the freshly restored snapshot.
     currentStateRequestQueued = false;
     currentStateRequestPending = false;
 
-    // A completed Recall/PRST restore establishes the current slot and full
-    // edit buffer, so an interrupted startup state-dump transaction must not
-    // resume afterwards and overwrite it.
     if (presetRestoreTransactionActive)
         startupHandshakePhase = StartupHandshakePhase::Ready;
 
@@ -1736,11 +2423,9 @@ void MidiConnection::adoptCurrentPresetSnapshot (int slot,
 
     currentPresetDecodedData = presetData;
 
-    // The snapshot has just been applied completely to the current GP-200
-    // edit buffer by Recall from DAW. Treat it as the current live state so
-    // the startup retry timer does not immediately request another dump and
-    // overwrite the state that has just been restored.
-    currentPresetDataIsLive = true;
+    // Local adoption is provisional. Only received preset chunks establish live state.
+    // After Recall ends, the existing retry timer requests the actual device buffer.
+    currentPresetDataIsLive = false;
     ++presetRevision;
 
     currentPresetDumpStatusText = "Current full preset data: restored snapshot, " +
@@ -1755,33 +2440,40 @@ void MidiConnection::beginPresetRestoreTransaction ()
 {
     const juce::ScopedLock lock (stateLock);
 
+    blendWritePending = false;
+    if (routingStage != 0) failRoutingTransaction ("Recall started");
+    currentPresetDataIsLive = false;
+    routingModeSnapshot.mode = -1; ++routingModeSnapshot.revision;
     presetRestoreTransactionActive = true;
-
-    // Discard automatic reads already queued by notifications/startup. Their
-    // replies would represent the edit buffer before or during the restore.
+    presetRestoreSlotGeneration = slotGeneration;
     currentStateRequestQueued = false;
     currentStateRequestPending = false;
     stateDumpChunks.clear ();
-
     liveRefreshPending = false;
     liveRefreshDueMs = 0.0;
     livePresetReadPending = false;
-
-    // Ignore any in-flight full-preset capture. The authoritative snapshot is
-    // adopted when the restore finishes. The name scanner itself is not
-    // cancelled; it is merely paused by processPresetNameScan().
     presetNameRequestPending = false;
     lastRequestedNameSlot = -1;
     presetDumpSlot = -1;
     presetReadChunks.clear ();
 }
 
-void MidiConnection::endPresetRestoreTransaction ()
+bool MidiConnection::sendPresetRestoreRoutingMode (int expectedSlot, int mode)
+{
+    const juce::ScopedLock lock (stateLock);
+    if (!presetRestoreTransactionActive || currentSlot != expectedSlot
+        || slotGeneration != presetRestoreSlotGeneration || !validRoutingModeValue (mode))
+    {
+        lastMessageText = "Recall routing not sent: slot changed or invalid mode";
+        return false;
+    }
+    return sendRoutingModeValue (static_cast<juce::uint8> (mode));
+}
+
+void MidiConnection::endPresetRestoreTransaction (int expectedRoutingMode)
 {
     const juce::ScopedLock lock (stateLock);
 
-    // Do not carry notifications generated by restore writes into the normal
-    // live-refresh path once the transaction ends.
     currentStateRequestQueued = false;
     currentStateRequestPending = false;
     stateDumpChunks.clear ();
@@ -1791,14 +2483,41 @@ void MidiConnection::endPresetRestoreTransaction ()
     presetNameRequestPending = false;
     presetDumpSlot = -1;
     presetReadChunks.clear ();
-
     presetRestoreTransactionActive = false;
+    const auto restoredBlend = GP200PresetCodec::decodeLivePresetDump (currentPresetDecodedData);
+    if (restoredBlend.isValid) {
+        blendWriteMarked = hasIndependentBlend (restoredBlend);
+        blendWriteExpected = restoredBlend.effects[10].params[14];
+        blendWriteSlot = currentSlot; blendWriteBaseline = livePresetRevision;
+        blendWriteDeadline = juce::Time::getMillisecondCounterHiRes () + 6500.0;
+        blendWritePending = true;
+    }
+    currentPresetDataIsLive = false;
+    startupHandshakePhase = StartupHandshakePhase::Ready;
+    currentStateRequestQueued = true;
+    if (validRoutingModeValue (expectedRoutingMode))
+    {
+        const auto preset = GP200PresetCodec::decodeLivePresetDump (currentPresetDecodedData);
+        routingSlot = currentSlot; routingGeneration = slotGeneration;
+        routingOrder = preset.routingOrder; routingSend = preset.fxLoopSend; routingReturn = preset.fxLoopReturn;
+        routingValue = expectedRoutingMode;
+        routingBoundary = isExtendedRoutingMode (expectedRoutingMode) ? expectedRoutingMode & 15 : routingSend;
+        routingLiveBaseline = livePresetRevision;
+        routingModeBaseline = routingModeSnapshot.revision;
+        routingStage = 4; // Already sent by Recall: verify a new live preset, then query the mode.
+        routingDeadlineMs = juce::Time::getMillisecondCounterHiRes () + 6500.0;
+        routingQueryMs = 0;
+        routingTransactionStatus = "Recall: waiting for Series/Parallel/P and order confirmation";
+        if (!preset.isValid || !validFlexibleRouting (routingOrder, routingSend, routingBoundary, routingReturn))
+            failRoutingTransaction ("invalid Recall routing snapshot");
+    }
 }
 
 bool MidiConnection::requestPresetNameForCurrentSlotIfNeeded ()
 {
     const juce::ScopedLock lock (stateLock);
-    if (presetRestoreTransactionActive || !presetNameRequestPending)
+    if (modSyncActive || presetRestoreTransactionActive || routingStage == 1 || routingStage == 2 || !presetNameRequestPending
+        || juce::Time::getMillisecondCounterHiRes () < presetReadResumeMs)
         return false;
 
     if (currentSlot < 0)
@@ -1807,10 +2526,8 @@ bool MidiConnection::requestPresetNameForCurrentSlotIfNeeded ()
     if (lastRequestedNameSlot == currentSlot)
         return false;
 
-    if (livePresetReadPending)
-        return sendLiveReadRequestForSlot (currentSlot);
-
-    return sendReadRequestForSlot (currentSlot);
+    // Active slot reads must reflect the edit buffer, including unsaved routing.
+    return sendLiveReadRequestForSlot (currentSlot);
 }
 
 
@@ -1833,6 +2550,8 @@ void MidiConnection::cancelPresetNameScan ()
 void MidiConnection::processPresetNameScan ()
 {
     const juce::ScopedLock lock (stateLock);
+    if (routingStage != 0) return;
+
 
     if (!presetNameScanner.isScanning ())
         return;
@@ -1844,7 +2563,7 @@ void MidiConnection::processPresetNameScan ()
     // the live-state query paused indefinitely.
     presetNameScanner.handleTimeout (nowMs);
 
-    const bool busy = midiOutput == nullptr
+    const bool busy = modSyncActive || midiOutput == nullptr
                       || presetRestoreTransactionActive
                       || irUploadPhase != IRUploadPhase::Idle
                       || soundCloneUploadPhase != SoundCloneUploadPhase::Idle
@@ -1866,15 +2585,14 @@ bool MidiConnection::sendNextPresetNameScanRequestUnlocked ()
     const auto nowMs = juce::Time::getMillisecondCounterHiRes ();
 
     const bool presetTrafficBusy =
-        presetRestoreTransactionActive
-        || currentStateRequestQueued
+        currentStateRequestQueued
         || currentStateRequestPending
         || presetNameRequestPending
         || livePresetReadPending
         || liveRefreshPending
         || presetDumpSlot >= 0;
 
-    if (midiOutput == nullptr
+    if (modSyncActive || midiOutput == nullptr
         || presetTrafficBusy
         || !presetNameScanner.shouldSendNextRequest (nowMs))
     {
@@ -1956,6 +2674,7 @@ bool MidiConnection::sendReadRequestForSlot (int slot)
 
     lastRequestedNameSlot = slot;
     resetPresetDumpCaptureForSlot (slot);
+    presetReadIsLive = false;
 
     lastMessageText = "Requested full preset data for slot " + juce::String (slot);
 
@@ -1980,6 +2699,7 @@ bool MidiConnection::sendLiveReadRequestForSlot (int slot)
     livePresetReadPending = false;
     lastRequestedNameSlot = slot;
     resetPresetDumpCaptureForSlot (slot);
+    presetReadIsLive = true;
 
     lastMessageText = "Requested live edit buffer for slot " + juce::String (slot);
 
@@ -1988,11 +2708,6 @@ bool MidiConnection::sendLiveReadRequestForSlot (int slot)
 
 void MidiConnection::scheduleLivePresetRefresh ()
 {
-    // Notifications generated by our own restore writes describe transient
-    // hybrid states. Ignore them until the complete snapshot has been applied.
-    if (presetRestoreTransactionActive)
-        return;
-
     constexpr double liveRefreshDebounceMs = 120.0;
 
     liveRefreshPending = true;
@@ -2002,6 +2717,14 @@ void MidiConnection::scheduleLivePresetRefresh ()
 
 void MidiConnection::resetPresetDumpCaptureForSlot (int slot)
 {
+    if (routingModeSnapshot.slot != slot) { nativeRoutingMode = 0; blendWritePending = false; }
+    if (routingModeSnapshot.slot != slot)
+    {
+        routingModeSnapshot.mode = -1; routingModeSnapshot.slot = slot;
+        ++routingModeSnapshot.revision;
+    }
+    presetModeBaseline = routingModeSnapshot.revision;
+    presetReadStartedMs = juce::Time::getMillisecondCounterHiRes ();
     presetDumpSlot = slot;
     presetReadChunks.clear ();
     currentPresetDecodedData.setSize (0);
@@ -2013,13 +2736,15 @@ void MidiConnection::resetPresetDumpCaptureForSlot (int slot)
 
 void MidiConnection::collectPresetReadChunk (const juce::uint8* data, int size)
 {
-    if (presetDumpSlot < 0)
+    if (presetDumpSlot < 0 || presetDumpSlot != currentSlot
+        || juce::Time::getMillisecondCounterHiRes () < presetReadResumeMs)
         return;
 
     // Real preset read chunks are large. This avoids confusing small
     // real-time parameter messages, which also use CMD=0x12 / SUB=0x18.
-    if (size < 100)
+    if (size < 100 || (size - 14) % 2 != 0 || data[0] != 0xf0 || data[size-1] != 0xf7)
         return;
+    for (int i = 13; i < size - 1; ++i) if (data[i] > 15) return;
 
     const int offset = getChunkOffset (data, size);
 
@@ -2040,18 +2765,29 @@ void MidiConnection::collectPresetReadChunk (const juce::uint8* data, int size)
     if (presetReadChunks.size () >= 7)
     {
         currentPresetDecodedData = assemblePresetReadChunks (presetReadChunks);
-        currentPresetDataIsLive = currentPresetDecodedData.getSize () > 0;
+        const auto preset = GP200PresetCodec::decodeLivePresetDump (currentPresetDecodedData);
+        currentPresetDataIsLive = presetReadIsLive && preset.isValid
+            && validFlexibleRouting (preset.routingOrder, preset.fxLoopSend, preset.fxLoopSend, preset.fxLoopReturn);
+        if (!currentPresetDataIsLive)
+        {
+            currentPresetDumpStatusText = "Preset data rejected: invalid or not a live reply";
+            presetReadChunks.clear (); return; // deadline recovers without trusting partial bytes
+        }
+        presetReadRetries = 0; modePollMs = 0;
+        if (currentPresetDataIsLive && presetDumpSlot == currentSlot) ++livePresetRevision;
         ++presetRevision;
 
         currentPresetDumpStatusText = "Current full preset data: captured, " +
                                       juce::String (static_cast<int> (currentPresetDecodedData.getSize ())) +
                                       " bytes";
 
-        // A completed seven-chunk preset read owns the 0x12/0x18 transaction
-        // until this point. Release every flag associated with that read so a
-        // paused preset-name scan can continue on the next timer tick.
-        presetNameRequestPending = false;
-        livePresetReadPending = false;
+        // A complete reply for the active slot completes the name request too.
+        // Do not leave MOD_SYNC blocked on optional first-chunk name extraction.
+        if (currentPresetDataIsLive && presetDumpSlot == currentSlot)
+        {
+            presetNameRequestPending = false;
+            livePresetReadPending = false;
+        }
         presetDumpSlot = -1;
 
         if (startupHandshakePhase == StartupHandshakePhase::WaitingForCurrentPreset)
@@ -2440,9 +3176,6 @@ std::vector<juce::uint8> MidiConnection::buildStorePresetCommit (int slot, const
 std::vector<juce::uint8> MidiConnection::buildRenameSnapTone (int globalSlot, const juce::String& newName)
 {
     juce::uint8 decoded[24]{};
-
-    // Structure confirmed from official-editor captures:
-    // AMP 1 -> global slot 0, DIST 1 -> global slot 5.
     decoded[0] = 0x15;
     decoded[1] = 0x10;
     decoded[2] = 0x14;
@@ -2456,23 +3189,18 @@ std::vector<juce::uint8> MidiConnection::buildRenameSnapTone (int globalSlot, co
     }
 
     const auto nibbles = nibbleEncode (decoded, 24);
-
     std::vector<juce::uint8> message;
     message.reserve (62);
     message.insert (message.end (), { 0xF0, 0x21, 0x25, 0x7E, 0x47, 0x50, 0x2D, 0x32,
                                      0x12, 0x18, 0x00, 0x00, 0x00 });
     message.insert (message.end (), nibbles.begin (), nibbles.end ());
     message.push_back (0xF7);
-
     return message;
 }
 
 std::vector<juce::uint8> MidiConnection::buildRenameUserIR (int zeroBasedIndex, const juce::String& newName)
 {
     juce::uint8 decoded[24]{};
-
-    // Structure confirmed from the supplied official-editor capture:
-    // User IR 1 -> slot 0, User IR 20 -> slot 19.
     decoded[0] = 0x0C;
     decoded[1] = 0x10;
     decoded[2] = 0x14;
@@ -2486,14 +3214,12 @@ std::vector<juce::uint8> MidiConnection::buildRenameUserIR (int zeroBasedIndex, 
     }
 
     const auto nibbles = nibbleEncode (decoded, 24);
-
     std::vector<juce::uint8> message;
     message.reserve (62);
     message.insert (message.end (), { 0xF0, 0x21, 0x25, 0x7E, 0x47, 0x50, 0x2D, 0x32,
                                      0x12, 0x18, 0x00, 0x00, 0x00 });
     message.insert (message.end (), nibbles.begin (), nibbles.end ());
     message.push_back (0xF7);
-
     return message;
 }
 
@@ -2586,13 +3312,13 @@ juce::String MidiConnection::sanitizePresetNameForStore (const juce::String& pre
 
 void MidiConnection::handleIncomingMidiMessage (juce::MidiInput*, const juce::MidiMessage& message)
 {
-    const juce::ScopedLock lock (stateLock);
     if (message.isSysEx ())
     {
         handleIncomingSysEx (message);
         return;
     }
 
+    const juce::ScopedLock lock (stateLock);
     lastMessageText = "Received non-SysEx MIDI message";
 }
 
@@ -2627,9 +3353,23 @@ void MidiConnection::handleIncomingSysEx (const juce::MidiMessage& message)
 
     hex << "F7";
 
+    const juce::ScopedLock lock (stateLock);
     lastMessageText = hex;
 
     parseGP200SysEx (fullMessage.data (), static_cast<int> (fullMessage.size ()));
+}
+
+bool MidiConnection::handleRoutingChangeNotification (const juce::uint8* data, int size)
+{
+    const int slot = routingChangeNotificationSlot (data, size);
+    if (slot < 0) return false;
+    // Only refresh the current live slot. A delayed notification from another
+    // slot must not replace the displayed preset, or interrupt DAW recall.
+    // Queue edits arriving during a live read: the refresh waits for that read
+    // to finish, so the final encoder movement cannot be lost.
+    if (slot == currentSlot && !presetRestoreTransactionActive && routingStage == 0)
+        scheduleLivePresetRefresh ();
+    return true;
 }
 
 void MidiConnection::parseGP200SysEx (const juce::uint8* data, int size)
@@ -2642,6 +3382,26 @@ void MidiConnection::parseGP200SysEx (const juce::uint8* data, int size)
 
     if (!isGP200Header)
         return;
+
+    if (handleModSyncResponse (data, size)) return;
+
+    if (handleRoutingChangeNotification (data, size)) return;
+
+    const auto routeMode = routingModeResponse (data, size);
+    if (routeMode >= 0)
+    {
+        // The parameter notification carries no preset-slot identifier.
+        // During a slot load, do not relabel a queued old reply as the new slot.
+        // A later query after the complete live read will recover the current mode.
+        if (currentSlot < 0 || !currentPresetDataIsLive) return;
+        const bool changed = routingModeSnapshot.mode != routeMode || routingModeSnapshot.slot != currentSlot;
+        if ((routeMode == 0 || routeMode == 1) && routingStage == 0 && !presetRestoreTransactionActive) nativeRoutingMode = routeMode;
+        routingModeSnapshot.mode = routeMode;
+        routingModeSnapshot.slot = currentSlot;
+        ++routingModeSnapshot.revision;
+        if (changed && routingStage == 0) scheduleLivePresetRefresh ();
+        return;
+    }
 
     const auto command = data[8];
     const auto subCommand = data[9];
@@ -2708,9 +3468,6 @@ void MidiConnection::parseGP200SysEx (const juce::uint8* data, int size)
             return;
         }
 
-        // During Recall/PRST restore these notifications are acknowledgements
-        // of our own incremental writes and therefore describe transient hybrid
-        // states. Do not turn them into slot changes or live-read requests.
         if (presetRestoreTransactionActive)
             return;
 
@@ -2722,6 +3479,7 @@ void MidiConnection::parseGP200SysEx (const juce::uint8* data, int size)
             {
                 if (slot != currentSlot)
                 {
+                    if (currentSlot != slot) ++slotGeneration;
                     currentSlot = slot;
                     currentPresetName = "requesting...";
                     presetNameRequestPending = true;
@@ -2756,8 +3514,7 @@ void MidiConnection::parseGP200SysEx (const juce::uint8* data, int size)
     // which is then handled by the existing seven-chunk preset decoder.
     if (command == 0x12 && subCommand == 0x10)
     {
-        if (!presetRestoreTransactionActive)
-            scheduleLivePresetRefresh ();
+        scheduleLivePresetRefresh ();
         return;
     }
 
@@ -2778,9 +3535,6 @@ void MidiConnection::parseGP200SysEx (const juce::uint8* data, int size)
         return;
     }
 
-    // If a live/current-preset read was already in flight when Recall began,
-    // its remaining 0x12/0x18 chunks describe a pre-restore or hybrid state.
-    // A scanner reply above is still allowed to finish its single pending slot.
     if (command == 0x12 && subCommand == 0x18 && presetRestoreTransactionActive)
         return;
 
@@ -2891,6 +3645,7 @@ std::vector<juce::uint8> MidiConnection::nibbleDecode (const juce::uint8* data, 
 juce::MemoryBlock
 MidiConnection::assemblePresetReadChunks (const std::vector<std::vector<juce::uint8>>& chunks)
 {
+    if (chunks.empty ()) return {};
     auto sortedChunks = chunks;
 
     std::sort (sortedChunks.begin (),
@@ -2901,12 +3656,20 @@ MidiConnection::assemblePresetReadChunks (const std::vector<std::vector<juce::ui
                           getChunkOffset (b.data (), static_cast<int> (b.size ()));
                });
 
+    if (getChunkOffset (sortedChunks.front ().data (), static_cast<int> (sortedChunks.front ().size ())) != 0) return {};
     std::vector<juce::uint8> allNibbles;
-
+    int expectedOffset = 0, declaredLength = -1;
     for (const auto& chunk : sortedChunks)
     {
-        if (chunk.size () <= 14)
-            continue;
+        const auto offset = getChunkOffset (chunk.data (), static_cast<int> (chunk.size ()));
+        if (chunk.size () <= 14 || (chunk.size () - 14) % 2 != 0 || chunk.front () != 0xf0 || chunk.back () != 0xf7
+            || offset != expectedOffset || chunk[9] > 127 || chunk[10] > 127) return {};
+        const int total = chunk[9] | (chunk[10] << 7);
+        if (total <= 0 || total > 4096 || (declaredLength >= 0 && total != declaredLength)) return {};
+        declaredLength = total;
+        expectedOffset += static_cast<int> ((chunk.size () - 14) / 2);
+        if (expectedOffset > declaredLength) return {};
+        for (std::size_t i = 13; i + 1 < chunk.size (); ++i) if (chunk[i] > 15) return {};
 
         const auto* nibbleStart = chunk.data () + 13;
         const auto nibbleSize = static_cast<int> (chunk.size ()) - 14;
@@ -2918,7 +3681,7 @@ MidiConnection::assemblePresetReadChunks (const std::vector<std::vector<juce::ui
 
     juce::MemoryBlock result;
 
-    if (!decoded.empty ())
+    if (expectedOffset == declaredLength && decoded.size () == static_cast<std::size_t> (declaredLength))
         result.append (decoded.data (), decoded.size ());
 
     return result;

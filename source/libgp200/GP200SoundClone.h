@@ -1,6 +1,7 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include "GP200IR.h"
 #include <vector>
 
 namespace gp200
@@ -20,5 +21,23 @@ public:
     static juce::Result buildUpload (const juce::File& cloFile,
                                      int globalSlot,
                                      GP200SoundCloneUpload& result);
+
+    // Custom-firmware path: Factory AMP 1..71. The compact 0x1288 CLO is
+    // stored in the persistent former-DRUM pool and the firmware activates
+    // the matching package-local callback in RAM.
+    static juce::Result buildFactoryAmpUpload (const juce::File& cloFile,
+                                               int zeroBasedFactoryAmpIndex,
+                                               const juce::String& requestedDisplayName,
+                                               GP200IRUpload& result);
+
+    // HOT rename path. Only the persistent 16-byte display name is sent;
+    // the firmware preserves and rewrites the second flash page itself.
+    static juce::Result buildFactoryAmpRename (int zeroBasedFactoryAmpIndex,
+                                               const juce::String& requestedDisplayName,
+                                               GP200IRUpload& result);
+
+    // Verifies the actual encoded first chunk, so mixed/stale builds cannot
+    // silently fall back to the pre-HOT1 protocol.
+    static bool factoryAmpUploadHasHot1Marker (const GP200IRUpload& upload) noexcept;
 };
 } // namespace gp200

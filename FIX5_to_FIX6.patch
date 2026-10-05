@@ -1,0 +1,65 @@
+--- SPR_FIX5/GP200-VST-SPR-TEST/source/GP200Plugin/PluginEditor.cpp	2026-10-01 22:42:03.978274934 +0200
++++ SPR_FIX6/GP200-VST-SPR-TEST/source/GP200Plugin/PluginEditor.cpp	2026-10-01 22:49:23.943982721 +0200
+@@ -4234,9 +4234,6 @@
+ 
+ void AudioPluginAudioProcessorEditor::sendFlexibleRouteFromRibbon ()
+ {
+-    sprSendStage = 0; // A new edit replaces any pending route transaction.
+-    sprAwaitingMode = false;
+-    sprAwaitingPreset = false;
+     if (!midiConnection.isConnected ())
+     {
+         effectsStatusText = "SPR routing NOT SENT: GP-200 disconnected";
+@@ -4247,32 +4244,41 @@
+         effectsStatusText = "SPR routing NOT SENT: preset restore or upload in progress";
+         repaint (); return;
+     }
+-    const auto dump = midiConnection.getCurrentPresetDumpDataCopy ();
+-    const auto preset = gp200::GP200PresetCodec::decodeLivePresetDump (dump);
+-    if (!midiConnection.hasLiveCurrentPresetData () || !preset.isValid)
++    const auto state = midiConnection.getRoutingStateSnapshot ();
++    const auto preset = gp200::GP200PresetCodec::decodeLivePresetDump (state.data);
++    if (!state.connected || state.slot != midiConnection.getCurrentSlot () || !state.live || !preset.isValid)
+     {
+         effectsStatusText = "SPR routing NOT SENT: wait for the device preset to load";
+         repaint (); return;
+     }
+-    sprPendingOrder = effectChainRibbon.getLocalOrder ();
+-    sprPendingS = effectChainRibbon.getSend ();
+-    sprPendingP = effectChainRibbon.getBoundary ();
+-    sprPendingR = effectChainRibbon.getReturn ();
+-    sprPendingParallel = parallelRoutingSelected;
+-    if (!gp200::validFlexibleRouting (sprPendingOrder, sprPendingS, sprPendingP, sprPendingR))
++    const auto order = effectChainRibbon.getLocalOrder ();
++    const int send = effectChainRibbon.getSend ();
++    const int boundary = effectChainRibbon.getBoundary ();
++    const int ret = effectChainRibbon.getReturn ();
++    const bool parallel = parallelRoutingSelected;
++    if (!gp200::validFlexibleRouting (order, send, boundary, ret))
+     {
+         effectsStatusText = "SPR routing NOT SENT: invalid order or S/P/R";
+         repaint (); return;
+     }
+-    effectChainRibbon.keepRoutingDraft ();
++    // Keep the previous transaction intact until the replacement can actually start.
+     if (!midiConnection.sendRoutingModeValue (1))
+     {
+         effectsStatusText = "SPR routing NOT SENT: " + midiConnection.getLastMessageText ();
+         repaint (); return;
+     }
++    sprSendStage = 0;
++    sprAwaitingMode = false;
++    sprAwaitingPreset = false;
++    sprPendingOrder = order;
++    sprPendingS = send;
++    sprPendingP = boundary;
++    sprPendingR = ret;
++    sprPendingParallel = parallel;
++    effectChainRibbon.keepRoutingDraft ();
+     sprSendDeadlineMs = juce::Time::getMillisecondCounterHiRes () + 150.0;
+     sprSendStage = 1;
+-    sprDeviceSlot = midiConnection.getCurrentSlot ();
++    sprDeviceSlot = state.slot;
+     sprWasConnected = true;
+     sprAwaitingMode = true;
+     sprConfirmationDeadlineMs = juce::Time::getMillisecondCounterHiRes () + 3000.0;

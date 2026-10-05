@@ -70,9 +70,11 @@ void updateInternalCrc (std::array<juce::uint8, physicalContainerBytes>& contain
     const auto crc = crc16Modbus (container.data () + crcDataOffset,
                                   static_cast<std::size_t> (declared) - crcDataOffset);
 
-    // Stored little-endian in the VTSI header.
-    container[crcOffset] = static_cast<juce::uint8> (crc & 0xff);
-    container[crcOffset + 1] = static_cast<juce::uint8> ((crc >> 8) & 0xff);
+    // GP-200 VTSI stores this CRC high byte first. This must match the
+    // CRCBE firmware validator; otherwise a converted 2048 -> 1024 CLO is
+    // transferred completely but rejected when the Factory AMP slot commits.
+    container[crcOffset] = static_cast<juce::uint8> ((crc >> 8) & 0xff);
+    container[crcOffset + 1] = static_cast<juce::uint8> (crc & 0xff);
 }
 
 juce::Result prepareSoundCloneModelForGP200 (
@@ -118,7 +120,10 @@ juce::Result prepareSoundCloneModelForGP200 (
 
     if (isVtsi && isGp2001024)
     {
-        // Already in the native GP-200 representation. Do not alter it.
+        // Preserve the native model payload, but normalize the CRC byte order
+        // as well. This accepts otherwise valid 1024 CLO files produced by
+        // tools that stored the two CRC bytes little-endian.
+        updateInternalCrc (prepared);
         return juce::Result::ok ();
     }
 
@@ -180,6 +185,23 @@ std::vector<juce::uint8> makePrepare (int globalSlot)
              0x00,0x00,0x00,0x0d,0x0e,0x00,0x00,0x01,0x06,0x00,0x00,0x00,
              0x08,0x00,0x00,0x00,category,0x0f,0x07,0x0e,0x0f,0x00,0x02,0x00,
              static_cast<juce::uint8> (globalSlot),0x00,0x00,0x00,0x00,0x00,0x0f,0xf7 };
+}
+
+std::vector<juce::uint8> makeUserIRStagePrepare ()
+{
+    return { 0xf0,0x21,0x25,0x7e,0x47,0x50,0x2d,0x32,0x12,0x14,
+             0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x04,0x00,0x00,0x00,
+             0x00,0x00,0x00,0x08,0x0b,0x00,0x00,0x01,0x06,0x00,0x00,0x00,0x08,
+             0x00,0x00,0x00,0x05,0x0f,0x04,0x08,0x0f,0x00,0x00,0x00,
+             0x00,0x00,0x00,0x01,0x00,0x00,0x0a,0xf7 };
+}
+
+std::vector<juce::uint8> makeUserIRStageCommit ()
+{
+    return { 0xf0,0x21,0x25,0x7e,0x47,0x50,0x2d,0x32,0x12,0x0c,
+             0x00,0x00,0x00,0x00,0x0b,0x01,0x00,0x00,0x08,0x00,0x00,0x00,
+             0x00,0x00,0x00,0x00,0x01,0x00,0x00,0x00,0x00,0x00,0x00,
+             0x00,0x00,0x00,0x00,0xf7 };
 }
 } // namespace
 
@@ -251,4 +273,145 @@ juce::Result GP200SoundClone::buildUpload (const juce::File& cloFile,
 
     return juce::Result::ok ();
 }
+
+juce::Result GP200SoundClone::buildFactoryAmpUpload (const juce::File& cloFile,
+                                                      int zeroBasedFactoryAmpIndex,
+                                                      const juce::String& requestedDisplayName,
+                                                      GP200IRUpload& result)
+{
+    constexpr int compactBytes = static_cast<int> (gp200DeclaredBytes);
+    constexpr int stagedBlobBytes = wrapperBytes + compactBytes;
+
+    if (!cloFile.existsAsFile ())
+        return juce::Result::fail ("The selected Factory AMP CLO file does not exist.");
+    if (!juce::isPositiveAndBelow (zeroBasedFactoryAmpIndex, 71))
+        return juce::Result::fail ("The Factory AMP destination must be between 1 and 71.");
+
+    std::array<juce::uint8, physicalContainerBytes> preparedContainer{};
+    const auto preparationResult = prepareSoundCloneModelForGP200 (cloFile, preparedContainer);
+    if (preparationResult.failed ())
+        return preparationResult;
+
+    std::array<juce::uint8, stagedBlobBytes> blob{};
+    blob[0] = 0x0a;
+    blob[1] = 0x10;
+    blob[2] = 0x18;
+    blob[3] = 0x20;
+    blob[6] = 0x43; // little-endian 0x4C43 = "CL"
+    blob[7] = 0x4c;
+    blob[10] = static_cast<juce::uint8> (zeroBasedFactoryAmpIndex);
+    blob[11] = 0xa1; // HOT1: activate a verified, unselected Factory AMP destination.
+
+    auto displayName = requestedDisplayName.trim ().substring (0, 16);
+    if (displayName.isEmpty ())
+        displayName = cloFile.getFileNameWithoutExtension ().substring (0, 16);
+    const auto* nameBytes = displayName.toRawUTF8 ();
+    for (int i = 0; i < 16 && nameBytes[i] != 0; ++i)
+        blob[12 + i] = static_cast<juce::uint8> (nameBytes[i]);
+
+    std::uint16_t checksum = 0;
+    for (int i = 0; i < compactBytes; ++i)
+    {
+        const auto byte = preparedContainer[static_cast<std::size_t> (i)];
+        blob[wrapperBytes + i] = byte;
+        checksum = static_cast<std::uint16_t> (checksum + byte);
+    }
+    blob[8] = static_cast<juce::uint8> (checksum & 0xff);
+    blob[9] = static_cast<juce::uint8> ((checksum >> 8) & 0xff);
+
+    result = {};
+    result.displayName = displayName;
+    result.prepareMessage = makeSysEx (makeUserIRStagePrepare ());
+    result.commitMessage = makeSysEx (makeUserIRStageCommit ());
+
+    for (int offset = 0; offset < stagedBlobBytes; offset += chunkBytes)
+    {
+        const auto amount = juce::jmin (chunkBytes, stagedBlobBytes - offset);
+        std::vector<juce::uint8> full {
+            0xf0,0x21,0x25,0x7e,0x47,0x50,0x2d,0x32,0x12,
+            static_cast<juce::uint8> (stagedBlobBytes & 0x7f),
+            static_cast<juce::uint8> ((stagedBlobBytes >> 7) & 0x7f),
+            static_cast<juce::uint8> (offset & 0x7f),
+            static_cast<juce::uint8> ((offset >> 7) & 0x7f)
+        };
+        auto encoded = nibbleEncode (blob.data () + offset, amount);
+        full.insert (full.end (), encoded.begin (), encoded.end ());
+        full.push_back (0xf7);
+        result.chunks.push_back (makeSysEx (full));
+    }
+
+    return juce::Result::ok ();
+}
+
+juce::Result GP200SoundClone::buildFactoryAmpRename (
+    int zeroBasedFactoryAmpIndex,
+    const juce::String& requestedDisplayName,
+    GP200IRUpload& result)
+{
+    if (!juce::isPositiveAndBelow (zeroBasedFactoryAmpIndex, 71))
+        return juce::Result::fail ("The Factory AMP destination must be between 1 and 71.");
+
+    const auto displayName = requestedDisplayName.trim ().substring (0, 16);
+    if (displayName.isEmpty ())
+        return juce::Result::fail ("Enter a Factory AMP name (maximum 16 ASCII characters).");
+
+    std::array<juce::uint8, wrapperBytes> blob{};
+    blob[0] = 0x0a;
+    blob[1] = 0x10;
+    blob[2] = 0x18;
+    blob[3] = 0x20;
+    blob[6] = 0x43; // Existing CR command family.
+    blob[7] = 0x52;
+    blob[10] = static_cast<juce::uint8> (zeroBasedFactoryAmpIndex);
+    blob[11] = 0xa2; // HOT2: rename only; preserve the CLO and its CRC.
+
+    const auto* nameBytes = displayName.toRawUTF8 ();
+    for (int i = 0; i < 16 && nameBytes[i] != 0; ++i)
+    {
+        const auto byte = static_cast<unsigned char> (nameBytes[i]);
+        if (byte < 0x20 || byte > 0x7e)
+            return juce::Result::fail ("Factory AMP names currently support ASCII characters only.");
+        blob[12 + i] = static_cast<juce::uint8> (byte);
+    }
+
+    result = {};
+    result.displayName = displayName;
+    result.prepareMessage = makeSysEx (makeUserIRStagePrepare ());
+    result.commitMessage = makeSysEx (makeUserIRStageCommit ());
+
+    std::vector<juce::uint8> full {
+        0xf0,0x21,0x25,0x7e,0x47,0x50,0x2d,0x32,
+        0x12,
+        static_cast<juce::uint8> (wrapperBytes & 0x7f),
+        static_cast<juce::uint8> ((wrapperBytes >> 7) & 0x7f),
+        0x00,0x00
+    };
+    auto encoded = nibbleEncode (blob.data (), static_cast<int> (blob.size ()));
+    full.insert (full.end (), encoded.begin (), encoded.end ());
+    full.push_back (0xf7);
+    result.chunks.push_back (makeSysEx (full));
+    return juce::Result::ok ();
+}
+
+bool GP200SoundClone::factoryAmpUploadHasHot1Marker (const GP200IRUpload& upload) noexcept
+{
+    if (upload.chunks.empty ())
+        return false;
+
+    const auto& firstChunk = upload.chunks.front ();
+    const auto* raw = firstChunk.getRawData ();
+    const auto size = firstChunk.getRawDataSize ();
+
+    // Full SysEx positions: 0=F0, 8=0x12, 11..12=raw offset,
+    // 13=first nibble. Wrapper byte 11 is encoded at 35..36.
+    return raw != nullptr
+        && size > 37
+        && raw[0] == 0xf0
+        && raw[8] == 0x12
+        && raw[11] == 0x00
+        && raw[12] == 0x00
+        && raw[35] == 0x0a
+        && raw[36] == 0x01;
+}
+
 } // namespace gp200

@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GP-200 STEP11 HOT2 — Factory AMP rename</title>
+<style>
+body{font-family:system-ui,sans-serif;background:#101318;color:#eef2f7;margin:0;padding:24px}main{max-width:820px;margin:auto;background:#181d25;border:1px solid #343c49;border-radius:14px;padding:24px}h1{font-size:1.45rem;margin-top:0}p,li{line-height:1.5}.box{background:#10141b;border:1px solid #303947;border-radius:9px;padding:14px;margin:14px 0}button,input{font:inherit}button{padding:11px 16px;border:0;border-radius:8px;background:#55c2ff;color:#061018;font-weight:700;margin:5px 8px 5px 0}button:disabled{opacity:.4}code{color:#9bdcff}.ok{color:#76e6a2}.err{color:#ff8e8e}.muted{color:#aeb8c6}
+</style>
+</head>
+<body><main>
+<h1>GP-200 STEP11 HOT2 — renombrado Factory AMP</h1>
+<p>Este complemento se aplica al BIN generado por el modificador STEP11/HOT1 actual. Conserva todos los mods, CLO, CAB y nombres ya instalados. Añade el comando de renombrado HOT2.</p>
+<div class="box">
+  <input id="file" type="file" accept=".bin,application/octet-stream">
+  <p id="status" class="muted">Selecciona el BIN STEP11/HOT1.</p>
+  <button id="bin" disabled>Descargar BIN HOT2</button>
+  <button id="zip" disabled>Descargar ZIP HOT2</button>
+</div>
+<ul>
+  <li>Solo acepta el runtime SAFE/HOT1 reconocido.</li>
+  <li>Reserva el modo <code>CR + A2</code> para renombrar.</li>
+  <li>El firmware conserva la segunda página en RAM y verifica su reescritura.</li>
+  <li>El CLO, sus parámetros y su CRC permanecen intactos.</li>
+</ul>
+<p class="muted">Después instala el firmware generado una vez. Desde entonces el VST HOT2 puede renombrar cualquier Factory AMP que ya contenga un CLO sin volver a cargarlo.</p>
+</main>
+<script>
+'use strict';
+const SIZE=0x626f68, RF=0x29e955, CR=RF+0x180, CAVE=0x2a0661;
+const SIG=hex('c18844f643429142');
+const OLD=hex('70b5044684b0');
+const TRAMP=hex('01f0c4bd00bf');
+const HANDLER=hex('c17aa22900f0058070b5044684b0fef734ba70b5044684b0a57a472d80f05580207b002800f05180294e06eb45363078a52840f04a80701c0168264a914240f04480416841f28822914240f03e8006f5805004f11c0141f2000210f8013b01f8013b521ef9d104f10c0004f11c0101f54071102210f8013b01f8013b521ef9d1154e06eb4536154b18683146144b9847144b1868314604f11c0241f20003dff848c0e047114800eb453004f11c0141f2000210f8013b11f801cb634540f00580521ef6d10125fef7f7b90025fef7f4b9d76303805654534900900700703e2620bf520180703e2620b5520180d7730380');
+let output=null, baseName='GP200_SAFE_STEP11_HOT2_RENAME';
+function hex(s){const a=new Uint8Array(s.length/2);for(let i=0;i<a.length;i++)a[i]=parseInt(s.slice(i*2,i*2+2),16);return a}
+function same(a,o,b){if(o<0||o+b.length>a.length)return false;for(let i=0;i<b.length;i++)if(a[o+i]!==b[i])return false;return true}
+function ascii(a,o,n){return new TextDecoder('ascii').decode(a.slice(o,o+n))}
+function le32(a,o){return (a[o]|a[o+1]<<8|a[o+2]<<16|a[o+3]<<24)>>>0}
+function setStatus(t,ok=false){const e=document.querySelector('#status');e.textContent=t;e.className=ok?'ok':'err'}
+async function sha8(a){const h=new Uint8Array(await crypto.subtle.digest('SHA-256',a));return [...h.slice(0,4)].map(x=>x.toString(16).padStart(2,'0')).join('')}
+function validate(a){
+ if(a.length!==SIZE)throw Error('Tamaño incorrecto: se esperaban '+SIZE+' bytes.');
+ if(ascii(a,0,4)!=='FRMW'||le32(a,4)!==SIZE-0x30)throw Error('Cabecera FRMW no válida.');
+ if(!ascii(a,0x10,16).startsWith('GP-200')||!ascii(a,0x58,8).startsWith('V180'))throw Error('No es firmware GP-200 V1.8.0.');
+ let sum=0;for(let i=0x30;i<a.length;i++)sum=(sum+a[i])&255;if(a[0x0e]!==sum)throw Error('Checksum FRMW de entrada incorrecto.');
+ if(!same(a,RF,SIG))throw Error('No se reconoce el runtime SAFE/HOT1 requerido.');
+ const already= same(a,CR,TRAMP)&&same(a,CAVE,HANDLER);
+ if(!already&&!same(a,CR,OLD))throw Error('El handler CR no coincide con HOT1; se cancela para no sobrescribir código desconocido.');
+ if(!already){for(let i=0;i<HANDLER.length;i++)if(a[CAVE+i]!==0)throw Error('La cave HOT2 no está libre; se cancela para evitar un solapamiento.');}
+ return already;
+}
+function patch(a){const already=validate(a);if(!already){a.set(TRAMP,CR);a.set(HANDLER,CAVE)}let sum=0;for(let i=0x30;i<a.length;i++)sum=(sum+a[i])&255;a[0x0e]=sum;return already}
+function crc32(a){let c=0xffffffff;for(const x of a){c^=x;for(let k=0;k<8;k++)c=(c>>>1)^((c&1)?0xedb88320:0)}return (c^0xffffffff)>>>0}
+function u16(a,o,v){a[o]=v&255;a[o+1]=(v>>>8)&255}function u32(a,o,v){u16(a,o,v);u16(a,o+2,v>>>16)}
+function storedZip(name,data){const n=new TextEncoder().encode(name),crc=crc32(data),lh=new Uint8Array(30+n.length),cd=new Uint8Array(46+n.length),end=new Uint8Array(22);u32(lh,0,0x04034b50);u16(lh,4,20);u32(lh,14,crc);u32(lh,18,data.length);u32(lh,22,data.length);u16(lh,26,n.length);lh.set(n,30);u32(cd,0,0x02014b50);u16(cd,4,20);u16(cd,6,20);u32(cd,16,crc);u32(cd,20,data.length);u32(cd,24,data.length);u16(cd,28,n.length);cd.set(n,46);u32(end,0,0x06054b50);u16(end,8,1);u16(end,10,1);u32(end,12,cd.length);u32(end,16,lh.length+data.length);const z=new Uint8Array(lh.length+data.length+cd.length+end.length);let o=0;z.set(lh,o);o+=lh.length;z.set(data,o);o+=data.length;z.set(cd,o);o+=cd.length;z.set(end,o);return z}
+function download(data,name,type){const u=URL.createObjectURL(new Blob([data],{type})),a=document.createElement('a');a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000)}
+document.querySelector('#file').addEventListener('change',async e=>{output=null;document.querySelector('#bin').disabled=document.querySelector('#zip').disabled=true;try{const f=e.target.files[0];if(!f)return;const a=new Uint8Array(await f.arrayBuffer()),already=patch(a),tag=await sha8(a);output=a;baseName='GP200_SAFE_STEP11_HOT2_RENAME_'+tag;document.querySelector('#bin').disabled=document.querySelector('#zip').disabled=false;setStatus(already?'HOT2 ya estaba instalado. BIN validado: '+tag:'HOT2 aplicado correctamente. BIN: '+tag,true)}catch(err){setStatus(err.message)}});
+document.querySelector('#bin').onclick=()=>output&&download(output,baseName+'.bin','application/octet-stream');
+document.querySelector('#zip').onclick=()=>output&&download(storedZip('GP-200 Firmware V1.8.0.bin',output),baseName+'.zip','application/zip');
+</script></body></html>

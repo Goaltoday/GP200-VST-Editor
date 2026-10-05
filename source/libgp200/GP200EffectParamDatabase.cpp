@@ -1,4 +1,5 @@
 #include "GP200EffectParamDatabase.h"
+#include "GP200ModSync.h"
 
 #include <algorithm>
 #include <cmath>
@@ -839,6 +840,16 @@ constexpr GP200EffectParamInfo paramLayout_109[] = {
     {4, "Trail", GP200ParamKind::toggle, 0.0f, 0.0f, 0.0f, 0.0f},
 };
 
+// Experimental Pure in the PRE slot. It uses the Pure parameter ABI but the
+// relocated PRE buffer holds only 500 ms of stereo audio.
+constexpr GP200EffectParamInfo paramLayout_133[] = {
+    {0, "Mix", GP200ParamKind::continuous, 20.0f, 0.0f, 100.0f, 1.0f},
+    {1, "Time", GP200ParamKind::continuous, 500.0f, 20.0f, 500.0f, 1.0f},
+    {2, "Feedback", GP200ParamKind::continuous, 50.0f, 0.0f, 100.0f, 1.0f},
+    {3, "Sync", GP200ParamKind::toggle, 0.0f, 0.0f, 0.0f, 0.0f},
+    {4, "Trail", GP200ParamKind::toggle, 0.0f, 0.0f, 0.0f, 0.0f},
+};
+
 constexpr GP200EffectParamInfo paramLayout_110[] = {
     {0, "Mix A", GP200ParamKind::continuous, 20.0f, 0.0f, 100.0f, 1.0f},
     {1, "Time A", GP200ParamKind::continuous, 500.0f, 20.0f, 4000.0f, 1.0f},
@@ -1170,6 +1181,7 @@ constexpr GP200EffectParamSet paramSets[] = {
     {0X0F000002u, paramLayout_050, 5},  {0X0F000003u, paramLayout_050, 5}, {0X0F000004u, paramLayout_050, 5},
     {0X0F000005u, paramLayout_050, 5},  {0X0F000006u, paramLayout_050, 5}, {0X0F000007u, paramLayout_050, 5},
     {0X0F000008u, paramLayout_050, 5},  {0X0F000009u, paramLayout_050, 5},
+    {0XF2000002u, paramLayout_133, 5},
 };
 
 juce::String formatFloatValue (float value)
@@ -1188,6 +1200,15 @@ juce::String formatFloatValue (float value)
 
 const GP200EffectParamSet* GP200EffectParamDatabase::findParamsForEffect (juce::uint32 effectId)
 {
+    if (GP200ModSync::isCustomCloAmp (effectId))
+    {
+        thread_local GP200EffectParamSet customCloSet;
+        customCloSet.effectId = effectId;
+        customCloSet.params = paramLayout_050;
+        customCloSet.count = 5;
+        return &customCloSet;
+    }
+
     const auto it = std::lower_bound (std::begin (paramSets),
                                       std::end (paramSets),
                                       effectId,
@@ -1195,6 +1216,30 @@ const GP200EffectParamSet* GP200EffectParamDatabase::findParamsForEffect (juce::
                                       { return set.effectId < wantedId; });
 
     return it != std::end (paramSets) && it->effectId == effectId ? it : nullptr;
+}
+
+juce::uint32 GP200EffectParamDatabase::resolveEffectIdForModule (juce::uint32 effectId,
+                                                                 const juce::String& moduleName)
+{
+    if (moduleName.equalsIgnoreCase ("PRE"))
+    {
+        if (const auto dynamicSource = GP200ModSync::getPreBankSourceEffectId (effectId); dynamicSource != 0u)
+            return dynamicSource;
+    }
+    else if (moduleName.equalsIgnoreCase ("WAH"))
+    {
+        if (const auto dynamicSource = GP200ModSync::getWahConfigSourceEffectId (effectId); dynamicSource != 0u)
+            return dynamicSource;
+    }
+
+    return effectId;
+}
+
+const GP200EffectParamSet* GP200EffectParamDatabase::findParamsForEffect (juce::uint32 effectId,
+                                                                          const juce::String& moduleName)
+{
+    const auto resolved = resolveEffectIdForModule (effectId, moduleName);
+    return findParamsForEffect (resolved);
 }
 
 const GP200EffectParamInfo* GP200EffectParamDatabase::findParam (juce::uint32 effectId, int paramIndex)
@@ -1447,8 +1492,6 @@ constexpr DiscreteOptionEntry discreteOptionEntries[] = {
     {0x04000020u, 3, 1, "Vibrato"},
     {0x04000020u, 4, 0, "OFF"},
     {0x04000020u, 4, 1, "ON"},
-    {0x04000021u, 2, 0, "OFF"},
-    {0x04000021u, 2, 1, "ON"},
     {0x04000026u, 3, 0, "OFF"},
     {0x04000026u, 3, 1, "ON"},
     {0x04000027u, 3, 0, "OFF"},
@@ -1640,6 +1683,10 @@ constexpr DiscreteOptionEntry discreteOptionEntries[] = {
     {0x0C000011u, 6, 1, "ON"},
     {0x0C000012u, 6, 0, "OFF"},
     {0x0C000012u, 6, 1, "ON"},
+    {0xF2000002u, 3, 0, "OFF"},
+    {0xF2000002u, 3, 1, "ON"},
+    {0xF2000002u, 4, 0, "OFF"},
+    {0xF2000002u, 4, 1, "ON"},
 };
 
 const DiscreteOptionEntry* findDiscreteOptionEntry (juce::uint32 effectId,

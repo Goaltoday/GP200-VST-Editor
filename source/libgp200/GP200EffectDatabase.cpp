@@ -1,4 +1,5 @@
 #include "GP200EffectDatabase.h"
+#include "GP200ModSync.h"
 
 #include <algorithm>
 #include <iterator>
@@ -341,6 +342,7 @@ constexpr GP200EffectInfo effectMap[] = {
     {0X0F000007u, "SnapTone", "DST"},
     {0X0F000008u, "SnapTone", "DST"},
     {0X0F000009u, "SnapTone", "DST"},
+    {0XF2000002u, "Pure PRE UI", "INTERNAL"},
 };
 
 struct GP200EffectDescription
@@ -435,7 +437,7 @@ constexpr GP200EffectDescription effectDescriptions[] = {
     {0X0400001Eu, "A special, subtle phaser combining tremolo/pan variations"},
     {0X0400001Fu, "Voodoo Lab Micro Vibe"},
     {0X04000020u, "Shin-Ei Uni-Vibe classic phase shifter (chorus)"},
-    {0X04000021u, "Demeter TRM-1 Tremulator"},
+    {0X04000021u, "Optical tremolo"},
     {0X04000026u, "Sine tremolo waveform with super wide tonal range"},
     {0X04000027u, "Triangle tremolo waveform with super wide tonal range"},
     {0X04000028u, "Bias tremolo waveform with super wide tonal range"},
@@ -640,18 +642,41 @@ const GP200EffectInfo* GP200EffectDatabase::findEffect (juce::uint32 effectId)
 
 juce::String GP200EffectDatabase::getEffectName (juce::uint32 effectId)
 {
+    const auto modName = GP200ModSync::getDisplayName (effectId);
+    if (modName.isNotEmpty ())
+        return modName;
+
     if (const auto* effect = findEffect (effectId))
         return effect->name;
 
     return "Unknown " + effectIdToHex (effectId);
 }
 
+juce::String GP200EffectDatabase::getEffectName (juce::uint32 effectId, const juce::String& moduleName)
+{
+    if (moduleName.equalsIgnoreCase ("PRE"))
+    {
+        const auto dynamicName = GP200ModSync::getPreBankDisplayName (effectId);
+        if (dynamicName.isNotEmpty ()) return dynamicName;
+    }
+    if (moduleName.equalsIgnoreCase ("WAH"))
+    {
+        const auto dynamicName = GP200ModSync::getWahConfigDisplayName (effectId);
+        if (dynamicName.isNotEmpty ()) return dynamicName;
+    }
+    return getEffectName (effectId);
+}
+
 juce::String GP200EffectDatabase::getEffectDescription (juce::uint32 effectId)
 {
+    const auto modDescription = GP200ModSync::getDescription (effectId);
+    if (modDescription.isNotEmpty ())
+        return modDescription;
+
     // User IR names are loaded dynamically from the hardware. This fallback
     // is used only while no assignment name is available.
     if (effectId >= 0x0A100000u && effectId <= 0x0A100013u)
-        return "User IR WAV (44.1 kHz / 1024 samples)";
+        return "User IR WAV (44.1 kHz / 2048 samples)";
 
     if (const auto* description =
             findByEffectId (std::begin (effectDescriptions), std::end (effectDescriptions), effectId))
@@ -660,6 +685,32 @@ juce::String GP200EffectDatabase::getEffectDescription (juce::uint32 effectId)
     }
 
     return {};
+}
+
+juce::String GP200EffectDatabase::getEffectDescription (juce::uint32 effectId,
+                                                         const juce::String& moduleName)
+{
+    if (moduleName.equalsIgnoreCase ("PRE"))
+    {
+        const auto sourceId = GP200ModSync::getPreBankSourceEffectId (effectId);
+        if (sourceId != 0u)
+        {
+            const auto sourceDescription = getEffectDescription (sourceId);
+            if (sourceDescription.isNotEmpty ()) return sourceDescription;
+            return GP200ModSync::getPreBankDescription (effectId);
+        }
+    }
+    if (moduleName.equalsIgnoreCase ("WAH"))
+    {
+        const auto sourceId = GP200ModSync::getWahConfigSourceEffectId (effectId);
+        if (sourceId != 0u)
+        {
+            const auto sourceDescription = getEffectDescription (sourceId);
+            if (sourceDescription.isNotEmpty ()) return sourceDescription;
+            return GP200ModSync::getWahConfigDescription (effectId);
+        }
+    }
+    return getEffectDescription (effectId);
 }
 
 juce::String GP200EffectDatabase::getModuleName (juce::uint32 effectId)
@@ -694,7 +745,28 @@ std::vector<GP200EffectInfo> GP200EffectDatabase::getEffectsForModule (const juc
         }
 
         if (isAvailable)
-            result.push_back (effect);
+        {
+            auto visibleEffect = effect;
+            if (wantedModule == "PRE")
+            {
+                const auto dynamicSource = GP200ModSync::getPreBankSourceEffectId (effect.effectId);
+                if (dynamicSource != 0u)
+                {
+                    if (const auto* sourceEffect = findEffect (dynamicSource))
+                        visibleEffect.name = sourceEffect->name;
+                }
+            }
+            else if (wantedModule == "WAH")
+            {
+                const auto dynamicSource = GP200ModSync::getWahConfigSourceEffectId (effect.effectId);
+                if (dynamicSource != 0u)
+                {
+                    if (const auto* sourceEffect = findEffect (dynamicSource))
+                        visibleEffect.name = sourceEffect->name;
+                }
+            }
+            result.push_back (visibleEffect);
+        }
     }
 
     return result;

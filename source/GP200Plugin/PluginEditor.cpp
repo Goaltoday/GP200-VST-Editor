@@ -8,17 +8,21 @@
     SPDX-License-Identifier: GPL-3.0-or-later
 */
 #include "PluginEditor.h"
+#include "../libgp200/GP200FlexibleRouting.h"
+#include "../libgp200/GP200ChainBlend.h"
 #include "GP200Typography.h"
 #include "BinaryData.h"
 #include "../libgp200/GP200Preset.h"
 #include "../libgp200/GP200EffectParamDatabase.h"
 #include "../libgp200/GP200EffectDatabase.h"
+#include "../libgp200/GP200ModSync.h"
 #include "../libgp200/GP200Constants.h"
 
 #include <cmath>
 #include <algorithm>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <map>
 #include <vector>
 
@@ -112,7 +116,7 @@ gp200::GP200Preset makeDefaultOfflinePreset ()
         if (!effects.empty ())
             slot.effectId = effects.front ().effectId;
 
-        if (const auto* paramSet = gp200::GP200EffectParamDatabase::findParamsForEffect (slot.effectId))
+        if (const auto* paramSet = gp200::GP200EffectParamDatabase::findParamsForEffect (slot.effectId, modules[blockIndex]))
         {
             for (int i = 0; i < paramSet->count; ++i)
             {
@@ -483,12 +487,13 @@ private:
     void refreshDestinationItems (int preferredId = 0)
     {
         auto selectedId = preferredId > 0 ? preferredId : destinationBox.getSelectedId ();
-        selectedId = juce::jlimit (1, static_cast<int> (gp200::userIRCount), selectedId <= 0 ? 1 : selectedId);
+        if (selectedId <= 0)
+            selectedId = 1;
 
         destinationBox.clear (juce::dontSendNotification);
         for (int i = 0; i < gp200::userIRCount; ++i)
         {
-            auto itemText = "User IR " + juce::String (i + 1);
+            auto itemText = "User IR " + juce::String (i + 1) + " (2048)";
             if (getUserIRDisplayName)
             {
                 const auto name = extractBareName (getUserIRDisplayName (i));
@@ -497,14 +502,31 @@ private:
             }
             destinationBox.addItem (itemText, i + 1);
         }
+
+        destinationBox.addSeparator ();
+        for (int i = 0; i < 70; ++i)
+        {
+            const auto effectId = 0x0A000000u + static_cast<juce::uint32> (i);
+            auto itemText = "Factory CAB " + juce::String (i + 1) + " (1024) - "
+                          + gp200::GP200EffectDatabase::getEffectName (effectId);
+            destinationBox.addItem (itemText, 1001 + i);
+        }
+
         destinationBox.setSelectedId (selectedId, juce::dontSendNotification);
     }
 
     void updateRenameEditorForSelectedSlot ()
     {
         const auto selectedId = destinationBox.getSelectedId ();
-        if (selectedId <= 0 || getUserIRDisplayName == nullptr)
+        const bool isUserIR = selectedId >= 1 && selectedId <= static_cast<int> (gp200::userIRCount);
+        renameEditor.setEnabled (isUserIR);
+        renameButton.setEnabled (isUserIR && !isCurrentlyBusy ());
+        if (!isUserIR || getUserIRDisplayName == nullptr)
+        {
+            renameEditor.setText ("Factory CAB name follows the plugin MOD_SYNC entry",
+                                  juce::dontSendNotification);
             return;
+        }
         renameEditor.setText (extractBareName (getUserIRDisplayName (selectedId - 1)),
                               juce::dontSendNotification);
     }
@@ -520,7 +542,13 @@ private:
 
         const auto selectedId = destinationBox.getSelectedId ();
         const auto newName = renameEditor.getText ().trim ().substring (0, 16);
-        if (selectedId <= 0 || newName.isEmpty () || onRename == nullptr)
+        if (selectedId < 1 || selectedId > static_cast<int> (gp200::userIRCount))
+        {
+            statusLabel.setColour (juce::Label::textColourId, mutedTextColour);
+            statusLabel.setText ("Factory CAB names are stored by the plugin MOD_SYNC manifest.", juce::dontSendNotification);
+            return;
+        }
+        if (newName.isEmpty () || onRename == nullptr)
         {
             statusLabel.setColour (juce::Label::textColourId, statusOffColour);
             statusLabel.setText ("Enter a User IR name (maximum 16 characters).", juce::dontSendNotification);
@@ -669,7 +697,9 @@ private:
         statusLabel.setColour (juce::Label::textColourId, panelOutlineColour);
         statusLabel.setText ("Starting import: " + activeImportFile.getFileName (), juce::dontSendNotification);
         importButton.setEnabled (false);
-        onImport (activeImportFile, selectedId - 1);
+        const auto destinationCode = selectedId >= 1001 ? 1000 + (selectedId - 1001)
+                                                         : selectedId - 1;
+        onImport (activeImportFile, destinationCode);
     }
 
     void timerCallback () override
@@ -700,7 +730,8 @@ private:
         const bool selectedFile = juce::isPositiveAndBelow (selectedRow, static_cast<int> (entries.size ()))
                                && !entries[static_cast<std::size_t> (selectedRow)].isDirectory;
         importButton.setEnabled (selectedFile);
-        renameButton.setEnabled (true);
+        const auto selectedId = destinationBox.getSelectedId ();
+        renameButton.setEnabled (selectedId >= 1 && selectedId <= static_cast<int> (gp200::userIRCount));
     }
 
     gp200ui::SpaceGroteskLookAndFeel spaceGroteskLookAndFeel;
@@ -732,22 +763,25 @@ class SoundCloneImportComponent final : public juce::Component,
                                               private juce::Timer
 {
 public:
-    using ImportCallback = std::function<void (const juce::File&, int)>;
+    using ImportCallback = std::function<void (const juce::File&, int, const juce::String&)>;
     using StatusCallback = std::function<juce::String ()>;
     using BusyCallback = std::function<bool ()>;
     using SnapToneNameCallback = std::function<juce::String (int)>;
     using RenameCallback = std::function<bool (int, const juce::String&)>;
+    using FactoryAmpRenameCallback = std::function<bool (int, const juce::String&)>;
 
     SoundCloneImportComponent (ImportCallback callback,
                                StatusCallback statusCallback,
                                BusyCallback busyCallback,
                                SnapToneNameCallback snapToneNameCallback,
-                               RenameCallback renameCallback)
+                               RenameCallback renameCallback,
+                               FactoryAmpRenameCallback factoryAmpRenameCallback)
         : onImport (std::move (callback)),
           getUploadStatus (std::move (statusCallback)),
           isUploadBusy (std::move (busyCallback)),
           getSnapToneDisplayName (std::move (snapToneNameCallback)),
-          onRename (std::move (renameCallback))
+          onRename (std::move (renameCallback)),
+          onFactoryAmpRename (std::move (factoryAmpRenameCallback))
     {
         setLookAndFeel (&spaceGroteskLookAndFeel);
 
@@ -829,7 +863,8 @@ public:
         destinationBox.setColour (juce::ComboBox::outlineColourId, panelOutlineColour);
         destinationBox.onChange = [this] { updateRenameEditorForSelectedSlot (); };
 
-        renameEditor.setTextToShowWhenEmpty ("New SnapTone name", mutedTextColour.withAlpha (0.65f));
+        renameEditor.setTextToShowWhenEmpty ("Name (maximum 16 characters)",
+                                             mutedTextColour.withAlpha (0.65f));
         renameEditor.setFont (gp200ui::regular (14.0f));
         renameEditor.setColour (juce::TextEditor::backgroundColourId, panelColour);
         renameEditor.setColour (juce::TextEditor::textColourId, textColour);
@@ -898,7 +933,9 @@ public:
 private:
     void refreshDestinationItems ()
     {
-        const auto selectedId = juce::jlimit (1, 10, destinationBox.getSelectedId ());
+        auto selectedId = destinationBox.getSelectedId ();
+        if (selectedId <= 0)
+            selectedId = 1;
 
         destinationBox.clear (juce::dontSendNotification);
 
@@ -912,17 +949,27 @@ private:
             {
                 auto displayName = getSnapToneDisplayName (slot - 1).trim ();
                 const auto separatorIndex = displayName.indexOf (" - ");
-
                 if (separatorIndex >= 0)
                     displayName = displayName.substring (separatorIndex + 3).trim ();
                 else if (displayName.startsWithIgnoreCase ("SnapTone "))
                     displayName.clear ();
-
                 if (displayName.isNotEmpty ())
                     itemText += " - " + displayName;
             }
-
             destinationBox.addItem (itemText, slot);
+        }
+
+        destinationBox.addSeparator ();
+        const auto ampEffects = gp200::GP200EffectDatabase::getEffectsForModule ("AMP");
+        int factoryIndex = 0;
+        for (const auto& effect : ampEffects)
+        {
+            if ((effect.effectId & 0xFF000000u) == 0x0F000000u)
+                continue;
+            destinationBox.addItem ("Factory AMP " + juce::String (factoryIndex + 1) + " - "
+                                        + gp200::GP200EffectDatabase::getEffectName (effect.effectId),
+                                    1001 + factoryIndex);
+            ++factoryIndex;
         }
 
         destinationBox.setSelectedId (selectedId, juce::dontSendNotification);
@@ -931,8 +978,28 @@ private:
     void updateRenameEditorForSelectedSlot ()
     {
         const auto selectedId = destinationBox.getSelectedId ();
-        if (selectedId <= 0 || getSnapToneDisplayName == nullptr)
+        const bool isSnapTone = selectedId >= 1 && selectedId <= 10;
+        const bool isFactoryAmp = selectedId >= 1001 && selectedId <= 1071;
+        renameEditor.setEnabled (isSnapTone || isFactoryAmp);
+        renameButton.setEnabled ((isSnapTone || isFactoryAmp) && !isCurrentlyBusy ());
+        if (isFactoryAmp)
+        {
+            const auto selectedRow = fileList.getSelectedRow ();
+            if (juce::isPositiveAndBelow (selectedRow, static_cast<int> (entries.size ()))
+                && !entries[static_cast<std::size_t> (selectedRow)].isDirectory)
+                renameEditor.setText (
+                    entries[static_cast<std::size_t> (selectedRow)].file
+                        .getFileNameWithoutExtension ().substring (0, 16),
+                    juce::dontSendNotification);
+            else
+                renameEditor.clear ();
             return;
+        }
+        if (!isSnapTone || getSnapToneDisplayName == nullptr)
+        {
+            renameEditor.clear ();
+            return;
+        }
 
         auto displayName = getSnapToneDisplayName (selectedId - 1).trim ();
         const auto separatorIndex = displayName.indexOf (" - ");
@@ -940,7 +1007,6 @@ private:
             displayName = displayName.substring (separatorIndex + 3).trim ();
         else if (displayName.startsWithIgnoreCase ("SnapTone "))
             displayName.clear ();
-
         renameEditor.setText (displayName, juce::dontSendNotification);
     }
 
@@ -956,7 +1022,31 @@ private:
 
         const auto selectedId = destinationBox.getSelectedId ();
         const auto newName = renameEditor.getText ().trim ().substring (0, 16);
-        if (selectedId <= 0 || newName.isEmpty () || onRename == nullptr)
+        if (selectedId >= 1001 && selectedId <= 1071)
+        {
+            if (newName.isEmpty () || onFactoryAmpRename == nullptr)
+            {
+                statusLabel.setColour (juce::Label::textColourId, statusOffColour);
+                statusLabel.setText ("Enter a Factory AMP name (maximum 16 ASCII characters).",
+                                     juce::dontSendNotification);
+                return;
+            }
+            if (!onFactoryAmpRename (selectedId - 1001, newName))
+            {
+                statusLabel.setColour (juce::Label::textColourId, statusOffColour);
+                statusLabel.setText ("Factory AMP rename could not be started.",
+                                     juce::dontSendNotification);
+                return;
+            }
+            uploadWasBusy = true;
+            statusLabel.setColour (juce::Label::textColourId, panelOutlineColour);
+            statusLabel.setText ("Renaming Factory AMP to: " + newName,
+                                 juce::dontSendNotification);
+            return;
+        }
+        if (selectedId < 1 || selectedId > 10)
+            return;
+        if (newName.isEmpty () || onRename == nullptr)
         {
             statusLabel.setColour (juce::Label::textColourId, statusOffColour);
             statusLabel.setText ("Enter a SnapTone name (maximum 16 characters).",
@@ -1025,6 +1115,11 @@ private:
             juce::isPositiveAndBelow (lastRowSelected, static_cast<int> (entries.size ()))
             && !entries[static_cast<std::size_t> (lastRowSelected)].isDirectory;
         importButton.setEnabled (selectedFile && !isCurrentlyBusy ());
+        if (selectedFile && destinationBox.getSelectedId () >= 1001)
+            renameEditor.setText (
+                entries[static_cast<std::size_t> (lastRowSelected)].file
+                    .getFileNameWithoutExtension ().substring (0, 16),
+                juce::dontSendNotification);
     }
 
     void listBoxItemDoubleClicked (int row, const juce::MouseEvent&) override
@@ -1165,7 +1260,16 @@ private:
         statusLabel.setColour (juce::Label::textColourId, panelOutlineColour);
         statusLabel.setText ("Starting import: " + activeImportFile.getFileName (), juce::dontSendNotification);
         importButton.setEnabled (false);
-        onImport (activeImportFile, selectedId - 1);
+        const auto destinationCode = selectedId >= 1001 ? 1000 + (selectedId - 1001)
+                                                         : selectedId - 1;
+        auto requestedName = juce::String ();
+        if (selectedId >= 1001)
+        {
+            requestedName = renameEditor.getText ().trim ().substring (0, 16);
+            if (requestedName.isEmpty ())
+                requestedName = activeImportFile.getFileNameWithoutExtension ().substring (0, 16);
+        }
+        onImport (activeImportFile, destinationCode, requestedName);
     }
 
     void timerCallback () override
@@ -1190,6 +1294,7 @@ private:
             const auto status = getUploadStatus != nullptr ? getUploadStatus() : juce::String();
             statusLabel.setText (status.isNotEmpty() ? status : juce::String ("Sound Clone import completed."),
                                  juce::dontSendNotification);
+            refreshDestinationItems ();
         }
 
         const auto selectedRow = fileList.getSelectedRow ();
@@ -1197,7 +1302,9 @@ private:
             juce::isPositiveAndBelow (selectedRow, static_cast<int> (entries.size ()))
             && !entries[static_cast<std::size_t> (selectedRow)].isDirectory;
         importButton.setEnabled (selectedFile);
-        renameButton.setEnabled (true);
+        const auto selectedId = destinationBox.getSelectedId ();
+        renameButton.setEnabled ((selectedId >= 1 && selectedId <= 10)
+                                 || (selectedId >= 1001 && selectedId <= 1071));
     }
 
     gp200ui::SpaceGroteskLookAndFeel spaceGroteskLookAndFeel;
@@ -1206,6 +1313,7 @@ private:
     BusyCallback isUploadBusy;
     SnapToneNameCallback getSnapToneDisplayName;
     RenameCallback onRename;
+    FactoryAmpRenameCallback onFactoryAmpRename;
     juce::Label pathLabel;
     juce::TextEditor pathEditor;
     juce::TextButton browseButton;
@@ -1226,13 +1334,73 @@ private:
 
 
 //==============================================================================
+gp200::RoutingOrder AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getLocalOrder () const
+{
+    gp200::RoutingOrder order{};
+    for (std::size_t i = 0; i < order.size () && i < items.size (); ++i)
+        order[i] = items[i].blockIndex;
+    return order;
+}
+
 void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::setItems (std::vector<Item> newItems)
 {
-    items = std::move (newItems);
+    if (!localInitialised || !routingDraftEdited)
+    {
+        bool sameOrder = items.size () == newItems.size ();
+        for (std::size_t i = 0; sameOrder && i < items.size (); ++i)
+            sameOrder = items[i].blockIndex == newItems[i].blockIndex;
+        if (!sameOrder) cancelDrag ();
+        items = std::move (newItems);
+        if (!localInitialised)
+        {
+            fxLoopSendPosition = juce::jmin (2, static_cast<int> (items.size ()));
+            localBoundary = juce::jmin (5, static_cast<int> (items.size ()));
+            fxLoopReturnPosition = juce::jmin (8, static_cast<int> (items.size ()));
+        }
+        localInitialised = true;
+    }
+    else
+    {
+        // Keep an edited routing draft; before editing, import the actual device order.
+        for (auto& item : items)
+            for (const auto& fresh : newItems)
+                if (item.blockIndex == fresh.blockIndex) item = fresh;
+    }
+
     const auto selectedStillExists = std::any_of (items.begin (), items.end (), [this] (const Item& item)
     { return item.blockIndex == selectedBlockIndex; });
     if (!selectedStillExists)
         selectedBlockIndex = items.empty () ? -1 : items.front ().blockIndex;
+    repaint ();
+}
+
+void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::setLoopPositions (int sendPosition, int returnPosition)
+{
+    if (routingDraftEdited) return;
+    const int count = static_cast<int> (items.size ());
+    if (sendPosition < 0 || returnPosition < sendPosition || returnPosition > count) return;
+    if (fxLoopSendPosition != sendPosition || fxLoopReturnPosition != returnPosition) cancelDrag ();
+    fxLoopSendPosition = sendPosition;
+    fxLoopReturnPosition = returnPosition;
+    localBoundary = juce::jlimit (sendPosition, returnPosition, localBoundary);
+    repaint ();
+
+}
+
+void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::setDeviceRouting (int send, int boundary, int ret, bool parallel)
+{
+    if (send < 0 || send > boundary || boundary > ret || ret > static_cast<int> (items.size ())) return;
+    if (fxLoopSendPosition != send || localBoundary != boundary || fxLoopReturnPosition != ret || parallelMode != parallel) cancelDrag ();
+    fxLoopSendPosition = send; localBoundary = boundary; fxLoopReturnPosition = ret;
+    parallelMode = parallel;
+    repaint ();
+}
+
+void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::setParallelMode (bool shouldBeParallel)
+{
+    if (parallelMode == shouldBeParallel) return;
+    cancelDrag ();
+    parallelMode = shouldBeParallel;
     repaint ();
 }
 
@@ -1262,6 +1430,19 @@ juce::Rectangle<int> AudioPluginAudioProcessorEditor::EffectChainRibbonComponent
 {
     if (items.empty () || itemIndex < 0 || itemIndex >= static_cast<int> (items.size ()))
         return {};
+    if (parallelMode)
+    {
+        const auto group = getParallelGroupForItem (items[static_cast<std::size_t> (itemIndex)]);
+        const auto area = getGroupArea (group);
+        int rank = 0, count = 0;
+        for (int i = 0; i < static_cast<int> (items.size ()); ++i)
+            if (getParallelGroupForItem (items[static_cast<std::size_t> (i)]) == group)
+            { if (i < itemIndex) ++rank; ++count; }
+        const int step = area.getWidth () / juce::jmax (1, count);
+        const int width = juce::jmin (60, juce::jmax (18, step - 6));
+        return {area.getX () + rank * step + (step - width) / 2,
+                area.getCentreY () - 26, width, 52};
+    }
     auto area = getLocalBounds ().reduced (54, 14);
     constexpr int gap = 9;
     const auto count = static_cast<int> (items.size ());
@@ -1271,6 +1452,64 @@ juce::Rectangle<int> AudioPluginAudioProcessorEditor::EffectChainRibbonComponent
     const auto startX = area.getCentreX () - totalWidth / 2;
     return {startX + itemIndex * (tileWidth + gap), area.getCentreY () - tileHeight / 2, tileWidth, tileHeight};
 }
+
+int AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getParallelGroupForItem (const Item& item) const
+{
+    const auto itemIterator = std::find_if (items.begin (), items.end (), [&item] (const Item& candidate)
+    { return candidate.blockIndex == item.blockIndex; });
+    if (itemIterator == items.end ()) return 0;
+    const auto itemPosition = static_cast<int> (std::distance (items.begin (), itemIterator));
+    if (itemPosition < fxLoopSendPosition) return 0;
+    if (itemPosition < localBoundary) return 1;
+    if (itemPosition < fxLoopReturnPosition) return 2;
+    return 3;
+}
+
+juce::Rectangle<int> AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getGroupArea (int group) const
+{
+    if (paintingDragPreview) return previewGroupAreas[static_cast<std::size_t> (group)];
+    const int available = juce::jmax (1, getWidth () - 100);
+    const int middleCount = juce::jmax (1, juce::jmax (localBoundary - fxLoopSendPosition,
+                                                     fxLoopReturnPosition - localBoundary));
+    const int total = juce::jmax (1, fxLoopSendPosition) + middleCount
+                    + juce::jmax (1, static_cast<int> (items.size ()) - fxLoopReturnPosition);
+    const int unit = available / total;
+    const int split = 50 + unit * juce::jmax (1, fxLoopSendPosition);
+    const int merge = split + unit * middleCount;
+    const int y = (getHeight () + 28) / 2;
+    if (group == 0) return {50, y - 26, split - 54, 52};
+    if (group == 3) return {merge + 4, y - 26, getWidth () - 50 - merge - 4, 52};
+    return {split + 4, y + (group == 1 ? -53 : 1), merge - split - 8, 52};
+}
+
+int AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getDropGroup (juce::Point<int> position) const
+{
+    const auto middle = getGroupArea (1);
+    if (position.x < middle.getX ()) return 0;
+    if (position.x > middle.getRight ()) return 3;
+    return position.y < (getHeight () + 28) / 2 ? 1 : 2;
+}
+
+void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::moveLocalItem (int source, int group, int position)
+{
+    std::vector<Item> groups[4];
+    const auto moved = items[static_cast<std::size_t> (source)];
+    for (int i = 0; i < static_cast<int> (items.size ()); ++i)
+        if (i != source) groups[getParallelGroupForItem (items[static_cast<std::size_t> (i)])].push_back (items[static_cast<std::size_t> (i)]);
+    auto& destination = groups[group];
+    destination.insert (destination.begin () + juce::jlimit (0, static_cast<int> (destination.size ()), position), moved);
+    items.clear ();
+    for (const auto& list : groups) items.insert (items.end (), list.begin (), list.end ());
+    fxLoopSendPosition = static_cast<int> (groups[0].size ());
+    localBoundary = fxLoopSendPosition + static_cast<int> (groups[1].size ());
+    fxLoopReturnPosition = localBoundary + static_cast<int> (groups[2].size ());
+}
+
+int AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getEffectiveSendPosition () const
+{ return fxLoopSendPosition; }
+
+int AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getEffectiveReturnPosition () const
+{ return fxLoopReturnPosition; }
 
 int AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getItemIndexAt (juce::Point<int> position) const
 {
@@ -1288,6 +1527,44 @@ int AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getTargetPositi
     return static_cast<int> (items.size ());
 }
 
+int AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getLoopMarkerX (int position) const
+{
+    if (items.empty ()) return getWidth () / 2;
+    if (parallelMode)
+        return position == fxLoopSendPosition ? getGroupArea (1).getX () - 4
+                                             : getGroupArea (1).getRight () + 4;
+    if (position == 0) return getTileBounds (0).getX () - 5;
+    return getTileBounds (juce::jlimit (0, static_cast<int> (items.size ()) - 1, position - 1)).getRight () + 5;
+}
+
+int AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getLoopPositionAtX (int x) const
+{
+    const int minimumPosition = draggedLoopMarker == 0 ? 0 : fxLoopSendPosition;
+    const int maximumPosition = draggedLoopMarker == 0 ? fxLoopReturnPosition : static_cast<int> (items.size ());
+    auto bestPosition = minimumPosition;
+    auto bestDistance = std::numeric_limits<int>::max ();
+    for (int position = minimumPosition; position <= maximumPosition; ++position)
+    {
+        const auto boundaryX = parallelMode ? 50 + position * (getWidth () - 100) / juce::jmax (1, static_cast<int> (items.size ())) : getLoopMarkerX (position);
+        const auto distance = std::abs (x - boundaryX);
+        if (distance < bestDistance)
+        {
+            bestDistance = distance;
+            bestPosition = position;
+        }
+    }
+    return bestPosition;
+}
+
+int AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::getLoopMarkerAt (juce::Point<int> position) const
+{
+    const auto sendX = getLoopMarkerX (parallelMode ? getEffectiveSendPosition () : fxLoopSendPosition);
+    const auto returnX = getLoopMarkerX (parallelMode ? getEffectiveReturnPosition () : fxLoopReturnPosition);
+    if (std::abs (position.x - sendX) <= 10 && position.y >= (parallelMode ? 28 : 0) && position.y <= (parallelMode ? 46 : 18)) return 0;
+    if (std::abs (position.x - returnX) <= 10 && position.y >= getHeight () - 18) return 1;
+    return -1;
+}
+
 void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::paint (juce::Graphics& g)
 {
     const auto bounds = getLocalBounds ().toFloat ().reduced (0.5f);
@@ -1297,10 +1574,74 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::paint (juce::G
     g.drawRoundedRectangle (bounds, 7.0f, 1.0f);
     if (items.empty ()) return;
 
+    const bool blockDrag = dragging && juce::isPositiveAndBelow (pressedItemIndex, static_cast<int> (items.size ()));
+    const bool preview = blockDrag && dragTargetPosition >= 0 && dragChangesRouting ();
+    const auto originalTile = blockDrag ? getTileBounds (pressedItemIndex) : juce::Rectangle<int> {};
+    const Item draggedItem = blockDrag ? items[static_cast<std::size_t> (pressedItemIndex)] : Item {};
+    struct LayoutRestore
+    {
+        EffectChainRibbonComponent& ribbon;
+        std::vector<Item> originalItems;
+        int send, boundary, ret;
+        ~LayoutRestore ()
+        {
+            ribbon.items = std::move (originalItems);
+            ribbon.fxLoopSendPosition = send; ribbon.localBoundary = boundary; ribbon.fxLoopReturnPosition = ret;
+            ribbon.paintingDragPreview = false;
+        }
+    } restore {*this, items, fxLoopSendPosition, localBoundary, fxLoopReturnPosition};
+    if (preview)
+    {
+        // Keep branch boundaries stable while previewing; redistribute tiles within each branch.
+        for (int group = 0; group < 4; ++group) previewGroupAreas[static_cast<std::size_t> (group)] = getGroupArea (group);
+        paintingDragPreview = parallelMode;
+        if (parallelMode) moveLocalItem (pressedItemIndex, dragTargetGroup, dragTargetPosition);
+        else
+        {
+            items.erase (items.begin () + pressedItemIndex);
+            items.insert (items.begin () + dragTargetPosition, draggedItem);
+        }
+    }
+
+    if (parallelMode)
+    {
+        for (int group = 0; group < 4; ++group)
+        {
+            const auto area = getGroupArea (group);
+            g.setColour (juce::Colour (0xff444a50));
+            g.drawRoundedRectangle (area.toFloat (), 4.0f, 1.0f);
+            if (group == 1 || group == 2)
+            {
+                const int labelY = group == 1 ? area.getY () - 16 : area.getBottom () + 2;
+                g.setColour (juce::Colour (0xffb9bdc0));
+                g.setFont (gp200ui::semibold (12.5f));
+                g.drawText (group == 1 ? "A" : "B",
+                            juce::Rectangle<int> (area.getX (), labelY, area.getWidth (), 14),
+                            juce::Justification::centred);
+            }
+        }
+    }
     const auto first = getTileBounds (0);
-    const auto chainY = first.getCentreY ();
+    const auto chainY = parallelMode ? (getHeight () + 28) / 2 : first.getCentreY ();
     g.setColour (juce::Colour (0xff7b8083));
-    g.drawLine (36.0f, static_cast<float> (chainY), static_cast<float> (getWidth () - 36), static_cast<float> (chainY), 2.0f);
+    if (parallelMode)
+    {
+        const auto splitX = static_cast<float> (getLoopMarkerX (getEffectiveSendPosition ()));
+        const auto mergeX = static_cast<float> (getLoopMarkerX (getEffectiveReturnPosition ()));
+        const auto upperY = static_cast<float> ((getHeight () + 28) / 2 - 27);
+        const auto lowerY = static_cast<float> ((getHeight () + 28) / 2 + 27);
+        g.drawLine (36.0f, static_cast<float> (chainY), splitX, static_cast<float> (chainY), 2.0f);
+        g.drawLine (splitX, upperY, splitX, lowerY, 2.0f);
+        g.drawLine (splitX, upperY, mergeX, upperY, 2.0f);
+        g.drawLine (splitX, lowerY, mergeX, lowerY, 2.0f);
+        g.drawLine (mergeX, upperY, mergeX, lowerY, 2.0f);
+        g.drawLine (mergeX, static_cast<float> (chainY), static_cast<float> (getWidth () - 36),
+                    static_cast<float> (chainY), 2.0f);
+        g.fillEllipse (splitX - 3.0f, static_cast<float> (chainY) - 3.0f, 6.0f, 6.0f);
+        g.fillEllipse (mergeX - 3.0f, static_cast<float> (chainY) - 3.0f, 6.0f, 6.0f);
+    }
+    else
+        g.drawLine (36.0f, static_cast<float> (chainY), static_cast<float> (getWidth () - 36), static_cast<float> (chainY), 2.0f);
     g.setFont (gp200ui::regular (12.75f));
     g.setColour (juce::Colour (0xffb9bdc0));
     g.drawText ("IN", 12, chainY - 12, 34, 24, juce::Justification::centred);
@@ -1310,6 +1651,20 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::paint (juce::G
     {
         const auto& item = items[static_cast<std::size_t> (i)];
         const auto tile = getTileBounds (i);
+        // The moved tile reserves a real slot; paint its gap instead of a destination block.
+        if (blockDrag && item.blockIndex == draggedItem.blockIndex)
+        {
+            if (preview)
+            {
+                const float x = static_cast<float> (tile.getCentreX ());
+                g.setColour (juce::Colour (0xffffa42a));
+                g.fillRoundedRectangle (x - 1.5f, static_cast<float> (tile.getY ()), 3.0f,
+                                        static_cast<float> (tile.getHeight ()), 1.5f);
+                g.drawLine (x - 5, static_cast<float> (tile.getY ()), x + 5, static_cast<float> (tile.getY ()), 2.0f);
+                g.drawLine (x - 5, static_cast<float> (tile.getBottom ()), x + 5, static_cast<float> (tile.getBottom ()), 2.0f);
+            }
+            continue;
+        }
         const auto selected = item.blockIndex == selectedBlockIndex;
         const auto displayColour = item.enabled ? item.colour : juce::Colour (0xff74787b);
         g.setColour (juce::Colour (0xff202427));
@@ -1326,13 +1681,15 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::paint (juce::G
             g.setColour (displayColour.withAlpha (0.18f));
             g.drawRoundedRectangle (tile.toFloat ().expanded (3.0f), 8.0f, 2.0f);
         }
-        const auto iconArea = tile.toFloat().reduced (10.0f, 8.0f).withTrimmedBottom (24.0f);
+        const auto iconArea = parallelMode
+            ? tile.toFloat ().reduced (7.0f, 4.0f).withTrimmedBottom (18.0f)
+            : tile.toFloat ().reduced (10.0f, 8.0f).withTrimmedBottom (24.0f);
         drawRibbonBlockIcon (g, item.blockName, iconArea, displayColour);
 
         g.setColour (displayColour);
-        g.setFont (gp200ui::semibold (14.25f));
+        g.setFont (gp200ui::semibold (parallelMode ? 10.5f : 14.25f));
         g.drawText (item.blockName,
-                    tile.withTrimmedTop (tile.getHeight() - 24).reduced (3, 2),
+                    tile.withTrimmedTop (tile.getHeight() - (parallelMode ? 18 : 24)).reduced (3, 1),
                     juce::Justification::centred);
 
         if (selected)
@@ -1349,54 +1706,179 @@ void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::paint (juce::G
         }
     }
 
-    if (dragging && dragTargetPosition >= 0)
+    const auto sendMarkerPosition = draggedLoopMarker == 0 ? draggedLoopPosition
+        : parallelMode ? getEffectiveSendPosition () : fxLoopSendPosition;
+    const auto returnMarkerPosition = draggedLoopMarker == 1 ? draggedLoopPosition
+        : parallelMode ? getEffectiveReturnPosition () : fxLoopReturnPosition;
+    auto drawLoopMarker = [&] (int loopPosition, int y, juce::Colour colour, const juce::String& label, bool pointsUp)
     {
-        const auto count = static_cast<int> (items.size ());
-        const auto lineX = dragTargetPosition >= count ? getTileBounds (count - 1).getRight () + 5
-                                                       : getTileBounds (dragTargetPosition).getX () - 5;
-        g.setColour (juce::Colour (0xffffa42a));
-        g.fillRoundedRectangle (static_cast<float> (lineX - 2), static_cast<float> (first.getY () - 4),
-                                4.0f, static_cast<float> (first.getHeight () + 8), 2.0f);
+        const auto x = static_cast<float> (parallelMode && draggedLoopMarker >= 0
+            ? 50 + loopPosition * (getWidth () - 100) / juce::jmax (1, static_cast<int> (items.size ()))
+            : getLoopMarkerX (loopPosition));
+        juce::Path arrow;
+        if (pointsUp)
+        {
+            arrow.startNewSubPath (x, static_cast<float> (y));
+            arrow.lineTo (x - 6.0f, static_cast<float> (y + 7));
+            arrow.lineTo (x + 6.0f, static_cast<float> (y + 7));
+        }
+        else
+        {
+            arrow.startNewSubPath (x, static_cast<float> (y));
+            arrow.lineTo (x - 6.0f, static_cast<float> (y - 7));
+            arrow.lineTo (x + 6.0f, static_cast<float> (y - 7));
+        }
+        arrow.closeSubPath ();
+        g.setColour (colour);
+        g.fillPath (arrow);
+        g.setFont (gp200ui::semibold (11.0f));
+        g.drawText (label, juce::Rectangle<int> (static_cast<int> (x) - 25, pointsUp ? (parallelMode ? 29 : 1) : getHeight () - 14, 50, 13),
+                    juce::Justification::centred);
+    };
+    drawLoopMarker (sendMarkerPosition, parallelMode ? 43 : 15, juce::Colour (0xff32a8ff), parallelMode ? "SPLIT" : "SEND", true);
+    drawLoopMarker (returnMarkerPosition, getHeight () - 14, juce::Colour (0xffbd5cff), parallelMode ? "MIX" : "RETURN", false);
+
+    if (draggedLoopMarker >= 0 && draggedLoopPosition >= 0)
+    {
+        const auto x = getLoopMarkerX (draggedLoopPosition);
+        g.setColour (juce::Colours::white.withAlpha (0.35f));
+        g.drawLine (static_cast<float> (x), parallelMode ? 47.0f : 19.0f, static_cast<float> (x), static_cast<float> (getHeight () - 19), 1.0f);
     }
+
+    if (blockDrag)
+    {
+        auto drawDraggedTile = [&] (juce::Rectangle<int> tile, float opacity)
+        {
+            g.saveState ();
+            g.setOpacity (opacity);
+            const auto colour = draggedItem.enabled ? draggedItem.colour : juce::Colour (0xff74787b);
+            g.setColour (juce::Colour (0xff202427));
+            g.fillRoundedRectangle (tile.toFloat (), 6.0f);
+            g.setColour (colour);
+            g.drawRoundedRectangle (tile.toFloat ().reduced (0.5f), 6.0f, 1.4f);
+            const auto iconArea = tile.toFloat ().reduced (7.0f, 4.0f).withTrimmedBottom (18.0f);
+            drawRibbonBlockIcon (g, draggedItem.blockName, iconArea, colour);
+            g.setFont (gp200ui::semibold (parallelMode ? 10.5f : 14.25f));
+            g.drawText (draggedItem.blockName, tile.withTrimmedTop (tile.getHeight () - 18).reduced (3, 1),
+                        juce::Justification::centred);
+            g.restoreState ();
+        };
+        // Only retain the attenuated original when it cannot obscure another preview tile.
+        bool originalClear = true;
+        for (int i = 0; i < static_cast<int> (items.size ()); ++i)
+            if ((preview || items[static_cast<std::size_t> (i)].blockIndex != draggedItem.blockIndex)
+                && getTileBounds (i).intersects (originalTile)) originalClear = false;
+        if (originalClear) drawDraggedTile (originalTile, 0.22f);
+        drawDraggedTile (originalTile.withPosition (dragCursorPosition - dragGrabOffset), 0.65f);
+    }
+}
+
+void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::cancelDrag ()
+{
+    pressedItemIndex = -1; dragTargetPosition = -1; dragging = false;
+    draggedLoopMarker = -1; draggedLoopPosition = -1;
+    repaint ();
+}
+
+bool AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::keyPressed (const juce::KeyPress& key)
+{
+    if (key.getKeyCode () != juce::KeyPress::escapeKey) return false;
+    if (pressedItemIndex < 0 && draggedLoopMarker < 0) return false;
+    cancelDrag (); return true;
+}
+
+void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::focusLost (FocusChangeType)
+{
+    cancelDrag ();
+}
+
+bool AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::dragChangesRouting () const
+{
+    if (pressedItemIndex < 0 || dragTargetPosition < 0) return false;
+    if (!parallelMode) return dragTargetPosition != pressedItemIndex;
+    const int sourceGroup = getParallelGroupForItem (items[static_cast<std::size_t> (pressedItemIndex)]);
+    if (sourceGroup != dragTargetGroup) return true;
+    int sourceRank = 0;
+    for (int i = 0; i < pressedItemIndex; ++i)
+        if (getParallelGroupForItem (items[static_cast<std::size_t> (i)]) == sourceGroup) ++sourceRank;
+    return sourceRank != dragTargetPosition;
+}
+
+void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::updateBlockDragTarget (juce::Point<int> position)
+{
+    dragCursorPosition = position;
+    dragTargetPosition = -1;
+    if (!getLocalBounds ().contains (position)) return;
+    dragTargetGroup = parallelMode ? getDropGroup (position) : 0;
+    dragTargetPosition = 0;
+    for (int i = 0; i < static_cast<int> (items.size ()); ++i)
+        if (i != pressedItemIndex && (!parallelMode || getParallelGroupForItem (items[static_cast<std::size_t> (i)]) == dragTargetGroup)
+            && position.x >= getTileBounds (i).getCentreX ()) ++dragTargetPosition;
 }
 
 void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::mouseDown (const juce::MouseEvent& event)
 {
+    cancelDrag ();
+    setWantsKeyboardFocus (true);
+    grabKeyboardFocus ();
+    mouseDownPosition = dragCursorPosition = event.getPosition ();
+    draggedLoopMarker = getLoopMarkerAt (event.getPosition ());
+    if (draggedLoopMarker >= 0)
+    {
+        draggedLoopPosition = draggedLoopMarker == 0 ? fxLoopSendPosition : fxLoopReturnPosition;
+        return;
+    }
     pressedItemIndex = getItemIndexAt (event.getPosition ());
-    mouseDownPosition = event.getPosition ();
-    dragTargetPosition = -1;
-    dragging = false;
+    if (pressedItemIndex >= 0) dragGrabOffset = event.getPosition () - getTileBounds (pressedItemIndex).getPosition ();
 }
 
 void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::mouseDrag (const juce::MouseEvent& event)
 {
-    if (pressedItemIndex < 0) return;
-    if (!dragging && event.getPosition ().getDistanceFrom (mouseDownPosition) >= 6.0f)
-        dragging = true;
-    if (dragging)
+    if (draggedLoopMarker >= 0)
     {
-        dragTargetPosition = getTargetPositionAtX (event.x);
-        repaint ();
+        draggedLoopPosition = getLocalBounds ().contains (event.getPosition ()) ? getLoopPositionAtX (event.x) : -1;
+        repaint (); return;
     }
+    if (pressedItemIndex < 0) return;
+    if (!dragging && event.getPosition ().getDistanceFrom (mouseDownPosition) >= 6.0f) dragging = true;
+    if (dragging) { updateBlockDragTarget (event.getPosition ()); repaint (); }
 }
 
-void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::mouseUp (const juce::MouseEvent&)
+void AudioPluginAudioProcessorEditor::EffectChainRibbonComponent::mouseUp (const juce::MouseEvent& event)
 {
-    if (pressedItemIndex < 0 || pressedItemIndex >= static_cast<int> (items.size ()))
+    if (!getLocalBounds ().contains (event.getPosition ())) { cancelDrag (); return; }
+    if (draggedLoopMarker >= 0)
     {
-        dragging = false; dragTargetPosition = -1; return;
+        const int position = getLoopPositionAtX (event.x);
+        int& marker = draggedLoopMarker == 0 ? fxLoopSendPosition : fxLoopReturnPosition;
+        const bool changed = marker != position;
+        marker = position;
+        localBoundary = juce::jlimit (fxLoopSendPosition, fxLoopReturnPosition, localBoundary);
+        cancelDrag ();
+        if (changed && onRoutingChanged) onRoutingChanged ();
+        return;
     }
+    if (!juce::isPositiveAndBelow (pressedItemIndex, static_cast<int> (items.size ()))) { cancelDrag (); return; }
     const auto blockIndex = items[static_cast<std::size_t> (pressedItemIndex)].blockIndex;
-    if (dragging && dragTargetPosition >= 0)
+    bool changed = false;
+    if (dragging)
     {
-        if (onBlockReordered) onBlockReordered (blockIndex, dragTargetPosition);
+        updateBlockDragTarget (event.getPosition ());
+        changed = dragChangesRouting ();
+        if (changed)
+        {
+            if (parallelMode) moveLocalItem (pressedItemIndex, dragTargetGroup, dragTargetPosition);
+            else
+            {
+                const auto moved = items[static_cast<std::size_t> (pressedItemIndex)];
+                items.erase (items.begin () + pressedItemIndex);
+                items.insert (items.begin () + dragTargetPosition, moved);
+            }
+        }
     }
-    else if (onBlockSelected)
-        onBlockSelected (blockIndex);
-    dragging = false;
-    dragTargetPosition = -1;
-    pressedItemIndex = -1;
-    repaint ();
+    else if (onBlockSelected) onBlockSelected (blockIndex);
+    cancelDrag ();
+    if (changed && onRoutingChanged) onRoutingChanged ();
 }
 
 //==============================================================================
@@ -1437,6 +1919,15 @@ addAndMakeVisible (soundCloneButton);
 	addAndMakeVisible (tapTempoButton);
     addAndMakeVisible (presetNameEditor);
     addAndMakeVisible (tunerButton);
+    addAndMakeVisible (seriesParallelButton);
+    addAndMakeVisible (chainBlendLabel); addAndMakeVisible (chainBlendSlider);
+    chainBlendLabel.setText ("BLEND", juce::dontSendNotification);
+    chainBlendSlider.setSliderStyle (juce::Slider::LinearHorizontal);
+    chainBlendSlider.setRange (0.0,100.0,1.0);
+    chainBlendSlider.setTextBoxStyle (juce::Slider::TextBoxRight,false,84,20);
+    chainBlendSlider.textFromValueFunction=[](double v) { const int b=juce::roundToInt(v); return b==0?juce::String("SOLO A"):b==100?juce::String("SOLO B"):b==50?juce::String("CENTRO"):juce::String("POS ")+juce::String(b); };
+    chainBlendSlider.onValueChange=[this] { chainBlendQueuedValue=static_cast<float>(chainBlendSlider.getValue());chainBlendQueued=true; chainBlendSendDueMs=juce::Time::getMillisecondCounterHiRes()+150.0; };
+
     addAndMakeVisible (allBlocksOffButton);
     addAndMakeVisible (autoCabButton);
 	addAndMakeVisible (toneMatchButton);
@@ -1447,6 +1938,7 @@ tunerDisplay.setVisible(false);
     addAndMakeVisible (effectChainRibbon);
     addAndMakeVisible (effectsViewport);
 
+    effectChainRibbon.onRoutingChanged = [this] { sendFlexibleRouteFromRibbon (); };
     effectChainRibbon.onBlockSelected = [this] (int blockIndex)
     {
         // Clicking the selected block again closes the parameter editor.
@@ -1454,7 +1946,13 @@ tunerDisplay.setVisible(false);
     };
     effectChainRibbon.onBlockReordered = [this] (int blockIndex, int targetPosition)
     {
-        moveEffectBlockToPosition (blockIndex, targetPosition);
+        juce::ignoreUnused (blockIndex, targetPosition);
+        effectsStatusText = "Edit local S/P/R routing by dragging tiles in the ribbon";
+        repaint ();
+    };
+    effectChainRibbon.onLoopPositionsChanged = [this] (int sendPosition, int returnPosition)
+    {
+        setFxLoopPositions (sendPosition, returnPosition);
     };
 
     effectsViewport.setViewedComponent (&effectsContent, false);
@@ -1490,6 +1988,7 @@ setupButton (exportPrstButton);
 setupButton (importIRButton);
 setupButton (soundCloneButton);
 setupButton (tunerButton);
+setupButton (seriesParallelButton);
 setupButton (tapTempoButton);
 
 tapTempoButton.setColour (
@@ -1542,6 +2041,7 @@ storePresetButton.setColour (
     panelOutlineColour.brighter (0.15f)
 );
     updateTunerButtonText ();
+    updateSeriesParallelButtonText ();
     updateAllBlocksOffButtonText ();
 
     patchVolumeSlider.setSliderStyle (juce::Slider::LinearHorizontal);
@@ -1651,6 +2151,9 @@ storePresetButton.setColour (
     };
 
     tunerButton.onClick = [this] { toggleTuner (); };
+
+    seriesParallelButton.setTooltip ("CHAIN on/off. Native Series/Parallel remain separate. Independent BLEND requires FIX34 firmware.");
+    seriesParallelButton.onClick = [this] { toggleSeriesParallel (); };
 
     allBlocksOffButton.onClick = [this] { toggleAllBlocksOff (); };
 
@@ -1805,6 +2308,10 @@ startTimerHz (idleTimerHz);
 
 AudioPluginAudioProcessorEditor::~AudioPluginAudioProcessorEditor ()
 {
+    stopTimer ();
+    // Recall steps still belong to this window: cancel and recover actual device state.
+    if (presetRestoreInProgress) midiConnection.endPresetRestoreTransaction ();
+
     if (!midiConnection.isConnected ())
     {
         offlinePatchVolume = static_cast<int> (patchVolumeSlider.getValue ());
@@ -1878,6 +2385,11 @@ void AudioPluginAudioProcessorEditor::paint (juce::Graphics& g)
     g.fillEllipse (244.0f, 17.0f, 12.0f, 12.0f);
     g.setColour (juce::Colours::black.withAlpha (0.45f));
     g.drawEllipse (244.0f, 17.0f, 12.0f, 12.0f, 1.0f);
+    g.setFont (gp200ui::semibold (12.0f));
+    g.setColour (panelOutlineColour);
+    g.drawText (midiConnection.getStatusText ().fromFirstOccurrenceOf ("MOD_SYNC", true, false),
+                270, 11, getWidth () - 282, 26, juce::Justification::centredLeft);
+
 
     // ============================================================
     // Main top container
@@ -2111,7 +2623,7 @@ exportPrstButton.setBounds (
     buttonWidth,
     buttonHeight - prstButtonHeight - prstButtonGap);
 
-    importIRButton.setBounds (418, 191, 130, 28);
+    importIRButton.setBounds (563, 191, 135, 28);
 
     // ============================================================
     // Patch settings
@@ -2129,6 +2641,12 @@ tapTempoButton.setBounds (882, 150, 46, 24);
     tunerButton.setBounds (30, 191, 130, 28);
 allBlocksOffButton.setBounds (170, 191, 120, 28);
 autoCabButton.setBounds (300, 191, 108, 28);
+seriesParallelButton.setBounds (418, 191, 130, 28);
+// Overlay in the clear upper-right corner of the routing panel.
+chainBlendLabel.setBounds (getWidth () - 284, 250, 48, 22);
+chainBlendSlider.setBounds (getWidth () - 232, 250, 208, 22);
+chainBlendLabel.toFront (false);
+chainBlendSlider.toFront (false);
 toneMatchButton.setBounds (708, 191, 110, 28);
 soundCloneButton.setBounds (828, 191, 110, 28);
 
@@ -2142,15 +2660,17 @@ tunerDisplay.setBounds (
     // Effects list
     // ============================================================
 
-    effectChainRibbon.setBounds (20, 246, getWidth () - 40, 116);
+    const auto ribbonHeight = parallelRoutingSelected ? 188 : 116;
+    const auto effectsTop = parallelRoutingSelected ? 444 : 372;
+    effectChainRibbon.setBounds (20, 246, getWidth () - 40, ribbonHeight);
 
     const bool hasSelectedBlock = selectedEffectBlockIndex >= 0;
     effectsViewport.setVisible (hasSelectedBlock);
 
     if (hasSelectedBlock)
-        effectsViewport.setBounds (20, 372, getWidth () - 40, juce::jmax (0, getHeight () - 392));
+        effectsViewport.setBounds (20, effectsTop, getWidth () - 40, juce::jmax (0, getHeight () - effectsTop - 20));
     else
-        effectsViewport.setBounds (20, 372, getWidth () - 40, 0);
+        effectsViewport.setBounds (20, effectsTop, getWidth () - 40, 0);
 
 
 if (toneMatchPanel != nullptr)
@@ -2165,6 +2685,17 @@ if (toneMatchPanel != nullptr)
 void AudioPluginAudioProcessorEditor::timerCallback ()
 {
     const auto nowMs = juce::Time::getMillisecondCounterHiRes();
+    syncFlexibleRoutingFromDevice ();
+    syncChainBlendControls ();
+
+    const auto modSyncRevision = gp200::GP200ModSync::getRevision ();
+    if (modSyncRevision != lastModSyncRevision)
+    {
+        lastModSyncRevision = modSyncRevision;
+        effectBlocksSignature.clear ();
+        effectBlocksDataSignature.clear ();
+    }
+
     const bool connectedNow = midiConnection.isConnected ();
     if (connectedNow != lastConnectionIndicatorState)
     {
@@ -2177,7 +2708,8 @@ void AudioPluginAudioProcessorEditor::timerCallback ()
 
     // Advance the non-blocking startup handshake (Identity -> Editor Mode ->
     // 100 ms -> five-chunk State Dump -> active preset read).
-    midiConnection.processStartupHandshake ();
+    // Connected MidiConnection timer owns startup and MOD_SYNC progression.
+    repaint (270, 11, getWidth () - 282, 26);
 
     // The connection may already contain a DAW snapshot or data from an
     // earlier editor session. Retry until a complete preset has actually
@@ -2190,9 +2722,7 @@ void AudioPluginAudioProcessorEditor::timerCallback ()
         midiConnection.requestCurrentPresetFromGP200();
     }
 
-    midiConnection.processIRUpload ();
-    midiConnection.processSoundCloneUpload ();
-    midiConnection.processPendingLivePresetRefresh ();
+    // Connected MidiConnection timer owns pending live reads.
 
     const auto userIRNamesRevision = midiConnection.getAssignmentNamesRevision ();
     if (userIRNamesRevision != lastUserIRNamesRevision)
@@ -2229,7 +2759,6 @@ void AudioPluginAudioProcessorEditor::timerCallback ()
     // when the slot-number button opens the preset browser, so startup/live
     // preset synchronisation cannot be affected by background name traffic.
 
-    midiConnection.processPresetNameScan ();
 
     const auto scanRevision = midiConnection.getPresetNameScanRevision ();
     if (scanRevision != lastPresetNameScanRevision)
@@ -2268,7 +2797,7 @@ void AudioPluginAudioProcessorEditor::timerCallback ()
     }
     else
     {
-        midiConnection.requestPresetNameForCurrentSlotIfNeeded ();
+        // Connected MidiConnection timer owns the pending name read.
     }
 
     syncPresetNameEditorFromCurrentPreset ();
@@ -2414,6 +2943,9 @@ juce::String AudioPluginAudioProcessorEditor::
 
 void AudioPluginAudioProcessorEditor::saveCurrentPresetToProject ()
 {
+    if (midiConnection.isConnected () && !midiConnection.canSaveCurrentPreset ())
+    { effectsStatusText = "Save/export blocked: wait for fresh device preset and routing confirmation"; repaint (); return; }
+
     const auto snapshotIndex = getSelectedCompareSnapshotIndex ();
 
     if (!midiConnection.isConnected ())
@@ -2446,12 +2978,11 @@ void AudioPluginAudioProcessorEditor::saveCurrentPresetToProject ()
         return;
     }
 
-    const auto currentSlot = midiConnection.getCurrentSlot ();
-
-    if (currentSlot < 0)
-        return;
-
-    const auto presetData = midiConnection.getCurrentPresetDumpDataCopy ();
+    const auto deviceState = midiConnection.getRoutingStateSnapshot ();
+    if (!deviceState.canSave) { effectsStatusText = "Save blocked: device state changed"; repaint (); return; }
+    const auto currentSlot = deviceState.slot;
+    const auto presetData = deviceState.data;
+    const auto preset = gp200::GP200PresetCodec::decodeLivePresetDump (presetData);
 
     if (presetData.getSize () == 0)
     {
@@ -2463,8 +2994,9 @@ void AudioPluginAudioProcessorEditor::saveCurrentPresetToProject ()
     processorRef.setGP200PresetSnapshotState (
         snapshotIndex,
         currentSlot,
-        midiConnection.getCurrentPresetName (),
-        presetData);
+        preset.patchName,
+        presetData,
+        deviceState.mode.mode);
 
     effectsStatusText = "Saved full preset snapshot " +
                         getSelectedCompareSnapshotLabel () +
@@ -2536,6 +3068,9 @@ void AudioPluginAudioProcessorEditor::openExportPrstFileChooser ()
 void AudioPluginAudioProcessorEditor::exportCurrentPresetToPrst (
     const juce::File& file)
 {
+    if (midiConnection.isConnected () && !midiConnection.canSaveCurrentPreset ())
+    { effectsStatusText = "Save/export blocked: wait for fresh device preset and routing confirmation"; repaint (); return; }
+
     gp200::GP200Preset preset;
 
     if (!midiConnection.isConnected ())
@@ -2544,8 +3079,9 @@ void AudioPluginAudioProcessorEditor::exportCurrentPresetToPrst (
     }
     else
     {
-        preset = gp200::GP200PresetCodec::decodeLivePresetDump (
-            midiConnection.getCurrentPresetDumpDataCopy ());
+        const auto deviceState = midiConnection.getRoutingStateSnapshot ();
+        if (!deviceState.canSave) { effectsStatusText = "Export blocked: device state changed"; repaint (); return; }
+        preset = gp200::GP200PresetCodec::decodeLivePresetDump (deviceState.data);
     }
 
     if (!preset.isValid)
@@ -2602,19 +3138,39 @@ void AudioPluginAudioProcessorEditor::openIRFileChooser ()
         initialSlot = 0;
 
     juce::DialogWindow::LaunchOptions options;
-    options.dialogTitle = "User IR";
+    options.dialogTitle = "IR Library — User IR 2048 / Factory CAB 1024";
     options.dialogBackgroundColour = backgroundColour;
     options.escapeKeyTriggersCloseButton = true;
     options.useNativeTitleBar = true;
     options.resizable = false;
     options.content.setOwned (new UserIRImportComponent (
         [safeThis = juce::Component::SafePointer<AudioPluginAudioProcessorEditor> (this)]
-        (const juce::File& file, int zeroBasedSlot)
+        (const juce::File& file, int destinationCode)
         {
             if (safeThis == nullptr)
                 return;
-            safeThis->userIRSlotBox.setSelectedId (zeroBasedSlot + 1, juce::dontSendNotification);
-            safeThis->importIRFile (file);
+
+            if (destinationCode < 1000)
+            {
+                safeThis->userIRSlotBox.setSelectedId (destinationCode + 1, juce::dontSendNotification);
+                safeThis->importIRFile (file);
+                return;
+            }
+
+            const auto factoryCabIndex = destinationCode - 1000;
+            if (!safeThis->midiConnection.startFactoryCabUpload (file, factoryCabIndex))
+            {
+                safeThis->effectsStatusText = safeThis->midiConnection.getIRUploadStatusText ();
+                safeThis->repaint ();
+                return;
+            }
+
+            const auto effectId = 0x0A000000u + static_cast<juce::uint32> (factoryCabIndex);
+            const auto displayName = file.getFileNameWithoutExtension ().substring (0, 12);
+            gp200::GP200ModSync::recordFactoryCabOverride (effectId, displayName, file.getFileName ());
+            safeThis->effectsStatusText = "Factory CAB upload started: " + file.getFileName ()
+                                        + " -> Factory CAB " + juce::String (factoryCabIndex + 1);
+            safeThis->repaint ();
         },
         [safeThis = juce::Component::SafePointer<AudioPluginAudioProcessorEditor> (this)]
         {
@@ -2714,28 +3270,31 @@ void AudioPluginAudioProcessorEditor::openSoundCloneWindow ()
     }
 
     juce::DialogWindow::LaunchOptions options;
-    options.dialogTitle = "Sound Clone";
+    options.dialogTitle = "Sound Clone — SnapTone / Factory AMP CLO";
     options.dialogBackgroundColour = backgroundColour;
     options.escapeKeyTriggersCloseButton = true;
     options.useNativeTitleBar = true;
     options.resizable = false;
     options.content.setOwned (new SoundCloneImportComponent (
         [safeThis = juce::Component::SafePointer<AudioPluginAudioProcessorEditor> (this)]
-        (const juce::File& file, int globalSlot)
+        (const juce::File& file, int globalSlot, const juce::String& requestedName)
         {
             if (safeThis != nullptr)
-                safeThis->importSoundCloneFile (file, globalSlot);
+                safeThis->importSoundCloneFile (file, globalSlot, requestedName);
+        },
+        [safeThis = juce::Component::SafePointer<AudioPluginAudioProcessorEditor> (this)]
+        {
+            if (safeThis == nullptr)
+                return juce::String ();
+            if (safeThis->midiConnection.isIRUploadInProgress ())
+                return safeThis->midiConnection.getIRUploadStatusText ();
+            return safeThis->midiConnection.getSoundCloneUploadStatusText ();
         },
         [safeThis = juce::Component::SafePointer<AudioPluginAudioProcessorEditor> (this)]
         {
             return safeThis != nullptr
-                       ? safeThis->midiConnection.getSoundCloneUploadStatusText()
-                       : juce::String();
-        },
-        [safeThis = juce::Component::SafePointer<AudioPluginAudioProcessorEditor> (this)]
-        {
-            return safeThis != nullptr
-                       && safeThis->midiConnection.isSoundCloneUploadInProgress();
+                       && (safeThis->midiConnection.isSoundCloneUploadInProgress ()
+                           || safeThis->midiConnection.isIRUploadInProgress ());
         },
         [safeThis = juce::Component::SafePointer<AudioPluginAudioProcessorEditor> (this)]
         (int zeroBasedIndex)
@@ -2749,6 +3308,12 @@ void AudioPluginAudioProcessorEditor::openSoundCloneWindow ()
         {
             return safeThis != nullptr
                        && safeThis->midiConnection.renameSnapToneOnGP200 (zeroBasedIndex, newName);
+        },
+        [safeThis = juce::Component::SafePointer<AudioPluginAudioProcessorEditor> (this)]
+        (int zeroBasedIndex, const juce::String& newName)
+        {
+            return safeThis != nullptr
+                       && safeThis->renameFactoryAmpOnGP200 (zeroBasedIndex, newName);
         }));
 
     options.launchAsync ();
@@ -2756,8 +3321,48 @@ void AudioPluginAudioProcessorEditor::openSoundCloneWindow ()
 
 void AudioPluginAudioProcessorEditor::importSoundCloneFile (
     const juce::File& file,
-    int globalSlot)
+    int globalSlot,
+    const juce::String& requestedName)
 {
+    if (globalSlot >= 1000)
+    {
+        const auto factoryAmpIndex = globalSlot - 1000;
+        if (!midiConnection.startFactoryAmpUpload (file, factoryAmpIndex, requestedName))
+        {
+            effectsStatusText = midiConnection.getIRUploadStatusText ();
+            juce::AlertWindow::showMessageBoxAsync (
+                juce::MessageBoxIconType::WarningIcon,
+                "Factory AMP CLO import failed",
+                effectsStatusText);
+            repaint ();
+            return;
+        }
+
+        const auto ampEffects = gp200::GP200EffectDatabase::getEffectsForModule ("AMP");
+        int currentFactoryIndex = 0;
+        juce::String stockName;
+        for (const auto& effect : ampEffects)
+        {
+            if ((effect.effectId & 0xFF000000u) == 0x0F000000u)
+                continue;
+            if (currentFactoryIndex == factoryAmpIndex)
+            {
+                stockName = effect.name;
+                break;
+            }
+            ++currentFactoryIndex;
+        }
+
+        auto displayName = requestedName.trim ().substring (0, 16);
+        if (displayName.isEmpty ())
+            displayName = file.getFileNameWithoutExtension ().substring (0, 16);
+        effectsStatusText = "Factory AMP CLO upload started: " + displayName
+                          + " -> " + (stockName.isNotEmpty () ? stockName
+                                                              : "Factory AMP " + juce::String (factoryAmpIndex + 1));
+        repaint ();
+        return;
+    }
+
     if (!midiConnection.startSoundCloneUpload (file, globalSlot))
     {
         effectsStatusText = midiConnection.getSoundCloneUploadStatusText ();
@@ -2772,9 +3377,9 @@ void AudioPluginAudioProcessorEditor::importSoundCloneFile (
     }
 
     const juce::String destination =
-    juce::String ("SnapTone ")
-    + juce::String (globalSlot + 1)
-    + (globalSlot < 5 ? " (AMP)" : " (DIST)");
+        juce::String ("SnapTone ")
+        + juce::String (globalSlot + 1)
+        + (globalSlot < 5 ? " (AMP)" : " (DIST)");
 
     effectsStatusText =
         juce::String ("Sound Clone import started: ") +
@@ -2782,6 +3387,23 @@ void AudioPluginAudioProcessorEditor::importSoundCloneFile (
         " -> " + destination;
 
     repaint ();
+}
+
+bool AudioPluginAudioProcessorEditor::renameFactoryAmpOnGP200 (
+    int zeroBasedFactoryAmpIndex,
+    const juce::String& requestedName)
+{
+    if (!midiConnection.startFactoryAmpRename (zeroBasedFactoryAmpIndex, requestedName))
+    {
+        effectsStatusText = midiConnection.getIRUploadStatusText ();
+        repaint ();
+        return false;
+    }
+
+    effectsStatusText = "Factory AMP rename started: "
+                      + requestedName.trim ().substring (0, 16);
+    repaint ();
+    return true;
 }
 
 void AudioPluginAudioProcessorEditor::refreshUserIRSlotItems ()
@@ -2975,6 +3597,11 @@ void AudioPluginAudioProcessorEditor::importPrstFile (
         return;
     }
 
+    // PRST import has no snapshot routing metadata; do not reuse a preceding Recall value.
+    presetRestoreRoutingMode = -1;
+    presetRestoreRoutingMetadataFromDaw = false;
+    presetRestoreRoutingNotBeforeMs = 0;
+
     // Mismos campos utilizados por Recall.
     presetRestoreSnapshotData =
         importSnapshotData;
@@ -3049,9 +3676,8 @@ const auto snapshotLabel =
         return;
     }
 
-    const auto presetData =
-    processorRef.getSavedGP200PresetDataCopy (
-        snapshotIndex);
+    const auto savedSnapshot = processorRef.getGP200PresetRecallSnapshot (snapshotIndex);
+    const auto presetData = savedSnapshot.data;
 
     if (presetData.getSize () == 0)
     {
@@ -3124,9 +3750,7 @@ const auto snapshotLabel =
         return;
     }
 
-    auto savedName =
-    processorRef.getSavedGP200PresetSnapshotName (
-        snapshotIndex);
+    auto savedName = savedSnapshot.name;
 
     if (!isUsefulPresetName (savedName))
         savedName = preset.patchName;
@@ -3138,7 +3762,27 @@ const auto snapshotLabel =
     presetRestoreSlot = targetSlot;
     presetRestoreName = savedName;
 
+    presetRestoreRoutingMetadataFromDaw = true;
+    presetRestoreRoutingMode = savedSnapshot.routingMode;
+    presetRestoreRoutingNotBeforeMs = 0;
+    if (gp200::validRoutingModeValue (presetRestoreRoutingMode))
+    {
+        const int boundary = gp200::isExtendedRoutingMode (presetRestoreRoutingMode)
+            ? presetRestoreRoutingMode & 15 : preset.fxLoopSend;
+        if (!gp200::validFlexibleRouting (preset.routingOrder, preset.fxLoopSend, boundary, preset.fxLoopReturn))
+        {
+            effectsStatusText = "Recall Preset failed: saved routing mode/P does not match Send/Return";
+            repaint (); return;
+        }
+    }
     buildFullPresetRestoreSteps (preset, presetData);
+    if (gp200::validRoutingModeValue (presetRestoreRoutingMode))
+    {
+        PresetRestoreStep modeStep;
+        modeStep.type = PresetRestoreStepType::RoutingMode;
+        modeStep.routingMode = presetRestoreRoutingMode;
+        presetRestoreSteps.push_back (modeStep);
+    }
 
     if (presetRestoreSteps.empty ())
     {
@@ -3242,7 +3886,8 @@ void AudioPluginAudioProcessorEditor::buildFullPresetRestoreSteps (const gp200::
             if (effect.blockIndex < 0 || effect.blockIndex >= static_cast<int> (gp200::effectBlockCount))
                 continue;
 
-            const auto* paramSet = gp200::GP200EffectParamDatabase::findParamsForEffect (effect.effectId);
+            const auto* paramSet = gp200::GP200EffectParamDatabase::findParamsForEffect (
+                effect.effectId, gp200::GP200PresetCodec::blockNameForSlotIndex (effect.blockIndex));
 
             // Only restore parameters that are known for this effect.
             // Do not send reserved/unused parameter slots from the raw 15-float dump.
@@ -3261,7 +3906,8 @@ void AudioPluginAudioProcessorEditor::buildFullPresetRestoreSteps (const gp200::
             if (effect.blockIndex < 0 || effect.blockIndex >= static_cast<int> (gp200::effectBlockCount))
                 continue;
 
-            const auto* paramSet = gp200::GP200EffectParamDatabase::findParamsForEffect (effect.effectId);
+            const auto* paramSet = gp200::GP200EffectParamDatabase::findParamsForEffect (
+                effect.effectId, gp200::GP200PresetCodec::blockNameForSlotIndex (effect.blockIndex));
 
             if (paramSet == nullptr || paramSet->count <= 0 || paramSet->params == nullptr)
                 continue;
@@ -3301,6 +3947,13 @@ void AudioPluginAudioProcessorEditor::buildFullPresetRestoreSteps (const gp200::
 
     addKnownParameterPass ();
 
+    auto metadataEffect = preset.effects[10];
+    const bool independent = gp200::hasIndependentBlend (preset);
+    metadataEffect.params[13] = independent ? gp200::blendTagFloat () : 0.0f;
+    metadataEffect.params[14] = independent ? preset.effects[10].params[14] : 0.0f;
+    addParameterStep (metadataEffect,14);
+    addParameterStep (metadataEffect,13);
+
     PresetRestoreStep reorderStep;
     reorderStep.type = PresetRestoreStepType::ReorderEffects;
     reorderStep.routingOrder = preset.routingOrder;
@@ -3322,6 +3975,10 @@ void AudioPluginAudioProcessorEditor::processFullPresetRestoreStep ()
     }
 
     const auto& step = presetRestoreSteps[static_cast<std::size_t> (presetRestoreStepIndex)];
+
+    // The final routing write follows the existing reorder, with the same pacing as SPR.
+    if (step.type == PresetRestoreStepType::RoutingMode
+        && juce::Time::getMillisecondCounterHiRes () < presetRestoreRoutingNotBeforeMs) return;
 
     bool sent = false;
 
@@ -3349,6 +4006,12 @@ void AudioPluginAudioProcessorEditor::processFullPresetRestoreStep ()
 
     case PresetRestoreStepType::ReorderEffects:
         sent = midiConnection.sendReorderEffects (step.routingOrder, step.fxLoopSend, step.fxLoopReturn);
+        if (sent && gp200::validRoutingModeValue (presetRestoreRoutingMode))
+            presetRestoreRoutingNotBeforeMs = juce::Time::getMillisecondCounterHiRes () + 150.0;
+        break;
+
+    case PresetRestoreStepType::RoutingMode:
+        sent = midiConnection.sendPresetRestoreRoutingMode (presetRestoreSlot, step.routingMode);
         break;
     }
 
@@ -3378,7 +4041,7 @@ void AudioPluginAudioProcessorEditor::finishFullPresetRestore ()
 
     midiConnection.adoptCurrentPresetSnapshot (
         presetRestoreSlot, presetRestoreName, presetRestoreSnapshotData);
-    midiConnection.endPresetRestoreTransaction ();
+    midiConnection.endPresetRestoreTransaction (presetRestoreRoutingMode);
 
     presetRestoreSteps.clear ();
     presetRestoreStepIndex = 0;
@@ -3393,14 +4056,26 @@ void AudioPluginAudioProcessorEditor::finishFullPresetRestore ()
     savedBlockEnabledSlot = -1;
     updateAllBlocksOffButtonText ();
 
-    effectsStatusText =
-        "Recall Preset: snapshot restored into current slot. Press Store preset to save it here.";
+    if (gp200::validRoutingModeValue (presetRestoreRoutingMode))
+        effectsStatusText = "Recall Preset: preset and Series/Parallel/P sent; waiting for device confirmation";
+    else if (presetRestoreRoutingMetadataFromDaw)
+        effectsStatusText = "Recall Preset: preset restored; this snapshot has no saved Series/Parallel/P metadata";
+    else
+        effectsStatusText = "Recall Preset: snapshot restored into current slot. Press Store preset to save it here.";
+    presetRestoreRoutingMetadataFromDaw = false;
+    presetRestoreRoutingMode = -1;
+    presetRestoreRoutingNotBeforeMs = 0;
 
     updateEffectBlocksUI ();
 }
 
 void AudioPluginAudioProcessorEditor::storeCurrentPresetToGP200 ()
 {
+    if (!midiConnection.canSaveCurrentPreset ())
+    {
+        effectsStatusText = "STORE: wait for SPR device confirmation";
+        repaint (); return;
+    }
     auto newName = presetNameEditor.getText ().trim ();
 
     if (newName.isEmpty ())
@@ -3514,8 +4189,6 @@ void AudioPluginAudioProcessorEditor::handleTapTempo ()
 {
     const auto nowMs = juce::Time::getMillisecondCounterHiRes();
 
-    midiConnection.processIRUpload ();
-    midiConnection.processSoundCloneUpload ();
 
     const bool transferInProgress =
         midiConnection.isIRUploadInProgress () ||
@@ -3701,6 +4374,162 @@ void AudioPluginAudioProcessorEditor::updateTunerButtonText ()
 
     tunerButton.setColour (juce::TextButton::textColourOnId,
                            tunerIsOn ? juce::Colours::black : panelOutlineColour);
+}
+
+void AudioPluginAudioProcessorEditor::syncChainBlendControls ()
+{
+    const auto state = midiConnection.getRoutingStateSnapshot (false);
+    if (chainBlendSlot != state.slot || !state.connected)
+    { chainBlendQueued = false; chainBlendEditSessionReady = false; chainBlendSlot = state.slot; }
+    const bool chain = state.connected && state.slot == sprDeviceSlot
+        && gp200::routingModeIsChain (sprDeviceMode);
+    if (!chainBlendDecodedValid || state.presetRevision != chainBlendDecodedRevision
+        || state.slot != chainBlendDecodedSlot || state.connected != chainBlendDecodedConnected)
+    {
+        chainBlendDecodedPreset = gp200::GP200PresetCodec::decodeLivePresetDump (state.data);
+        chainBlendDecodedRevision = state.presetRevision;
+        chainBlendDecodedSlot = state.slot;
+        chainBlendDecodedConnected = state.connected;
+        chainBlendDecodedValid = true;
+    }
+    const auto& preset = chainBlendDecodedPreset;
+    const bool marked = gp200::hasIndependentBlend (preset);
+    const bool pending = midiConnection.isBlendWritePending ();
+    chainBlendLabel.setVisible (chain);
+    chainBlendSlider.setVisible (chain);
+    const bool ready = chain && state.live && state.modeFresh && preset.isValid
+        && !presetRestoreInProgress && !midiConnection.isRoutingTransactionBusy ();
+    // A same-slot refresh temporarily clears live/modeFresh. Retain the
+    // confirmed editing session, but never send until fresh state returns.
+    const bool interrupted = !chain || presetRestoreInProgress
+        || midiConnection.isRoutingTransactionBusy ();
+    if (interrupted)
+    {
+        chainBlendQueued = false;
+        chainBlendEditSessionReady = false;
+    }
+    else if (ready)
+        chainBlendEditSessionReady = true;
+    chainBlendSlider.setEnabled (!interrupted && (ready || pending || chainBlendEditSessionReady));
+    // Coalesce rapid drag changes; releasing the mouse sends the final gesture
+    // immediately once the transport is ready.
+    const bool gestureDue = !chainBlendSlider.isMouseButtonDown ()
+        || juce::Time::getMillisecondCounterHiRes () >= chainBlendSendDueMs;
+    if (ready && !pending && chainBlendQueued && gestureDue)
+    {
+        // The first user edit initializes independent BLEND; merely loading does not.
+        if (midiConnection.sendIndependentBlend (chainBlendQueuedValue, !marked, chainBlendSlot))
+            chainBlendQueued = false;
+    }
+    if (ready && !chainBlendQueued && !midiConnection.isBlendWritePending ()
+        && !chainBlendSlider.isMouseButtonDown () && preset.isValid)
+    {
+        const float value = marked ? preset.effects[10].params[14]
+            : gp200::legacyVolumeIsBlend (preset) ? preset.effects[10].params[0] : 50.0f;
+        chainBlendSlider.setValue (std::clamp (value, 0.0f, 100.0f), juce::dontSendNotification);
+    }
+    chainBlendLabel.setTooltip ("A / B blend position. The first edit initializes independent BLEND. VOL retains volume. Requires FIX35 firmware.");
+}
+
+void AudioPluginAudioProcessorEditor::toggleSeriesParallel ()
+{
+    if (midiConnection.isRoutingTransactionBusy ())
+    { effectsStatusText = midiConnection.getRoutingTransactionStatus (); repaint (); return; }
+    const bool newParallelState = !parallelRoutingSelected;
+
+    parallelRoutingSelected = newParallelState;
+    effectChainRibbon.setParallelMode (parallelRoutingSelected);
+    updateSeriesParallelButtonText ();
+    effectsStatusText = parallelRoutingSelected
+        ? "CHAIN ON"
+        : "CHAIN OFF";
+    repaint ();
+    sendFlexibleRouteFromRibbon (true);
+    scheduleEditorHeightUpdate ();
+}
+
+void AudioPluginAudioProcessorEditor::sendFlexibleRouteFromRibbon (bool modeOnly)
+{
+    const auto state = midiConnection.getRoutingStateSnapshot ();
+    if (presetRestoreInProgress || !midiConnection.sendFlexibleRouting (effectChainRibbon.getLocalOrder (),
+        effectChainRibbon.getSend (), effectChainRibbon.getBoundary (), effectChainRibbon.getReturn (), parallelRoutingSelected, state.slot, modeOnly))
+    {
+        // Force reapplication even when the confirmed revision did not change.
+        const auto accepted = midiConnection.getRoutingRequestSnapshot ();
+        auto fallback = sprConfirmedPreset;
+        int boundary = sprConfirmedBoundary, mode = sprConfirmedMode;
+        if (accepted.active && accepted.slot == state.slot)
+        {
+            if (!fallback.isValid) fallback = gp200::GP200PresetCodec::decodeLivePresetDump (state.data);
+            fallback.routingOrder = accepted.order; fallback.fxLoopSend = accepted.send; fallback.fxLoopReturn = accepted.ret;
+            boundary = accepted.boundary; mode = accepted.mode;
+        }
+        effectChainRibbon.releaseRoutingDraft ();
+        if (fallback.isValid && gp200::validRoutingModeValue (mode))
+        {
+            updateEffectChainRibbon (fallback);
+            parallelRoutingSelected = gp200::routingModeIsChain (mode);
+            effectChainRibbon.setDeviceRouting (fallback.fxLoopSend, boundary, fallback.fxLoopReturn, parallelRoutingSelected);
+            updateSeriesParallelButtonText ();
+            if (accepted.active) effectChainRibbon.keepRoutingDraft ();
+        }
+        sprAppliedPresetRevision = 0;
+        syncFlexibleRoutingFromDevice ();
+        effectsStatusText = "SPR NOT SENT: " + midiConnection.getLastMessageText ();
+        repaint (); return;
+    }
+    effectChainRibbon.keepRoutingDraft ();
+    effectsStatusText = midiConnection.getRoutingTransactionStatus ();
+    repaint ();
+}
+
+
+
+void AudioPluginAudioProcessorEditor::syncFlexibleRoutingFromDevice ()
+{
+    const auto state = midiConnection.getRoutingStateSnapshot (false);
+    if (!state.connected || !sprWasConnected || state.slot != sprDeviceSlot)
+    {
+        sprWasConnected = state.connected; sprDeviceSlot = state.slot;
+        sprDeviceMode = -1; sprAppliedPresetRevision = 0;
+        sprConfirmedPreset = {}; sprConfirmedMode = -1;
+        effectChainRibbon.releaseRoutingDraft ();
+    }
+    if (!state.connected) return;
+    if (midiConnection.isRoutingTransactionBusy ())
+    {
+        effectsStatusText = midiConnection.getRoutingTransactionStatus ();
+        repaint (); return;
+    }
+    if (!state.live || !state.modeFresh || state.mode.slot != state.slot || !gp200::validRoutingModeValue (state.mode.mode)) return;
+    if (state.presetRevision == sprAppliedPresetRevision && state.mode.mode == sprDeviceMode) return;
+    const auto preset = gp200::GP200PresetCodec::decodeLivePresetDump (state.data);
+    const auto boundary = gp200::isExtendedRoutingMode (state.mode.mode) ? state.mode.mode & 15
+        : juce::jlimit (preset.fxLoopSend, preset.fxLoopReturn, effectChainRibbon.getBoundary ());
+    if (!preset.isValid || !gp200::validFlexibleRouting (preset.routingOrder, preset.fxLoopSend, boundary, preset.fxLoopReturn)) return;
+    sprAppliedPresetRevision = state.presetRevision; sprDeviceMode = state.mode.mode;
+    sprConfirmedPreset = preset; sprConfirmedBoundary = boundary; sprConfirmedMode = state.mode.mode;
+    effectChainRibbon.releaseRoutingDraft ();
+    updateEffectChainRibbon (preset);
+    parallelRoutingSelected = gp200::routingModeIsChain (state.mode.mode);
+    effectChainRibbon.setDeviceRouting (preset.fxLoopSend, boundary, preset.fxLoopReturn, parallelRoutingSelected);
+    updateSeriesParallelButtonText (); scheduleEditorHeightUpdate ();
+    effectsStatusText = midiConnection.getRoutingTransactionStatus ();
+    repaint ();
+}
+
+void AudioPluginAudioProcessorEditor::updateSeriesParallelButtonText ()
+{
+    seriesParallelButton.setButtonText ("CHAIN");
+    seriesParallelButton.setColour (juce::TextButton::buttonColourId,
+                                    parallelRoutingSelected ? statusOnColour : panelColour);
+    seriesParallelButton.setColour (juce::TextButton::buttonOnColourId,
+                                    parallelRoutingSelected ? statusOnColour.brighter (0.1f)
+                                                            : panelColour.brighter (0.2f));
+    seriesParallelButton.setColour (juce::TextButton::textColourOffId,
+                                    parallelRoutingSelected ? juce::Colours::black : panelOutlineColour);
+    seriesParallelButton.setColour (juce::TextButton::textColourOnId,
+                                    parallelRoutingSelected ? juce::Colours::black : panelOutlineColour);
 }
 
 void AudioPluginAudioProcessorEditor::toggleAllBlocksOff ()
@@ -4015,7 +4844,6 @@ void AudioPluginAudioProcessorEditor::updateEffectBlocksUI ()
     }
     else if (midiConnection.getCurrentPresetDumpSize () > 0)
     {
-        presetDataForDisplay = midiConnection.getCurrentPresetDumpDataCopy ();
         sourceText = "Current GP-200 preset";
         presetRevision = midiConnection.getPresetRevision ();
     }
@@ -4043,7 +4871,8 @@ void AudioPluginAudioProcessorEditor::updateEffectBlocksUI ()
     const auto dataSignature =
         sourceText + ":" + revisionText + ":"
         + juce::String (
-            static_cast<juce::int64> (assignmentRevision));
+            static_cast<juce::int64> (assignmentRevision))
+        + (parallelRoutingSelected ? ":parallel" : ":series");
 
     // A connected GP-200 may publish several intermediate revisions while a
     // preset/effect model is being changed. If no newer revision has arrived
@@ -4071,6 +4900,9 @@ void AudioPluginAudioProcessorEditor::updateEffectBlocksUI ()
 
         return;
     }
+
+    if (midiConnection.isConnected ())
+        presetDataForDisplay = midiConnection.getCurrentPresetDumpDataCopy ();
 
     const auto preset =
         !midiConnection.isConnected ()
@@ -4146,6 +4978,7 @@ void AudioPluginAudioProcessorEditor::updateEffectBlocksUI ()
                     continue;
 
                 block->setEnabledForDisplay (effect.enabled);
+        block->setBlendForDisplay (false);
 
                 for (int paramIndex = 0;
                      paramIndex < static_cast<int> (effect.params.size ());
@@ -4319,7 +5152,8 @@ void AudioPluginAudioProcessorEditor::rebuildEffectBlocks (const gp200::GP200Pre
                 auto& effect = offlinePreset.effects[static_cast<std::size_t> (blockIndex)];
                 effect.effectId = effectId;
                 effect.params.fill (0.0f);
-                if (const auto* paramSet = gp200::GP200EffectParamDatabase::findParamsForEffect (effectId))
+                if (const auto* paramSet = gp200::GP200EffectParamDatabase::findParamsForEffect (
+                        effectId, gp200::GP200PresetCodec::blockNameForSlotIndex (blockIndex)))
                 {
                     for (int i = 0; i < paramSet->count; ++i)
                     {
@@ -4408,10 +5242,13 @@ void AudioPluginAudioProcessorEditor::rebuildEffectBlocks (const gp200::GP200Pre
 
             const auto targetPosition = direction < 0 ? currentPosition - 1 : currentPosition + 2;
 
-            moveEffectBlockToPosition (blockIndex, targetPosition);
+            juce::ignoreUnused (blockIndex, targetPosition);
+        effectsStatusText = "Edit local S/P/R routing by dragging tiles in the ribbon";
+        repaint ();
         };
 
         effectsContent.addAndMakeVisible (*block);
+        block->setBlendForDisplay (false);
         effectBlocks.push_back (std::move (block));
     }
 
@@ -4488,8 +5325,8 @@ void AudioPluginAudioProcessorEditor::scheduleEditorHeightUpdate ()
 
 void AudioPluginAudioProcessorEditor::updateEditorHeight ()
 {
-    constexpr int compactHeight = 390;
-    constexpr int editorTop = 372;
+    const int compactHeight = parallelRoutingSelected ? 462 : 390;
+    const int editorTop = parallelRoutingSelected ? 444 : 372;
     constexpr int editorBottomMargin = 20;
     constexpr int maximumHeight = 900;
 
@@ -4565,7 +5402,46 @@ void AudioPluginAudioProcessorEditor::updateEffectChainRibbon (const gp200::GP20
         items.push_back (std::move (item));
     }
     effectChainRibbon.setItems (std::move (items));
+    effectChainRibbon.setLoopPositions (preset.fxLoopSend, preset.fxLoopReturn);
+    if (midiConnection.isConnected () && !midiConnection.isRoutingTransactionBusy ()
+        && gp200::isExtendedRoutingMode (sprDeviceMode))
+        effectChainRibbon.setDeviceRouting (preset.fxLoopSend, sprDeviceMode & 15, preset.fxLoopReturn,
+            gp200::routingModeIsChain (sprDeviceMode));
     effectChainRibbon.setSelectedBlockIndex (selectedEffectBlockIndex);
+}
+
+void AudioPluginAudioProcessorEditor::setFxLoopPositions (int sendPosition, int returnPosition)
+{
+    sendPosition = juce::jlimit (0, 11, sendPosition);
+    returnPosition = juce::jlimit (0, 11, returnPosition);
+
+    if (!midiConnection.isConnected ())
+    {
+        offlinePreset.fxLoopSend = sendPosition;
+        offlinePreset.fxLoopReturn = returnPosition;
+        offlinePresetDirty = true;
+        ++offlinePresetRevision;
+        updateEffectChainRibbon (offlinePreset);
+        return;
+    }
+
+    const auto currentDump = midiConnection.getCurrentPresetDumpDataCopy ();
+    if (currentDump.getSize () == 0) return;
+    const auto currentPreset = gp200::GP200PresetCodec::decodeLivePresetDump (currentDump);
+    if (!currentPreset.isValid) return;
+
+    if (currentPreset.fxLoopSend == sendPosition && currentPreset.fxLoopReturn == returnPosition)
+        return;
+
+    if (!midiConnection.sendReorderEffects (currentPreset.routingOrder, sendPosition, returnPosition))
+        return;
+
+    effectChainRibbon.setLoopPositions (sendPosition, returnPosition);
+    juce::MessageManager::callAsync ([this]
+    {
+        updateEffectBlocksUI ();
+        repaint ();
+    });
 }
 
 int AudioPluginAudioProcessorEditor::getDropPositionForContentY (int contentY) const
@@ -4634,6 +5510,31 @@ void AudioPluginAudioProcessorEditor::hideDragDropIndicator ()
 
 void AudioPluginAudioProcessorEditor::moveEffectBlockToPosition (int blockIndex, int targetPosition)
 {
+    auto keepLoopMarkersAroundAmp = [] (const gp200::GP200Preset& preset,
+                                        const gp200::RoutingOrder& order,
+                                        int& sendPosition,
+                                        int& returnPosition)
+    {
+        auto ampPosition = -1;
+        for (int i = 0; i < static_cast<int> (order.size ()); ++i)
+        {
+            const auto index = order[static_cast<std::size_t> (i)];
+            if (juce::isPositiveAndBelow (index, static_cast<int> (preset.effects.size ())) &&
+                gp200::GP200PresetCodec::blockNameForSlotIndex (
+                    preset.effects[static_cast<std::size_t> (index)].slotIndex) == "AMP")
+            {
+                ampPosition = i;
+                break;
+            }
+        }
+
+        if (ampPosition > 0 && ampPosition < 10)
+        {
+            sendPosition = juce::jlimit (1, ampPosition, sendPosition);
+            returnPosition = juce::jlimit (ampPosition + 1, 10, returnPosition);
+        }
+    };
+
     if (!midiConnection.isConnected ())
     {
         std::vector<int> order (offlinePreset.routingOrder.begin (), offlinePreset.routingOrder.end ());
@@ -4654,6 +5555,10 @@ void AudioPluginAudioProcessorEditor::moveEffectBlockToPosition (int blockIndex,
         order.insert (order.begin () + adjustedTargetPosition, movedBlock);
         for (std::size_t i = 0; i < offlinePreset.routingOrder.size (); ++i)
             offlinePreset.routingOrder[i] = order[i];
+
+        if (parallelRoutingSelected)
+            keepLoopMarkersAroundAmp (offlinePreset, offlinePreset.routingOrder,
+                                      offlinePreset.fxLoopSend, offlinePreset.fxLoopReturn);
 
         offlinePresetDirty = true;
         ++offlinePresetRevision;
@@ -4722,7 +5627,12 @@ void AudioPluginAudioProcessorEditor::moveEffectBlockToPosition (int blockIndex,
     for (int i = 0; i < static_cast<int> (newOrder.size ()) && i < static_cast<int> (order.size ()); ++i)
         newOrder[static_cast<std::size_t> (i)] = order[static_cast<std::size_t> (i)];
 
-    if (!midiConnection.sendReorderEffects (newOrder, currentPreset.fxLoopSend, currentPreset.fxLoopReturn))
+    auto newFxLoopSend = currentPreset.fxLoopSend;
+    auto newFxLoopReturn = currentPreset.fxLoopReturn;
+    if (parallelRoutingSelected)
+        keepLoopMarkersAroundAmp (currentPreset, newOrder, newFxLoopSend, newFxLoopReturn);
+
+    if (!midiConnection.sendReorderEffects (newOrder, newFxLoopSend, newFxLoopReturn))
     {
         repaint ();
         return;

@@ -53,7 +53,11 @@ class AudioPluginAudioProcessorEditor final : public juce::AudioProcessorEditor,
     void importIRFile (const juce::File& file);
     void refreshUserIRSlotItems ();
     void openSoundCloneWindow ();
-    void importSoundCloneFile (const juce::File& file, int globalSlot);
+    void importSoundCloneFile (const juce::File& file,
+                               int globalSlot,
+                               const juce::String& requestedName);
+    bool renameFactoryAmpOnGP200 (int zeroBasedFactoryAmpIndex,
+                                  const juce::String& requestedName);
 	void syncUserIRSlotBoxFromCabEffectId(juce::uint32 effectId);
 	
 	void selectCompareSnapshot (CompareSnapshot snapshot);
@@ -78,6 +82,21 @@ void updateSnapshotNameEditor ();
 
     void toggleTuner ();
     void updateTunerButtonText ();
+    void toggleSeriesParallel ();
+    void sendFlexibleRouteFromRibbon (bool modeOnly = false);
+    void syncFlexibleRoutingFromDevice ();
+    void syncChainBlendControls ();
+    gp200::GP200Preset chainBlendDecodedPreset;
+    std::uint64_t chainBlendDecodedRevision{0};
+    int chainBlendDecodedSlot{-2};
+    bool chainBlendDecodedValid{false}, chainBlendDecodedConnected{false};
+    int sprDeviceSlot{-2};
+    int sprDeviceMode{-1};
+    bool sprWasConnected{false};
+    std::uint64_t sprAppliedPresetRevision{0};
+    gp200::GP200Preset sprConfirmedPreset;
+    int sprConfirmedBoundary{5}, sprConfirmedMode{-1};
+    void updateSeriesParallelButtonText ();
     void toggleAllBlocksOff ();
     bool captureCurrentBlockEnabledStates (BlockEnabledStates& states);
     bool applyBlockEnabledStates (const BlockEnabledStates& states);
@@ -103,6 +122,7 @@ void updateSnapshotNameEditor ();
     void scheduleEditorHeightUpdate ();
     void updateEditorHeight ();
     void updateEffectChainRibbon (const gp200::GP200Preset& preset);
+    void setFxLoopPositions (int sendPosition, int returnPosition);
     void applyInterfaceTypography ();
     void clearInterfaceTypography ();
 
@@ -135,7 +155,8 @@ void updateSnapshotNameEditor ();
         EffectChange,
         ParamChange,
         ToggleEffect,
-        ReorderEffects
+        ReorderEffects,
+        RoutingMode
     };
 
     struct PresetRestoreStep
@@ -151,6 +172,7 @@ void updateSnapshotNameEditor ();
         gp200::RoutingOrder routingOrder{};
         int fxLoopSend{4};
         int fxLoopReturn{4};
+        int routingMode{-1};
     };
 
     static constexpr int idleTimerHz = 20;
@@ -171,6 +193,9 @@ double lastInitialPresetRequestMs{0.0};
     juce::MemoryBlock presetRestoreSnapshotData;
     int presetRestoreSlot{-1};
     juce::String presetRestoreName;
+    int presetRestoreRoutingMode{-1};
+    bool presetRestoreRoutingMetadataFromDaw{false};
+    double presetRestoreRoutingNotBeforeMs{0};
 
     juce::TextButton previousBankButton{"BANK -"};
     juce::TextButton previousPresetButton{"<"};
@@ -193,6 +218,7 @@ std::unique_ptr<juce::FileChooser> exportPrstFileChooser;
     juce::TextButton importIRButton{"Import IR"};
     juce::ComboBox userIRSlotBox;
     std::uint64_t lastUserIRNamesRevision{0};
+    std::uint64_t lastModSyncRevision{0};
     std::unique_ptr<juce::FileChooser> irFileChooser;
     juce::TextButton soundCloneButton{"Sound Clone"};
 
@@ -213,26 +239,65 @@ CompareSnapshot selectedCompareSnapshot{
         };
 
         void setItems (std::vector<Item> newItems);
+        void setLoopPositions (int sendPosition, int returnPosition);
+        void setParallelMode (bool shouldBeParallel);
         void setSelectedBlockIndex (int blockIndex);
         void setBlockEnabled (int blockIndex, bool enabled);
         void paint (juce::Graphics& g) override;
         void mouseDown (const juce::MouseEvent& event) override;
         void mouseDrag (const juce::MouseEvent& event) override;
         void mouseUp (const juce::MouseEvent& event) override;
+        bool keyPressed (const juce::KeyPress& key) override;
+        void focusLost (FocusChangeType cause) override;
 
+        gp200::RoutingOrder getLocalOrder () const;
+        void keepRoutingDraft () { routingDraftEdited = true; }
+        void releaseRoutingDraft () { routingDraftEdited = false; }
+        void setDeviceRouting (int send, int boundary, int ret, bool parallel);
+
+        int getSend () const { return fxLoopSendPosition; }
+        int getBoundary () const { return localBoundary; }
+        int getReturn () const { return fxLoopReturnPosition; }
+        std::function<void ()> onRoutingChanged;
         std::function<void (int blockIndex)> onBlockSelected;
         std::function<void (int blockIndex, int targetPosition)> onBlockReordered;
+        std::function<void (int sendPosition, int returnPosition)> onLoopPositionsChanged;
 
       private:
         juce::Rectangle<int> getTileBounds (int itemIndex) const;
         int getItemIndexAt (juce::Point<int> position) const;
         int getTargetPositionAtX (int x) const;
+        int getLoopMarkerAt (juce::Point<int> position) const;
+        int getLoopPositionAtX (int x) const;
+        int getLoopMarkerX (int position) const;
+        int getDropGroup (juce::Point<int> position) const;
+        juce::Rectangle<int> getGroupArea (int group) const;
+        void moveLocalItem (int source, int group, int position);
+        void cancelDrag ();
+        void updateBlockDragTarget (juce::Point<int> position);
+        bool dragChangesRouting () const;
+        juce::Point<int> dragCursorPosition;
+        juce::Point<int> dragGrabOffset;
+        bool paintingDragPreview{false};
+        std::array<juce::Rectangle<int>, 4> previewGroupAreas;
+        int localBoundary{5};
+        bool localInitialised{false};
+        bool routingDraftEdited{false};
+        int dragTargetGroup{0};
+        int getEffectiveSendPosition () const;
+        int getEffectiveReturnPosition () const;
+        int getParallelGroupForItem (const Item& item) const;
 
         std::vector<Item> items;
         int selectedBlockIndex{-1};
         int pressedItemIndex{-1};
         int dragTargetPosition{-1};
         bool dragging{false};
+        bool parallelMode{false};
+        int fxLoopSendPosition{4};
+        int fxLoopReturnPosition{4};
+        int draggedLoopMarker{-1};
+        int draggedLoopPosition{-1};
         juce::Point<int> mouseDownPosition;
     };
 
@@ -258,6 +323,15 @@ CompareSnapshot selectedCompareSnapshot{
 	juce::TextButton tapTempoButton{"TAP"};
     juce::TextEditor presetNameEditor;
     juce::TextButton tunerButton{"Tuner OFF"};
+	juce::Label chainBlendLabel;
+    juce::Slider chainBlendSlider;
+    bool chainBlendQueued{false};
+    bool chainBlendEditSessionReady{false};
+    double chainBlendSendDueMs{0.0};
+    int chainBlendSlot{-1};
+    float chainBlendQueuedValue{50.0f};
+    juce::TextButton seriesParallelButton{"CHAIN"};
+	bool parallelRoutingSelected{false};
 	TunerDisplayComponent tunerDisplay;
     bool tunerIsOn{false};
 	

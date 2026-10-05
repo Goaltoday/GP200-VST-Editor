@@ -9,6 +9,7 @@
 */
 #include "EffectBlockComponent.h"
 #include "GP200Typography.h"
+#include "GP200ModSync.h"
 
 #include <cmath>
 #include <utility>
@@ -83,6 +84,18 @@ juce::String cleanAssignmentDisplayText (const juce::String& text)
 }
 
 static constexpr int delaySyncTimeLabelCount = 11;
+
+bool usesDelayTimeControls (const gp200::GP200EffectSlot& effect,
+                            const juce::String& blockName)
+{
+    // Pure keeps the PRE target ID accepted by the hardware, but its adapted
+    // parameter ABI is the same as the Pure delay. Treat only this relocated
+    // algorithm as a delay for the Time/Sync presentation.
+    if (blockName.equalsIgnoreCase ("DLY")) return true;
+    if (! blockName.equalsIgnoreCase ("PRE")) return false;
+    const auto dynamicModule = gp200::GP200ModSync::getPreBankSourceModule (effect.effectId);
+    return dynamicModule.equalsIgnoreCase ("DLY");
+}
 
 juce::String getDelaySyncTimeLabel (int index)
 {
@@ -309,7 +322,7 @@ void EffectBlockComponent::paint (juce::Graphics& g)
     g.drawRoundedRectangle (tagBounds.toFloat (), 4.0f, 1.2f);
 
     g.setFont (gp200ui::medium (14.75f));
-    g.drawText (getBlockName (), tagBounds, juce::Justification::centred);
+    g.drawText (blendForDisplay ? "BLEND" : getBlockName (), tagBounds, juce::Justification::centred);
 
     g.setColour (mutedTextColour);
     g.setFont (gp200ui::medium (14.75f));
@@ -501,9 +514,9 @@ void EffectBlockComponent::setParameterValueForDisplay (int paramIndex, float va
 
     effect.params[static_cast<std::size_t> (paramIndex)] = value;
 
-    const auto* paramSet = gp200::GP200EffectParamDatabase::findParamsForEffect (effect.effectId);
+    const auto* paramSet = gp200::GP200EffectParamDatabase::findParamsForEffect (effect.effectId, getBlockName ());
 
-    if (getBlockName ().equalsIgnoreCase ("DLY") && paramSet != nullptr)
+    if (usesDelayTimeControls (effect, getBlockName ()) && paramSet != nullptr)
     {
         const auto syncParamIndex = findDelayTimeSyncParamIndex (*paramSet);
 
@@ -629,11 +642,21 @@ void EffectBlockComponent::scheduleDelaySyncControlRebuild ()
     });
 }
 
+void EffectBlockComponent::setBlendForDisplay (bool blend)
+{
+    if (blendForDisplay == blend) return;
+    blendForDisplay = blend;
+    rebuildEffectChoices ();
+    rebuildParameterControls ();
+    updateParameterControlsVisibility ();
+    resized (); repaint ();
+}
+
 void EffectBlockComponent::rebuildParameterControls ()
 {
     parameterControls.clear ();
 
-    const auto* paramSet = gp200::GP200EffectParamDatabase::findParamsForEffect (effect.effectId);
+    const auto* paramSet = gp200::GP200EffectParamDatabase::findParamsForEffect (effect.effectId, getBlockName ());
 
     if (paramSet == nullptr || paramSet->count <= 0)
         return;
@@ -665,9 +688,9 @@ void EffectBlockComponent::rebuildParameterControls ()
         control.slider->setColour (juce::Slider::trackColourId, getBlockColour ().withAlpha (0.45f));
         control.slider->setColour (juce::Slider::backgroundColourId, juce::Colour (0xff151515));
 
-        const auto isDelayBlock = getBlockName ().equalsIgnoreCase ("DLY");
+        const auto usesDelayControls = usesDelayTimeControls (effect, getBlockName ());
         const auto isSyncedDelayTime =
-            isDelayBlock && isDelayTimeParameter (param) && isDelayTimeSyncEnabled (effect, *paramSet);
+            usesDelayControls && isDelayTimeParameter (param) && isDelayTimeSyncEnabled (effect, *paramSet);
 
         if (isSyncedDelayTime)
         {
@@ -687,15 +710,17 @@ void EffectBlockComponent::rebuildParameterControls ()
         }
         else
         {
+            const auto displayEffectId = gp200::GP200EffectParamDatabase::resolveEffectIdForModule (
+                effect.effectId, getBlockName ());
             control.usesDiscreteOptions =
-                gp200::GP200EffectParamDatabase::hasDiscreteOptions (effect.effectId, param.idx);
+                gp200::GP200EffectParamDatabase::hasDiscreteOptions (displayEffectId, param.idx);
 
             if (control.usesDiscreteOptions)
             {
                 const auto minimum =
-                    gp200::GP200EffectParamDatabase::getDiscreteOptionMinimum (effect.effectId, param.idx);
+                    gp200::GP200EffectParamDatabase::getDiscreteOptionMinimum (displayEffectId, param.idx);
                 const auto maximum =
-                    gp200::GP200EffectParamDatabase::getDiscreteOptionMaximum (effect.effectId, param.idx);
+                    gp200::GP200EffectParamDatabase::getDiscreteOptionMaximum (displayEffectId, param.idx);
 
                 control.slider->setRange (minimum, maximum, 1.0);
                 control.slider->setDoubleClickReturnValue (true, param.defaultValue);
@@ -719,7 +744,7 @@ void EffectBlockComponent::rebuildParameterControls ()
                 control.slider->setRange (minimum, maximum, step);
                 control.slider->setDoubleClickReturnValue (true, param.defaultValue);
 
-                if (isDelayBlock && isDelayTimeParameter (param))
+                if (usesDelayControls && isDelayTimeParameter (param))
                 {
                     control.slider->textFromValueFunction = [] (double value)
                     { return juce::String (static_cast<int> (std::round (value))) + " ms"; };
@@ -733,11 +758,34 @@ void EffectBlockComponent::rebuildParameterControls ()
             {
                 control.valueLabel->setText (
                     gp200::GP200EffectParamDatabase::getDiscreteOptionLabel (
-                        effect.effectId,
+                        displayEffectId,
                         param.idx,
                         effect.params[static_cast<std::size_t> (param.idx)]),
                     juce::dontSendNotification);
             }
+        }
+
+        if (blendForDisplay && getBlockIndex () == 10 && param.idx == 0)
+        {
+            control.label->setText ("A — B", juce::dontSendNotification);
+            control.slider->setTextBoxStyle (juce::Slider::TextBoxRight, false, 118, 20);
+            const double lo = control.slider->getMinimum (), hi = control.slider->getMaximum ();
+            control.slider->textFromValueFunction = [lo, hi] (double value)
+            {
+                const int b = juce::jlimit (0, 100, juce::roundToInt (100.0 * (value-lo) / juce::jmax (0.000001, hi-lo)));
+                if (b == 0) return juce::String ("A");
+                if (b == 100) return juce::String ("B");
+                return "A " + juce::String (100-b) + " / B " + juce::String (b);
+            };
+            control.slider->valueFromTextFunction = [lo, hi] (const juce::String& text)
+            {
+                if (text.trim ().equalsIgnoreCase ("A")) return lo;
+                if (text.trim ().equalsIgnoreCase ("B")) return hi;
+                const int pos = text.indexOf ("B ");
+                const double b = pos >= 0 ? text.substring (pos+2).getDoubleValue () : text.getDoubleValue ();
+                return lo + (hi-lo) * juce::jlimit (0.0, 100.0, b) / 100.0;
+            };
+            control.slider->updateText ();
         }
 
         auto* slider = control.slider.get ();
@@ -758,7 +806,8 @@ void EffectBlockComponent::rebuildParameterControls ()
                 {
                     parameterControl.valueLabel->setText (
                         gp200::GP200EffectParamDatabase::getDiscreteOptionLabel (
-                            effect.effectId, paramIndex, value),
+                            gp200::GP200EffectParamDatabase::resolveEffectIdForModule (
+                                effect.effectId, getBlockName ()), paramIndex, value),
                         juce::dontSendNotification);
                     break;
                 }
@@ -806,7 +855,7 @@ void EffectBlockComponent::updateParameterControlsVisibility ()
 void EffectBlockComponent::updateEffectDescriptionLabel ()
 {
     auto name = getEffectName ().trim ();
-    auto description = gp200::GP200EffectDatabase::getEffectDescription (effect.effectId).trim ();
+    auto description = gp200::GP200EffectDatabase::getEffectDescription (effect.effectId, getBlockName ()).trim ();
 
     const auto separatorIndex = name.indexOf (" - ");
 
@@ -907,8 +956,10 @@ void EffectBlockComponent::rebuildEffectChoices ()
     {
         effectChoiceIds.push_back (info.effectId);
 
-        auto menuName = getEffectDisplayName (info.effectId, info.name).trim ();
-        auto menuDescription = gp200::GP200EffectDatabase::getEffectDescription (info.effectId).trim ();
+        auto menuName = gp200::GP200EffectDatabase::getEffectName (info.effectId, moduleName).trim ();
+        if (menuName == gp200::GP200EffectDatabase::getEffectName (info.effectId))
+            menuName = getEffectDisplayName (info.effectId, menuName).trim ();
+        auto menuDescription = gp200::GP200EffectDatabase::getEffectDescription (info.effectId, moduleName).trim ();
 
         const auto separatorIndex = menuName.indexOf (" - ");
 
@@ -964,7 +1015,12 @@ juce::String EffectBlockComponent::getBlockName () const
 
 juce::String EffectBlockComponent::getEffectName () const
 {
-    return getEffectDisplayName (effect.effectId, gp200::GP200PresetCodec::effectNameForId (effect.effectId));
+    if (blendForDisplay) return "Blend A / B";
+    const auto moduleAwareName = gp200::GP200EffectDatabase::getEffectName (effect.effectId, getBlockName ());
+    if (getBlockName ().equalsIgnoreCase ("PRE")
+        && moduleAwareName != gp200::GP200EffectDatabase::getEffectName (effect.effectId))
+        return moduleAwareName;
+    return getEffectDisplayName (effect.effectId, moduleAwareName);
 }
 
 juce::String EffectBlockComponent::getEffectDisplayName (juce::uint32 effectId,
