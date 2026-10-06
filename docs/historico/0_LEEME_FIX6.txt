@@ -1,5 +1,0 @@
-GP200 VST R15 SPR FIX6
-
-Corrección sobre FIX5: una edición rechazada ya no cancela la transacción de routing anterior.
-Conserva el firmware FIX3. Este ZIP contiene fuentes, no un VST3 compilado.
-Lee AUDITORIA_ROUTING_FIX6.md y AUDITORIA_ROUTING_FIX5.md.

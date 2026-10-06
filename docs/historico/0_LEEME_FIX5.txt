@@ -1,5 +1,0 @@
-GP200 VST R15 SPR FIX5
-
-Revisión de confirmación real, cambios de slot, cruces de transacciones y límites 0/11.
-Conserva firmware FIX3. Compila estos fuentes con JUCE y reemplaza el VST. No hay VST3 compilado en este ZIP.
-Lee AUDITORIA_ROUTING_FIX5.md: incluye errores corregidos y límites que siguen pendientes, especialmente Recall/A-B y PRST para modo/P.
