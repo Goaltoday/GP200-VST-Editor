@@ -1,5 +1,11 @@
 # Compilar VST3 y aplicación independiente — 11/10/2026
 
+## Compilar desde GitHub
+
+Sube al repositorio los cambios de `CMakeLists.txt` (FORMATS VST3 Standalone) y `.github/workflows/build-windows.yml`. En GitHub abre **Actions → Build Windows VST3 + Standalone → Run workflow**. También se ejecuta al hacer push en main, develop o feature/*. Cuando termine correctamente, descarga el artefacto **GP200-VST-Windows-VST3-Standalone** de esa ejecución; contiene `GP200 VST.vst3` y `GP200 VST.exe`. El artefacto queda disponible 14 días. Si la acción falla, abre el job y revisa el paso que marque error.
+
+## Compilar localmente
+
 Conserva external/JUCE y su revisión actual. Copia CMakeLists.txt en la raíz del proyecto y build_windows.cmd junto a él. Cada compilación del proyecto completo genera ambos formatos, compartiendo fuentes. También puedes usar los fuentes completos incluidos.
 
 En CMD, desde la raíz:

@@ -1,4 +1,4 @@
-name: Build Windows VST3
+name: Build Windows VST3 + Standalone
 
 on:
   workflow_dispatch:
@@ -7,6 +7,9 @@ on:
       - main
       - develop
       - "feature/**"
+
+permissions:
+  contents: read
 
 jobs:
   build-windows:
@@ -18,7 +21,7 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Verify HOT1 sources
+      - name: Verify HOT1/HOT2 sources
         shell: powershell
         run: |
           $cloneSource = Get-Content "source/libgp200/GP200SoundClone.cpp" -Raw
@@ -52,18 +55,24 @@ jobs:
       - name: Build Release
         run: cmake --build build --config Release --parallel
 
-      - name: Find generated VST3
+      - name: Package VST3 and Standalone
         shell: powershell
         run: |
-          Get-ChildItem -Path build -Recurse -Filter *.vst3 |
-          ForEach-Object { Write-Host $_.FullName }
+          $plugin = Get-ChildItem -Path build -Recurse -Directory -Filter "GP200 VST.vst3" | Select-Object -First 1
+          if (-not $plugin) { throw "The VST3 bundle was not generated." }
+          $exe = Get-ChildItem -Path build -Recurse -File -Filter "GP200 VST.exe" |
+            Where-Object { $_.FullName -match '\\Standalone\\' } | Select-Object -First 1
+          if (-not $exe) { throw "The Standalone executable was not generated. Check FORMATS VST3 Standalone in CMakeLists.txt." }
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item -Recurse $plugin.FullName (Join-Path (Resolve-Path dist) "GP200 VST.vst3")
+          Copy-Item $exe.FullName (Join-Path (Resolve-Path dist) "GP200 VST.exe")
+          Compress-Archive -Path "dist\GP200 VST.vst3", "dist\GP200 VST.exe" -DestinationPath "GP200-VST-Windows-VST3-Standalone.zip" -Force
+          Get-Item "GP200-VST-Windows-VST3-Standalone.zip" | Format-List Name,Length
 
-      - name: Upload VST3
+      - name: Upload VST3 and Standalone bundle
         uses: actions/upload-artifact@v7
         with:
-          name: GP200-VST3-Windows-HOT2-V6-CRCBE
-          path: |
-            build/**/*_artefacts/Release/VST3/*.vst3/**
-            build/**/*_artefacts/Release/VST3/*.vst3
+          name: GP200-VST-Windows-VST3-Standalone
+          path: GP200-VST-Windows-VST3-Standalone.zip
           if-no-files-found: error
           retention-days: 14
