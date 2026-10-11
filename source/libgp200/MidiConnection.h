@@ -94,6 +94,9 @@ class MidiConnection final : private juce::MidiInputCallback, private juce::Time
     bool sendAutoCabMatch (bool shouldBeEnabled);
     bool sendParamChange (int blockIndex, int paramIndex, juce::uint32 effectId, float value);
     bool sendIndependentBlend (float value, bool activate, int expectedSlot);
+    bool sendChainAdjustment (int frames, bool inverted, int expectedSlot);
+    std::uint64_t getSceneChangeRevision () const;
+    bool handleSceneChangeNotification (const juce::uint8* data, int size);
     bool isBlendWritePending () const;
     void processBlendReadback ();
     bool sendSeriesParallel (bool parallel);
@@ -275,6 +278,7 @@ class MidiConnection final : private juce::MidiInputCallback, private juce::Time
     bool presetRestoreTransactionActive{false};
     std::uint64_t presetRestoreSlotGeneration{0};
     double liveRefreshDueMs{0.0};
+    double lastLiveRefreshSentMs{-1000.0};
     int lastRequestedNameSlot{-1};
 
     int presetDumpSlot{-1};
@@ -283,6 +287,11 @@ class MidiConnection final : private juce::MidiInputCallback, private juce::Time
     // A loaded CHAIN preset has no saved previous native mode. Parallel keeps the dry path.
     int nativeRoutingMode{0};
     bool blendWritePending{false};
+    bool adjustmentWritePending{false};
+    bool restoreChainMetadataReadback{false};
+    std::uint32_t adjustmentWriteExpected{0};
+    std::uint64_t sceneChangeRevision{0};
+    bool sceneRefreshPending{false};
     int blendWriteSlot{-1};
     std::uint64_t blendWriteBaseline{0};
     float blendWriteExpected{50.0f};

@@ -1,7 +1,7 @@
 from pathlib import Path
 r=Path(__file__).resolve().parent;src=r.parent/'source/libgp200/MidiConnection.cpp';s=src.read_text()
 # Compile exact production method bodies; JUCE ports and preset codec are test doubles.
-names=[('processBlendReadback','void'),('isBlendWritePending','bool'),('sendIndependentBlend','bool'),('getRoutingRequestSnapshot','MidiConnection::RoutingRequestSnapshot'),('getRoutingStateSnapshot','MidiConnection::RoutingStateSnapshot'),('timerCallback','void'),('sendFlexibleRouting','bool'),('canSaveCurrentPreset','bool'),('isRoutingTransactionBusy','bool'),('getRoutingTransactionStatus','juce::String'),('failRoutingTransaction','void'),('processRoutingTransaction','void'),('processPresetReadRecovery','void'),('sendStateDumpRequestUnlocked','bool'),('requestPresetNameForCurrentSlotIfNeeded','bool'),('sendLiveReadRequestForSlot','bool'),('resetPresetDumpCaptureForSlot','void'),('collectPresetReadChunk','void'),('getChunkOffset','int'),('assemblePresetReadChunks','juce::MemoryBlock'),('nibbleDecode','std::vector<juce::uint8>'),('buildLiveReadRequest','std::vector<juce::uint8>'),('buildStateDumpRequest','std::vector<juce::uint8>'),('sendRoutingModeValue','bool'),('requestRoutingModeFromGP200','bool'),('sendReorderEffects','bool'),('buildReorderEffects','std::vector<juce::uint8>'),('nibbleEncode','std::vector<juce::uint8>'),('scheduleLivePresetRefresh','void'),('processPendingLivePresetRefresh','void'),('beginPresetRestoreTransaction','void'),('endPresetRestoreTransaction','void'),('sendPresetRestoreRoutingMode','bool'),('storeCurrentPresetToGP200','bool')]
+names=[('sendChainAdjustment','bool'),('getSceneChangeRevision','std::uint64_t'),('handleSceneChangeNotification','bool'),('processBlendReadback','void'),('isBlendWritePending','bool'),('sendIndependentBlend','bool'),('getRoutingRequestSnapshot','MidiConnection::RoutingRequestSnapshot'),('getRoutingStateSnapshot','MidiConnection::RoutingStateSnapshot'),('timerCallback','void'),('sendFlexibleRouting','bool'),('canSaveCurrentPreset','bool'),('isRoutingTransactionBusy','bool'),('getRoutingTransactionStatus','juce::String'),('failRoutingTransaction','void'),('processRoutingTransaction','void'),('processPresetReadRecovery','void'),('sendStateDumpRequestUnlocked','bool'),('requestPresetNameForCurrentSlotIfNeeded','bool'),('sendLiveReadRequestForSlot','bool'),('resetPresetDumpCaptureForSlot','void'),('collectPresetReadChunk','void'),('getChunkOffset','int'),('assemblePresetReadChunks','juce::MemoryBlock'),('nibbleDecode','std::vector<juce::uint8>'),('buildLiveReadRequest','std::vector<juce::uint8>'),('buildStateDumpRequest','std::vector<juce::uint8>'),('sendRoutingModeValue','bool'),('requestRoutingModeFromGP200','bool'),('sendReorderEffects','bool'),('buildReorderEffects','std::vector<juce::uint8>'),('nibbleEncode','std::vector<juce::uint8>'),('scheduleLivePresetRefresh','void'),('processPendingLivePresetRefresh','void'),('beginPresetRestoreTransaction','void'),('endPresetRestoreTransaction','void'),('sendPresetRestoreRoutingMode','bool'),('storeCurrentPresetToGP200','bool')]
 methods=[];decl=[]
 for name,ret in names:
  a=s.index('MidiConnection::'+name+' (');b=s.index('\n}',a)+2;body=s[a:b];methods.append(ret+' '+body);signature=body[:body.index('\n{')].replace('MidiConnection::','')
@@ -21,6 +21,7 @@ h=r'''#include "../source/libgp200/GP200FlexibleRouting.h"
 #include <thread>
 #include <cstring>
 #include "../source/libgp200/GP200ChainBlend.h"
+#include "../source/libgp200/GP200SceneSync.h"
 namespace juce {
 using uint8=std::uint8_t;using uint32=std::uint32_t;
 template<class T>T jlimit(T a,T b,T v){return std::clamp(v,a,b);}
@@ -45,7 +46,7 @@ IRUploadPhase irUploadPhase=IRUploadPhase::Idle;SoundCloneUploadPhase soundClone
 StartupHandshakePhase startupHandshakePhase=StartupHandshakePhase::Ready;
 int currentSlot=0,presetDumpSlot=-1,lastRequestedNameSlot=-1;Scanner presetNameScanner;
 bool modSyncActive=false,presetRestoreTransactionActive=false,currentPresetDataIsLive=true,currentStateRequestPending=false,currentStateRequestQueued=false,livePresetReadPending=false,presetNameRequestPending=false,liveRefreshPending=false;
-double currentStateRequestSentMs=0,startupHandshakePhaseStartedMs=0,liveRefreshDueMs=0;
+double currentStateRequestSentMs=0,startupHandshakePhaseStartedMs=0,liveRefreshDueMs=0,lastLiveRefreshSentMs=-1000;
 std::vector<std::vector<juce::uint8>> presetReadChunks,stateDumpChunks;juce::MemoryBlock currentPresetDecodedData;
 struct RoutingRequestSnapshot {bool active=false;int slot=-1;RoutingOrder order{};int send=0,boundary=0,ret=0,mode=1;};
 struct RoutingModeSnapshot{int mode=0x85,slot=0;std::uint64_t revision=1;};RoutingModeSnapshot routingModeSnapshot;
@@ -53,6 +54,7 @@ struct RoutingStateSnapshot {bool connected=false;int slot=-1;bool live=false;Ro
 bool isIRUploadInProgress(){return irUploadPhase!=IRUploadPhase::Idle;}bool isSoundCloneUploadInProgress(){return soundCloneUploadPhase!=SoundCloneUploadPhase::Idle;}juce::String getLastMessageText(){return lastMessageText;}
 std::uint64_t presetRevision=1,livePresetRevision=1;
 juce::String currentPresetName="test",currentPresetDumpStatusText,lastMessageText;
+bool adjustmentWritePending=false,sceneRefreshPending=false,restoreChainMetadataReadback=false;std::uint32_t adjustmentWriteExpected=0;std::uint64_t sceneChangeRevision=0;
 int nativeRoutingMode=0;bool blendWritePending=false,blendWriteMarked=false;int blendWriteSlot=-1;std::uint64_t blendWriteBaseline=0;float blendWriteExpected=50.0f;double blendWriteDeadline=0;
 std::vector<std::pair<int,float>> parameterWrites;
 bool sendParamChange(int block,int param,juce::uint32,float value){parameterWrites.push_back({param,value});std::memcpy(currentPresetDecodedData.v.data()+effectBlockStart+block*effectBlockSize+paramsOffset+param*4,&value,4);return true;}

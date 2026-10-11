@@ -1920,6 +1920,7 @@ addAndMakeVisible (soundCloneButton);
     addAndMakeVisible (presetNameEditor);
     addAndMakeVisible (tunerButton);
     addAndMakeVisible (seriesParallelButton);
+    chainSeenSceneRevision=midiConnection.getSceneChangeRevision();
     addAndMakeVisible (chainBlendLabel); addAndMakeVisible (chainBlendSlider);
     chainBlendLabel.setText ("BLEND", juce::dontSendNotification);
     chainBlendSlider.setSliderStyle (juce::Slider::LinearHorizontal);
@@ -1927,6 +1928,24 @@ addAndMakeVisible (soundCloneButton);
     chainBlendSlider.setTextBoxStyle (juce::Slider::TextBoxRight,false,84,20);
     chainBlendSlider.textFromValueFunction=[](double v) { const int b=juce::roundToInt(v); return b==0?juce::String("SOLO A"):b==100?juce::String("SOLO B"):b==50?juce::String("CENTRO"):juce::String("POS ")+juce::String(b); };
     chainBlendSlider.onValueChange=[this] { chainBlendQueuedValue=static_cast<float>(chainBlendSlider.getValue());chainBlendQueued=true; chainBlendSendDueMs=juce::Time::getMillisecondCounterHiRes()+150.0; };
+
+    addAndMakeVisible (chainAlignLabel); addAndMakeVisible (chainAlignSlider); addAndMakeVisible (chainPhaseButton);
+    chainAlignLabel.setText ("ALIGN", juce::dontSendNotification);
+    chainAlignSlider.setSliderStyle (juce::Slider::LinearHorizontal);
+    chainAlignSlider.setRange (-32.0,32.0,1.0);
+    chainAlignSlider.setTextBoxStyle (juce::Slider::TextBoxRight,false,84,20);
+    chainAlignSlider.setDoubleClickReturnValue (true,0.0);
+    chainAlignSlider.setTooltip ("Stereo samples: positive delays A, negative delays B. Double-click resets ALIGN to zero.");
+    chainPhaseButton.setTooltip ("Invert chain B polarity. ALIGN is preserved.");
+    chainAlignSlider.onValueChange=[this] {
+        chainAdjustmentFrames=juce::roundToInt(chainAlignSlider.getValue());
+        chainAdjustmentQueued=true; chainAdjustmentDueMs=juce::Time::getMillisecondCounterHiRes()+200.0;
+    };
+    chainPhaseButton.onClick=[this] {
+        chainAdjustmentInverted=!chainAdjustmentInverted;
+        chainPhaseButton.setButtonText(chainAdjustmentInverted?"PHASE B: INVERTED":"PHASE B: NORMAL");
+        chainAdjustmentQueued=true; chainAdjustmentDueMs=juce::Time::getMillisecondCounterHiRes()+200.0;
+    };
 
     addAndMakeVisible (allBlocksOffButton);
     addAndMakeVisible (autoCabButton);
@@ -2127,11 +2146,14 @@ storePresetButton.setColour (
 
     presetNameEditor.setIndents (4, 0);
 
-    patchVolumeSlider.onValueChange = [this] { sendPatchVolumeFromSlider (); };
+    patchVolumeSlider.onValueChange = [this] { if (!patchVolumeSlider.isMouseButtonDown ()) sendPatchVolumeFromSlider (); };
+    patchVolumeSlider.onDragEnd = [this] { sendPatchVolumeFromSlider (); };
 
-    panSlider.onValueChange = [this] { sendPatchPanFromSlider (); };
+    panSlider.onValueChange = [this] { if (!panSlider.isMouseButtonDown ()) sendPatchPanFromSlider (); };
+    panSlider.onDragEnd = [this] { sendPatchPanFromSlider (); };
 
-    tempoSlider.onValueChange = [this] { sendPatchTempoFromSlider (); };
+    tempoSlider.onValueChange = [this] { if (!tempoSlider.isMouseButtonDown ()) sendPatchTempoFromSlider (); };
+    tempoSlider.onDragEnd = [this] { sendPatchTempoFromSlider (); };
 	
 	tapTempoButton.onClick = [this] { handleTapTempo (); };
 
@@ -2647,6 +2669,10 @@ chainBlendLabel.setBounds (getWidth () - 284, 250, 48, 22);
 chainBlendSlider.setBounds (getWidth () - 232, 250, 208, 22);
 chainBlendLabel.toFront (false);
 chainBlendSlider.toFront (false);
+chainAlignLabel.setBounds (getWidth () - 284, 274, 48, 22);
+chainAlignSlider.setBounds (getWidth () - 232, 274, 208, 22);
+chainPhaseButton.setBounds (getWidth () - 232, 298, 208, 22);
+chainAlignLabel.toFront (false); chainAlignSlider.toFront (false); chainPhaseButton.toFront (false);
 toneMatchButton.setBounds (708, 191, 110, 28);
 soundCloneButton.setBounds (828, 191, 110, 28);
 
@@ -2687,6 +2713,7 @@ void AudioPluginAudioProcessorEditor::timerCallback ()
     const auto nowMs = juce::Time::getMillisecondCounterHiRes();
     syncFlexibleRoutingFromDevice ();
     syncChainBlendControls ();
+    syncChainAdjustmentControls ();
 
     const auto modSyncRevision = gp200::GP200ModSync::getRevision ();
     if (modSyncRevision != lastModSyncRevision)
@@ -3951,6 +3978,9 @@ void AudioPluginAudioProcessorEditor::buildFullPresetRestoreSteps (const gp200::
     const bool independent = gp200::hasIndependentBlend (preset);
     metadataEffect.params[13] = independent ? gp200::blendTagFloat () : 0.0f;
     metadataEffect.params[14] = independent ? preset.effects[10].params[14] : 0.0f;
+    const auto align=std::bit_cast<std::uint32_t>(metadataEffect.params[12]);
+    metadataEffect.params[12]=std::bit_cast<float>(gp200::validAlignWord(align)?align:0u);
+    addParameterStep (metadataEffect,12);
     addParameterStep (metadataEffect,14);
     addParameterStep (metadataEffect,13);
 
@@ -4379,8 +4409,13 @@ void AudioPluginAudioProcessorEditor::updateTunerButtonText ()
 void AudioPluginAudioProcessorEditor::syncChainBlendControls ()
 {
     const auto state = midiConnection.getRoutingStateSnapshot (false);
+    const auto sceneRevision=midiConnection.getSceneChangeRevision();
+    if(sceneRevision!=chainSeenSceneRevision){
+        chainSeenSceneRevision=sceneRevision;chainBlendQueued=false;chainAdjustmentQueued=false;chainBlendEditSessionReady=false;
+        if(presetRestoreInProgress){presetRestoreInProgress=false;presetRestoreSteps.clear();presetRestoreStepIndex=0;startTimerHz(idleTimerHz);effectsStatusText="Recall cancelled: pedal Scene changed";}
+    }
     if (chainBlendSlot != state.slot || !state.connected)
-    { chainBlendQueued = false; chainBlendEditSessionReady = false; chainBlendSlot = state.slot; }
+    { chainBlendQueued = false; chainAdjustmentQueued = false; chainBlendEditSessionReady = false; chainBlendSlot = state.slot; }
     const bool chain = state.connected && state.slot == sprDeviceSlot
         && gp200::routingModeIsChain (sprDeviceMode);
     if (!chainBlendDecodedValid || state.presetRevision != chainBlendDecodedRevision
@@ -4406,6 +4441,7 @@ void AudioPluginAudioProcessorEditor::syncChainBlendControls ()
     if (interrupted)
     {
         chainBlendQueued = false;
+        chainAdjustmentQueued = false;
         chainBlendEditSessionReady = false;
     }
     else if (ready)
@@ -4414,7 +4450,7 @@ void AudioPluginAudioProcessorEditor::syncChainBlendControls ()
     // Coalesce rapid drag changes; releasing the mouse sends the final gesture
     // immediately once the transport is ready.
     const bool gestureDue = !chainBlendSlider.isMouseButtonDown ()
-        || juce::Time::getMillisecondCounterHiRes () >= chainBlendSendDueMs;
+        && juce::Time::getMillisecondCounterHiRes () >= chainBlendSendDueMs;
     if (ready && !pending && chainBlendQueued && gestureDue)
     {
         // The first user edit initializes independent BLEND; merely loading does not.
@@ -4429,6 +4465,29 @@ void AudioPluginAudioProcessorEditor::syncChainBlendControls ()
         chainBlendSlider.setValue (std::clamp (value, 0.0f, 100.0f), juce::dontSendNotification);
     }
     chainBlendLabel.setTooltip ("A / B blend position. The first edit initializes independent BLEND. VOL retains volume. Requires FIX35 firmware.");
+}
+
+void AudioPluginAudioProcessorEditor::syncChainAdjustmentControls ()
+{
+    const auto state=midiConnection.getRoutingStateSnapshot(false);
+    const bool chain=state.connected && state.slot==sprDeviceSlot && gp200::routingModeIsChain(sprDeviceMode);
+    const bool interrupted=!chain || presetRestoreInProgress || midiConnection.isRoutingTransactionBusy();
+    const bool ready=!interrupted && state.live && state.modeFresh && chainBlendDecodedPreset.isValid;
+    const bool pending=midiConnection.isBlendWritePending();
+    chainAlignLabel.setVisible(chain); chainAlignSlider.setVisible(chain); chainPhaseButton.setVisible(chain);
+    chainAlignSlider.setEnabled(!interrupted && (ready || pending || chainBlendEditSessionReady));
+    chainPhaseButton.setEnabled(chainAlignSlider.isEnabled());
+    if(interrupted)chainAdjustmentQueued=false;
+    if(ready && !pending && chainAdjustmentQueued && !chainAlignSlider.isMouseButtonDown()
+        && juce::Time::getMillisecondCounterHiRes()>=chainAdjustmentDueMs) {
+        if(midiConnection.sendChainAdjustment(chainAdjustmentFrames,chainAdjustmentInverted,state.slot))chainAdjustmentQueued=false;
+    }
+    if(ready && !chainAdjustmentQueued && !midiConnection.isBlendWritePending() && !chainAlignSlider.isMouseButtonDown()) {
+        const auto word=std::bit_cast<std::uint32_t>(chainBlendDecodedPreset.effects[10].params[12]);
+        chainAdjustmentFrames=gp200::alignFrames(word);chainAdjustmentInverted=gp200::alignInverted(word);
+        chainAlignSlider.setValue(chainAdjustmentFrames,juce::dontSendNotification);
+        chainPhaseButton.setButtonText(chainAdjustmentInverted?"PHASE B: INVERTED":"PHASE B: NORMAL");
+    }
 }
 
 void AudioPluginAudioProcessorEditor::toggleSeriesParallel ()

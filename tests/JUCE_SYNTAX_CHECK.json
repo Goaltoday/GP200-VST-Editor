@@ -1,0 +1,71 @@
+{
+  "checks": [
+    {
+      "source": "source/libgp200/MidiConnection.cpp",
+      "JUCE": "3cc224c3e84d6acbabf62358ba1ccbf133cd2095",
+      "results": [
+        {
+          "input": "baseline",
+          "exit_code": 0,
+          "errors": []
+        },
+        {
+          "input": "modified",
+          "exit_code": 0,
+          "errors": []
+        }
+      ],
+      "no_added_errors": true
+    },
+    {
+      "source": "source/GP200Plugin/PluginEditor.cpp",
+      "JUCE": "3cc224c3e84d6acbabf62358ba1ccbf133cd2095",
+      "results": [
+        {
+          "input": "baseline",
+          "exit_code": 1,
+          "errors": [
+            "/source/GP200Plugin/ToneMatch/ToneAnalysis.h: error: default member initializer for \u2018tonematch::ToneAnalysis::Options::fftOrder\u2019 required before the end of its enclosing class",
+            "/source/GP200Plugin/ToneMatch/ToneAnalysis.h: error: default member initializer for \u2018tonematch::ToneAnalysis::Options::overlapRatio\u2019 required before the end of its enclosing class",
+            "/source/GP200Plugin/ToneMatch/ToneAnalysis.h: error: default member initializer for \u2018tonematch::ToneAnalysis::Options::silenceThresholdDb\u2019 required before the end of its enclosing class",
+            "/source/GP200Plugin/ToneMatch/ToneAnalysis.h: error: default member initializer for \u2018tonematch::ToneAnalysis::Options::clippingThreshold\u2019 required before the end of its enclosing class",
+            "/source/GP200Plugin/ToneMatch/ToneAnalysis.h: error: default member initializer for \u2018tonematch::ToneAnalysis::Options::minimumFrequencyHz\u2019 required before the end of its enclosing class",
+            "/source/GP200Plugin/ToneMatch/ToneAnalysis.h: error: default member initializer for \u2018tonematch::ToneAnalysis::Options::maximumFrequencyHz\u2019 required before the end of its enclosing class",
+            "/source/GP200Plugin/ToneMatch/ToneAnalysis.h: error: default member initializer for \u2018tonematch::ToneAnalysis::Options::powerFloor\u2019 required before the end of its enclosing class",
+            "/source/GP200Plugin/ToneMatch/ToneAnalysis.h: error: default member initializer for \u2018tonematch::ToneAnalysis::Options::robustGroupCount\u2019 required before the end of its enclosing class",
+            "/source/GP200Plugin/ToneMatch/ToneAnalysis.h: error: default member initializer for \u2018tonematch::ToneAnalysis::Options::confidenceReferenceDeviationDb\u2019 required before the end of its enclosing class",
+            "/source/GP200Plugin/ToneMatch/ToneMatchComparison.h: error: default member initializer for \u2018tonematch::ToneMatchComparison::Options::minimumFrequencyHz\u2019 required before the end of its enclosing class",
+            "/source/GP200Plugin/ToneMatch/ToneMatchComparison.h: error: default member initializer for \u2018tonematch::ToneMatchComparison::Options::maximumFrequencyHz\u2019 required before the end of its enclosing class",
+            "/source/GP200Plugin/ToneMatch/ToneMatchComparison.h: error: default member initializer for \u2018tonematch::ToneMatchComparison::Options::outputPointCount\u2019 required before the end of its enclosing class",
+            "/source/GP200Plugin/ToneMatch/ToneMatchComparison.h: error: default member initializer for \u2018tonematch::ToneMatchComparison::Options::levelReferenceMinimumHz\u2019 required before the end of its enclosing class",
+            "/source/GP200Plugin/ToneMatch/ToneMatchComparison.h: error: default member initializer for \u2018tonematch::ToneMatchComparison::Options::levelReferenceMaximumHz\u2019 required before the end of its enclosing class",
+            "/source/GP200Plugin/ToneMatch/ToneMatchComparison.h: error: default member initializer for \u2018tonematch::ToneMatchComparison::Options::minimumConfidenceForLevel\u2019 required before the end of its enclosing class"
+          ]
+        },
+        {
+          "input": "modified",
+          "exit_code": 1,
+          "errors": [
+            "/source/GP200Plugin/ToneMatch/ToneAnalysis.h: error: default member initializer for \u2018tonematch::ToneAnalysis::Options::fftOrder\u2019 required before the end of its enclosing class",
+            "/source/GP200Plugin/ToneMatch/ToneAnalysis.h: error: default member initializer for \u2018tonematch::ToneAnalysis::Options::overlapRatio\u2019 required before the end of its enclosing class",
+            "/source/GP200Plugin/ToneMatch/ToneAnalysis.h: error: default member initializer for \u2018tonematch::ToneAnalysis::Options::silenceThresholdDb\u2019 required before the end of its enclosing class",
+            "/source/GP200Plugin/ToneMatch/ToneAnalysis.h: error: default member initializer for \u2018tonematch::ToneAnalysis::Options::clippingThreshold\u2019 required before the end of its enclosing class",
+            "/source/GP200Plugin/ToneMatch/ToneAnalysis.h: error: default member initializer for \u2018tonematch::ToneAnalysis::Options::minimumFrequencyHz\u2019 required before the end of its enclosing class",
+            "/source/GP200Plugin/ToneMatch/ToneAnalysis.h: error: default member initializer for \u2018tonematch::ToneAnalysis::Options::maximumFrequencyHz\u2019 required before the end of its enclosing class",
+            "/source/GP200Plugin/ToneMatch/ToneAnalysis.h: error: default member initializer for \u2018tonematch::ToneAnalysis::Options::powerFloor\u2019 required before the end of its enclosing class",
+            "/source/GP200Plugin/ToneMatch/ToneAnalysis.h: error: default member initializer for \u2018tonematch::ToneAnalysis::Options::robustGroupCount\u2019 required before the end of its enclosing class",
+            "/source/GP200Plugin/ToneMatch/ToneAnalysis.h: error: default member initializer for \u2018tonematch::ToneAnalysis::Options::confidenceReferenceDeviationDb\u2019 required before the end of its enclosing class",
+            "/source/GP200Plugin/ToneMatch/ToneMatchComparison.h: error: default member initializer for \u2018tonematch::ToneMatchComparison::Options::minimumFrequencyHz\u2019 required before the end of its enclosing class",
+            "/source/GP200Plugin/ToneMatch/ToneMatchComparison.h: error: default member initializer for \u2018tonematch::ToneMatchComparison::Options::maximumFrequencyHz\u2019 required before the end of its enclosing class",
+            "/source/GP200Plugin/ToneMatch/ToneMatchComparison.h: error: default member initializer for \u2018tonematch::ToneMatchComparison::Options::outputPointCount\u2019 required before the end of its enclosing class",
+            "/source/GP200Plugin/ToneMatch/ToneMatchComparison.h: error: default member initializer for \u2018tonematch::ToneMatchComparison::Options::levelReferenceMinimumHz\u2019 required before the end of its enclosing class",
+            "/source/GP200Plugin/ToneMatch/ToneMatchComparison.h: error: default member initializer for \u2018tonematch::ToneMatchComparison::Options::levelReferenceMaximumHz\u2019 required before the end of its enclosing class",
+            "/source/GP200Plugin/ToneMatch/ToneMatchComparison.h: error: default member initializer for \u2018tonematch::ToneMatchComparison::Options::minimumConfidenceForLevel\u2019 required before the end of its enclosing class"
+          ]
+        }
+      ],
+      "no_added_errors": true
+    }
+  ],
+  "scope": "Header-level syntax with actual pinned JUCE; generated BinaryData extern declarations. MIDI passes; editor retains baseline GCC nested Options default-argument errors in unrelated ToneMatch headers. Not a linked Windows/VST3 build."
+}

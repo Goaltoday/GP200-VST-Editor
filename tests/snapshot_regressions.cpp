@@ -14,6 +14,7 @@
 #include <cmath>
 #include <cstring>
 #include "../source/libgp200/GP200ChainBlend.h"
+#include "../source/libgp200/GP200SceneSync.h"
 namespace juce {
 using uint8=std::uint8_t;using uint32=std::uint32_t;constexpr int dontSendNotification=0;using uint32=std::uint32_t;
 template<class T>T jlimit(T a,T b,T v){return std::clamp(v,a,b);}
@@ -42,7 +43,7 @@ IRUploadPhase irUploadPhase=IRUploadPhase::Idle;SoundCloneUploadPhase soundClone
 StartupHandshakePhase startupHandshakePhase=StartupHandshakePhase::Ready;
 int currentSlot=0,presetDumpSlot=-1,lastRequestedNameSlot=-1;Scanner presetNameScanner;
 bool modSyncActive=false,presetRestoreTransactionActive=false,currentPresetDataIsLive=true,currentStateRequestPending=false,currentStateRequestQueued=false,livePresetReadPending=false,presetNameRequestPending=false,liveRefreshPending=false;
-double currentStateRequestSentMs=0,startupHandshakePhaseStartedMs=0,liveRefreshDueMs=0;
+double currentStateRequestSentMs=0,startupHandshakePhaseStartedMs=0,liveRefreshDueMs=0,lastLiveRefreshSentMs=-1000;
 std::vector<std::vector<juce::uint8>> presetReadChunks,stateDumpChunks;juce::MemoryBlock currentPresetDecodedData;
 struct RoutingRequestSnapshot {bool active=false;int slot=-1;RoutingOrder order{};int send=0,boundary=0,ret=0,mode=1;};
 struct RoutingModeSnapshot{int mode=0x85,slot=0;std::uint64_t revision=1;};RoutingModeSnapshot routingModeSnapshot;
@@ -50,6 +51,7 @@ struct RoutingStateSnapshot {bool connected=false;int slot=-1;bool live=false;Ro
 bool isIRUploadInProgress(){return irUploadPhase!=IRUploadPhase::Idle;}bool isSoundCloneUploadInProgress(){return soundCloneUploadPhase!=SoundCloneUploadPhase::Idle;}juce::String getLastMessageText(){return lastMessageText;}
 std::uint64_t presetRevision=1,livePresetRevision=1;
 juce::String currentPresetName="test",currentPresetDumpStatusText,lastMessageText;
+bool adjustmentWritePending=false,sceneRefreshPending=false,restoreChainMetadataReadback=false;std::uint32_t adjustmentWriteExpected=0;std::uint64_t sceneChangeRevision=0;
 int nativeRoutingMode=0;bool blendWritePending=false,blendWriteMarked=false;int blendWriteSlot=-1;std::uint64_t blendWriteBaseline=0;float blendWriteExpected=50.0f;double blendWriteDeadline=0;
 std::vector<std::pair<int,float>> parameterWrites;
 bool sendParamChange(int block,int param,juce::uint32,float value){parameterWrites.push_back({param,value});std::memcpy(currentPresetDecodedData.v.data()+effectBlockStart+block*effectBlockSize+paramsOffset+param*4,&value,4);return true;}
@@ -63,6 +65,9 @@ bool sendPatchVolume(int){return true;}bool sendPatchTempoBpm(int){return true;}
 void adoptCurrentPresetSnapshot(int slot,juce::String name,juce::MemoryBlock data){currentSlot=slot;currentPresetName=name;currentPresetDecodedData=data;currentPresetDataIsLive=false;++presetRevision;}
 bool isConnected()const{return midiOutput!=nullptr;}void stopTimer(){stopped=true;}void processIRUpload(){irTicks++;}void processSoundCloneUpload(){cloneTicks++;}void finishModSyncFailure(juce::String){modSyncActive=false;}bool requestCurrentPresetFromGP200(){return sendStateDumpRequestUnlocked();}void processStartupHandshake(){}void processPresetNameScan(){scanTicks++;}
 static juce::String sanitizePresetNameForStore(juce::String x){return x;}static std::vector<juce::uint8> buildStorePresetCommit(int slot,juce::String){return {0xf0,(juce::uint8)slot,0xf7};}
+bool sendChainAdjustment (int frames, bool inverted, int expectedSlot);
+std::uint64_t getSceneChangeRevision () const;
+bool handleSceneChangeNotification (const juce::uint8* data, int size);
 void processBlendReadback ();
 bool isBlendWritePending () const;
 bool sendIndependentBlend (float value, bool activate, int expectedSlot);
@@ -98,17 +103,68 @@ void endPresetRestoreTransaction (int expectedRoutingMode = -1);
 bool sendPresetRestoreRoutingMode (int expectedSlot, int mode);
 bool storeCurrentPresetToGP200 ();
 };
+bool MidiConnection::sendChainAdjustment (int frames, bool inverted, int expectedSlot)
+{
+    const juce::ScopedLock lock (stateLock);
+    if (frames < -32 || frames > 32 || midiOutput == nullptr || currentSlot != expectedSlot
+        || !currentPresetDataIsLive || blendWritePending || routingStage != 0 || presetRestoreTransactionActive
+        || modSyncActive || presetDumpSlot >= 0 || currentStateRequestPending
+        || irUploadPhase != IRUploadPhase::Idle || soundCloneUploadPhase != SoundCloneUploadPhase::Idle
+        || !routingModeIsChain(routingModeSnapshot.mode) || routingModeSnapshot.slot != currentSlot
+        || routingModeSnapshot.revision <= presetModeBaseline) return false;
+    const auto p = GP200PresetCodec::decodeLivePresetDump(currentPresetDecodedData);
+    if (!p.isValid) return false;
+    const auto word = alignWord(frames,inverted);
+    if (!sendParamChange(10,12,p.effects[10].effectId,std::bit_cast<float>(word))) return false;
+    adjustmentWriteExpected=word; adjustmentWritePending=true; restoreChainMetadataReadback=false; blendWriteSlot=currentSlot;
+    blendWriteBaseline=livePresetRevision; blendWriteDeadline=juce::Time::getMillisecondCounterHiRes()+6500.0;
+    blendWritePending=true; scheduleLivePresetRefresh();
+    lastMessageText="ALIGN/PHASE sent: awaiting pedal readback";
+    return true;
+}
+std::uint64_t MidiConnection::getSceneChangeRevision () const
+{
+    const juce::ScopedLock lock (stateLock);
+    return sceneChangeRevision;
+}
+bool MidiConnection::handleSceneChangeNotification (const juce::uint8* data, int size)
+{
+    const int slot = sceneChangeSlot(data,size);
+    if (slot < 0) return false;
+    if (slot != currentSlot) return true; // Discard an event from a previous slot.
+    ++sceneChangeRevision;
+    sceneRefreshPending=true; currentPresetDataIsLive=false; ++presetRevision;
+    blendWritePending=false; adjustmentWritePending=false; restoreChainMetadataReadback=false;
+    if(presetRestoreTransactionActive) {
+        presetRestoreTransactionActive=false;
+        currentStateRequestQueued=false; currentStateRequestPending=false; stateDumpChunks.clear();
+    }
+    if(routingStage != 0) failRoutingTransaction("Scene changed");
+    if(presetDumpSlot >= 0) {
+        presetDumpSlot=-1; presetReadChunks.clear();
+        presetReadResumeMs=juce::Time::getMillisecondCounterHiRes()+300.0;
+    }
+    // A physical recall wins over unsent gestures. Recovery reads never resend edits.
+    if (!presetRestoreTransactionActive && routingStage == 0) scheduleLivePresetRefresh();
+    return true;
+}
 void MidiConnection::processBlendReadback ()
 {
     if (!blendWritePending) return;
     if (currentSlot != blendWriteSlot || midiOutput == nullptr) { blendWritePending = false; return; }
     if (currentPresetDataIsLive && livePresetRevision > blendWriteBaseline) {
         const auto p = GP200PresetCodec::decodeLivePresetDump (currentPresetDecodedData);
-        const bool matches = p.isValid && (blendWriteMarked
+        const bool matches = p.isValid && (!restoreChainMetadataReadback
+            || std::bit_cast<std::uint32_t>(p.effects[10].params[12]) == adjustmentWriteExpected) && (adjustmentWritePending
+            ? std::bit_cast<std::uint32_t>(p.effects[10].params[12]) == adjustmentWriteExpected
+            : (blendWriteMarked
             ? hasIndependentBlend(p) && p.effects[10].params[14] == blendWriteExpected
-            : std::bit_cast<std::uint32_t>(p.effects[10].params[13]) == 0);
+            : std::bit_cast<std::uint32_t>(p.effects[10].params[13]) == 0));
         blendWritePending = false;
-        lastMessageText = matches ? "BLEND confirmed by pedal" : "BLEND not confirmed: actual pedal value recovered; requires FIX34 firmware";
+        lastMessageText = adjustmentWritePending
+            ? (matches ? "ALIGN/PHASE confirmed by pedal" : "ALIGN/PHASE not confirmed: actual pedal value recovered")
+            : (matches ? "BLEND confirmed by pedal" : "BLEND not confirmed: actual pedal value recovered; requires FIX34 firmware");
+        adjustmentWritePending = false; restoreChainMetadataReadback=false;
         return;
     }
     if (juce::Time::getMillisecondCounterHiRes () >= blendWriteDeadline) {
@@ -140,7 +196,7 @@ bool MidiConnection::sendIndependentBlend (float value, bool activate, int expec
     }
     if (!sendParamChange(10,14,p.effects[10].effectId,value)
         || !sendParamChange(10,13,p.effects[10].effectId,blendTagFloat())) return false;
-    blendWriteExpected=value; blendWriteMarked=true; blendWriteSlot=currentSlot;
+    adjustmentWritePending=false; restoreChainMetadataReadback=false; blendWriteExpected=value; blendWriteMarked=true; blendWriteSlot=currentSlot;
     blendWriteBaseline=livePresetRevision; blendWriteDeadline=juce::Time::getMillisecondCounterHiRes()+6500.0;
     blendWritePending=true; scheduleLivePresetRefresh();
     lastMessageText="BLEND sent: awaiting pedal readback";
@@ -464,7 +520,7 @@ void MidiConnection::collectPresetReadChunk (const juce::uint8* data, int size)
             presetReadChunks.clear (); return; // deadline recovers without trusting partial bytes
         }
         presetReadRetries = 0; modePollMs = 0;
-        if (currentPresetDataIsLive && presetDumpSlot == currentSlot) ++livePresetRevision;
+        if (currentPresetDataIsLive && presetDumpSlot == currentSlot) { ++livePresetRevision; sceneRefreshPending=false; }
         ++presetRevision;
 
         currentPresetDumpStatusText = "Current full preset data: captured, " +
@@ -600,6 +656,7 @@ bool MidiConnection::requestRoutingModeFromGP200 ()
 bool MidiConnection::sendReorderEffects (const RoutingOrder& routingOrder, int fxLoopSend, int fxLoopReturn)
 {
     const juce::ScopedLock lock (stateLock);
+    if (sceneRefreshPending) { lastMessageText="Scene changed: waiting for fresh pedal state"; return false; }
     if (midiOutput == nullptr)
     {
         lastMessageText = "Cannot reorder effects: MIDI output not open";
@@ -730,7 +787,7 @@ void MidiConnection::processPendingLivePresetRefresh ()
 
     const auto nowMs = juce::Time::getMillisecondCounterHiRes ();
 
-    if (nowMs < liveRefreshDueMs || nowMs < presetReadResumeMs
+    if (nowMs < liveRefreshDueMs || (routingStage == 0 && nowMs < lastLiveRefreshSentMs + 350.0) || nowMs < presetReadResumeMs
         || currentStateRequestPending || livePresetReadPending)
         return;
 
@@ -744,13 +801,13 @@ void MidiConnection::processPendingLivePresetRefresh ()
     }
 
     liveRefreshPending = false;
-    sendLiveReadRequestForSlot (currentSlot);
+    if (sendLiveReadRequestForSlot (currentSlot)) lastLiveRefreshSentMs = nowMs;
 }
 void MidiConnection::beginPresetRestoreTransaction ()
 {
     const juce::ScopedLock lock (stateLock);
 
-    blendWritePending = false;
+    blendWritePending = false; adjustmentWritePending=false; restoreChainMetadataReadback=false; sceneRefreshPending=false;
     if (routingStage != 0) failRoutingTransaction ("Recall started");
     currentPresetDataIsLive = false;
     routingModeSnapshot.mode = -1; ++routingModeSnapshot.revision;
@@ -783,6 +840,9 @@ void MidiConnection::endPresetRestoreTransaction (int expectedRoutingMode)
     presetRestoreTransactionActive = false;
     const auto restoredBlend = GP200PresetCodec::decodeLivePresetDump (currentPresetDecodedData);
     if (restoredBlend.isValid) {
+        const auto savedAlign=std::bit_cast<std::uint32_t>(restoredBlend.effects[10].params[12]);
+        adjustmentWriteExpected=validAlignWord(savedAlign)?savedAlign:0u;
+        adjustmentWritePending=false; restoreChainMetadataReadback=true;
         blendWriteMarked = hasIndependentBlend (restoredBlend);
         blendWriteExpected = restoredBlend.effects[10].params[14];
         blendWriteSlot = currentSlot; blendWriteBaseline = livePresetRevision;

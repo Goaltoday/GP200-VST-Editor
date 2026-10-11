@@ -1,0 +1,86 @@
+{
+  "revision": "MIDI Sync 1",
+  "input_sha256": "ac2fb90907a552249ab221549a65367ceea353d16a76eb1981ca8c69b4fcaa78",
+  "files": [
+    {
+      "path": "README_MIDI_SYNC_ES.md",
+      "sha256": "1d8335800f474345eb0339db58f61f0011c0857bee2bbef23b406828d4c12044",
+      "original_sha256": null
+    },
+    {
+      "path": "source/GP200Plugin/PluginEditor.cpp",
+      "sha256": "7cdd4561fb84ba87e9f21d1d02cfd374fc3d0bd61c07618b1eb0d9635771ba4f",
+      "original_sha256": "7ca96a500a518ba6651258f2e645b3d37c109616b0f124eaea63937f0b761163"
+    },
+    {
+      "path": "source/GP200Plugin/PluginEditor.h",
+      "sha256": "1e0867cfc6df30fdaa4858d230b40613e6aaae3ac38a3567c49655fb1eb9c07d",
+      "original_sha256": "219eddff61610b9e639ff6c42c1cb64442a89a338cecf9b9aff59f275dcb345f"
+    },
+    {
+      "path": "source/libgp200/GP200ChainBlend.h",
+      "sha256": "74e1338a0da30b0719c29c0d93c88835b7ee825ac5022b4ce933ffcca623f1e3",
+      "original_sha256": "53ac6f36c2fb8e39b5f8f24e0949ac232f193b8f0b52e6b6c78acff27b9622ae"
+    },
+    {
+      "path": "source/libgp200/GP200SceneSync.h",
+      "sha256": "03cb27ba59c64af50b913d26793a23c52ff4ebcc8a246cec2e267727388341fd",
+      "original_sha256": null
+    },
+    {
+      "path": "source/libgp200/MidiConnection.cpp",
+      "sha256": "f46b967855ea2bc897edd8993033bf6fbfcb3eaf14d85541dcf9966fd9476ddf",
+      "original_sha256": "667d536ce96304eed966d44c804f08cb4ac82ef5293093280ee51ef6bab0e8d9"
+    },
+    {
+      "path": "source/libgp200/MidiConnection.h",
+      "sha256": "ccf7e2a3efb8741692b7df6350f78b1563eed53d34327e1701c7cc7b58406850",
+      "original_sha256": "11e1e042608246e2a0e1fb8353e32fca969101b27140df93e8c017df1b49b777"
+    },
+    {
+      "path": "tests/JUCE_SYNTAX_CHECK.json",
+      "sha256": "561d4b7d88ba5989557f16efb8461a3326423266950d79f65de44e609c0c67b4",
+      "original_sha256": null
+    },
+    {
+      "path": "tests/build_chain_blend_tests.py",
+      "sha256": "5fb88f67857f08eb2f37f047ad8dbffd47adb83e2b6faa4af36e1dfdd5be2141",
+      "original_sha256": "16ae66123ba6dfce624354e8ef511df0abeeb331c4e044d9fe78f5ac8972e51f"
+    },
+    {
+      "path": "tests/build_regressions.py",
+      "sha256": "355bbdee8d54ee3396ede0a6ced0e3b02c1330e827cb8cdb74321b6515229af7",
+      "original_sha256": "e3b1f36682ac826a53f843e8d1f95c3babc6c52e79f57f04243896818f657a23"
+    },
+    {
+      "path": "tests/build_scene_sync_tests.py",
+      "sha256": "d10b79e2fb9abbed681d65db821178781d2b588b31af234dc9720dc07c9ffd1f",
+      "original_sha256": null
+    },
+    {
+      "path": "tests/chain_blend_test.cpp",
+      "sha256": "132ab4ee3918b396d2cb7e56bfa95688cfc217cc1c4e0237884c8a639fc394c9",
+      "original_sha256": "20f52a35c57d44cd5bf7faecfb2e69f2c36d7e31adbbb7cbd4e5979547f2f0ed"
+    },
+    {
+      "path": "tests/connection_regressions.cpp",
+      "sha256": "adca7b8bed0afd7d7cf3511a09abc426afc7ace9a008bf8d92b4213d349600d7",
+      "original_sha256": "0ff5ee42a673e089a09e5544dcaa0208934ad9ff32cdcb49c26891f82acbe477"
+    },
+    {
+      "path": "tests/run_tests.py",
+      "sha256": "b5c858a8dabda4047cd89ad262680c21069ffc740349f9620897843bced99d85",
+      "original_sha256": "30c509cb4739d4f5dba40dd73563c84ccf63f9ec6c5f52b169507d2becaf4b62"
+    },
+    {
+      "path": "tests/scene_sync_test.cpp",
+      "sha256": "6248fe3d37614860a69575d686f2164a9ca92bb782839ca4bcb68c6eb583d945",
+      "original_sha256": null
+    },
+    {
+      "path": "tests/snapshot_regressions.cpp",
+      "sha256": "09ee5e333be4c52cb0c23f8f0211a6192a49572a70ebdd399a5afd260fd5fa93",
+      "original_sha256": "c10d5806d6dfe85ea7fdd842e9aae51f7925748a7cd9b5a67b50141b2b3ba159"
+    }
+  ]
+}

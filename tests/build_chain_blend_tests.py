@@ -4,14 +4,16 @@ base=(r/'connection_regressions.cpp').read_text().split('struct Ribbon {')[0]
 base=base.replace('struct GP200PresetCodec {','struct GP200PresetCodec {static juce::String blockNameForSlotIndex(int){return "BLOCK";}')
 base+='''namespace gp200 {struct Param {int idx;};struct ParamSet {int count;const Param* params;};struct GP200EffectParamDatabase {static const ParamSet* findParamsForEffect(juce::uint32,juce::String){static const Param p[]{ {0} };static const ParamSet s{1,p};return &s;}};}
 namespace juce { inline constexpr int dontSendNotification=0; }
-struct BlendSlider { double value=50; bool enabled=false,visible=false,down=false; void setVisible(bool x){visible=x;} void setEnabled(bool x){enabled=x;} bool isMouseButtonDown()const{return down;} void setValue(double x,int){value=x;} };
+struct BlendSlider { double value=50; bool enabled=false,visible=false,down=false; void setVisible(bool x){visible=x;} void setEnabled(bool x){enabled=x;} bool isMouseButtonDown()const{return down;} bool isEnabled()const{return enabled;} void setValue(double x,int){value=x;} };
 struct BlendLabel { bool visible=false;void setVisible(bool x){visible=x;}void setTooltip(const char*){} };
+struct PhaseButton {bool enabled=false,visible=false;std::string text;void setVisible(bool x){visible=x;}void setEnabled(bool x){enabled=x;}void setButtonText(const char* x){text=x;}};
 struct AudioPluginAudioProcessorEditor {
  gp200::MidiConnection midiConnection;
- BlendSlider chainBlendSlider;BlendLabel chainBlendLabel;
+ BlendSlider chainBlendSlider,chainAlignSlider;BlendLabel chainBlendLabel,chainAlignLabel;PhaseButton chainPhaseButton;int chainAdjustmentFrames=0;bool chainAdjustmentInverted=false;double chainAdjustmentDueMs=0;
+ bool chainAdjustmentQueued=false;std::uint64_t chainSeenSceneRevision=0;int presetRestoreStepIndex=0;int idleTimerHz=10;juce::String effectsStatusText;void startTimerHz(int){}
  bool chainBlendQueued=false,chainBlendEditSessionReady=false,presetRestoreInProgress=false;double chainBlendSendDueMs=0;int chainBlendSlot=-1,sprDeviceSlot=0,sprDeviceMode=0x85;float chainBlendQueuedValue=50;
  gp200::GP200Preset chainBlendDecodedPreset;std::uint64_t chainBlendDecodedRevision=0;int chainBlendDecodedSlot=-2;bool chainBlendDecodedValid=false,chainBlendDecodedConnected=false;
- void syncChainBlendControls();
+ void syncChainBlendControls();void syncChainAdjustmentControls();
  enum class PresetRestoreStepType {PatchVolume,PatchTempo,EffectChange,ParamChange,ToggleEffect,ReorderEffects,RoutingMode};
  struct PresetRestoreStep {PresetRestoreStepType type=PresetRestoreStepType::ParamChange;int blockIndex=-1,paramIndex=-1;juce::uint32 effectId=0;float value=0;bool shouldBeOn=false;gp200::RoutingOrder routingOrder{};int fxLoopSend=4,fxLoopReturn=4,routingMode=-1;};
  std::vector<PresetRestoreStep> presetRestoreSteps;
@@ -20,11 +22,23 @@ struct AudioPluginAudioProcessorEditor {
 '''
 s=(r.parent/'source/GP200Plugin/PluginEditor.cpp').read_text();a=s.index('AudioPluginAudioProcessorEditor::buildFullPresetRestoreSteps (');b=s.index('\n}',a)+2;base+='void '+s[a:b]+'\n'
 a=s.index('AudioPluginAudioProcessorEditor::syncChainBlendControls ()');b=s.index('\n}',a)+2;base+='void '+s[a:b]+'\n'
+a=s.index('AudioPluginAudioProcessorEditor::syncChainAdjustmentControls ()');b=s.index('\n}',a)+2;base+='void '+s[a:b]+'\n'
 base+=r'''
 using namespace gp200;
 juce::MemoryBlock data(){juce::MemoryBlock b;b.setSize(1176);b.v[106]=2;b.v[107]=8;for(int i=0;i<11;i++)b.v[108+i]=i;return b;}
 void field(juce::MemoryBlock& b,int param,float value){std::memcpy(b.v.data()+effectBlockStart+10*effectBlockSize+paramsOffset+param*4,&value,4);}
 int main(){int count=0;
+for(int d=-32;d<=32;d++)for(bool inv:{false,true}){
+ AudioPluginAudioProcessorEditor e;auto& m=e.midiConnection;m.currentPresetDecodedData=data();field(m.currentPresetDecodedData,12,std::bit_cast<float>(alignWord(d,inv)));
+ e.syncChainBlendControls();e.syncChainAdjustmentControls();assert(e.chainAlignSlider.value==d&&e.chainAdjustmentInverted==inv&&m.parameterWrites.empty());
+ e.chainAdjustmentFrames=-d;e.chainAdjustmentQueued=true;e.chainAdjustmentDueMs=juce::Time::now+200;e.chainAlignSlider.down=true;e.syncChainAdjustmentControls();assert(m.parameterWrites.empty());
+ e.chainAlignSlider.down=false;juce::Time::now+=200;e.syncChainAdjustmentControls();assert(m.parameterWrites.size()==1&&std::bit_cast<std::uint32_t>(m.parameterWrites[0].second)==alignWord(-d,inv));count++;
+}
+{ AudioPluginAudioProcessorEditor e;auto& m=e.midiConnection;m.currentPresetDecodedData=data();e.syncChainBlendControls();e.chainAdjustmentQueued=true;e.chainBlendQueued=true;
+ ++m.sceneChangeRevision;m.currentPresetDataIsLive=false;e.syncChainBlendControls();e.syncChainAdjustmentControls();assert(!e.chainAdjustmentQueued&&!e.chainBlendQueued&&!e.chainBlendSlider.enabled&&!e.chainAlignSlider.enabled&&m.parameterWrites.empty());count++;
+}
+
+juce::Time::now=0;
 for(int m=0;m<256;m++){assert(routingModeIsChain(m)==(m>=128&&m<=139));count++;}
 for(int v=0;v<=100;v++){
  auto b=data();field(b,13,blendTagFloat());field(b,14,float(v));field(b,0,73);
@@ -65,7 +79,7 @@ for(float bad:{-1.f,101.f,std::numeric_limits<float>::quiet_NaN(),std::numeric_l
 // No editing session may be enabled before the first valid live read.
 {AudioPluginAudioProcessorEditor e;auto& m=e.midiConnection;m.currentPresetDataIsLive=false;e.syncChainBlendControls();assert(!e.chainBlendSlider.enabled);count++;}
 // Rapid drag gestures coalesce; release sends the latest value.
-{AudioPluginAudioProcessorEditor e;auto& m=e.midiConnection;m.currentPresetDecodedData=data();e.syncChainBlendControls();e.chainBlendSlider.down=true;e.chainBlendQueued=true;e.chainBlendQueuedValue=64;e.chainBlendSendDueMs=juce::Time::now+150;e.syncChainBlendControls();assert(e.chainBlendQueued&&m.parameterWrites.empty());e.chainBlendSlider.down=false;e.syncChainBlendControls();assert(m.blendWriteExpected==64&&m.blendWritePending);count++;}
+{AudioPluginAudioProcessorEditor e;auto& m=e.midiConnection;m.currentPresetDecodedData=data();e.syncChainBlendControls();e.chainBlendSlider.down=true;e.chainBlendQueued=true;e.chainBlendQueuedValue=64;e.chainBlendSendDueMs=juce::Time::now+150;e.syncChainBlendControls();assert(e.chainBlendQueued&&m.parameterWrites.empty());e.chainBlendSlider.down=false;juce::Time::now+=200;e.syncChainBlendControls();assert(m.blendWriteExpected==64&&m.blendWritePending);count++;}
 // Switching slot drops an unsent gesture rather than applying it to the new preset.
 {AudioPluginAudioProcessorEditor e;auto& m=e.midiConnection;m.currentPresetDecodedData=data();e.syncChainBlendControls();e.chainBlendQueued=true;e.chainBlendQueuedValue=99;m.currentSlot=1;e.syncChainBlendControls();assert(!e.chainBlendQueued&&m.parameterWrites.empty());count++;}
 // Routing/Recall cancel editing and never initialize metadata incidentally.
