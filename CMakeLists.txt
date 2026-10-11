@@ -23,7 +23,7 @@ juce_add_plugin(GP200Plugin
     PLUGIN_MANUFACTURER_CODE Gp2S
     PLUGIN_CODE Gp20
 
-    FORMATS VST3
+    FORMATS VST3 Standalone
 
     PRODUCT_NAME "GP200 VST"
 
