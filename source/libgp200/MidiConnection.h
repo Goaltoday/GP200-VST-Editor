@@ -96,6 +96,9 @@ class MidiConnection final : private juce::MidiInputCallback, private juce::Time
     bool sendIndependentBlend (float value, bool activate, int expectedSlot);
     bool sendChainAdjustment (int frames, bool inverted, int expectedSlot);
     std::uint64_t getSceneChangeRevision () const;
+    int getRemoteSceneStatus () const;
+    bool isSceneCommandPending () const;
+    bool sendSceneCommand (int command);
     bool handleSceneChangeNotification (const juce::uint8* data, int size);
     bool isBlendWritePending () const;
     void processBlendReadback ();
@@ -291,6 +294,8 @@ class MidiConnection final : private juce::MidiInputCallback, private juce::Time
     bool restoreChainMetadataReadback{false};
     std::uint32_t adjustmentWriteExpected{0};
     std::uint64_t sceneChangeRevision{0};
+    int remoteSceneStatus{-1}, remoteSceneSlot{-1};
+    double remoteSceneDeadline{0}, remoteSceneLastSend{0};
     bool sceneRefreshPending{false};
     int blendWriteSlot{-1};
     std::uint64_t blendWriteBaseline{0};

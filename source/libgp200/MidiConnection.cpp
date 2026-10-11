@@ -30,6 +30,11 @@ MidiConnection::MidiConnection () = default;
 
 void MidiConnection::timerCallback ()
 {
+    { const juce::ScopedLock lock(stateLock);
+      if(remoteSceneDeadline>0 && juce::Time::getMillisecondCounterHiRes()>=remoteSceneDeadline) {
+          remoteSceneDeadline=0;lastMessageText="Scene command not confirmed; no automatic write retry";
+      }
+    }
     if (!isConnected ()) { stopTimer (); return; }
     const juce::ScopedLock lock (stateLock);
     // These operations belong to the connection, never to the editor window.
@@ -1372,7 +1377,7 @@ bool MidiConnection::sendAssignmentNameQuery (int section, int page, int block)
 bool MidiConnection::sendPatchVolume (int value)
 {
     const juce::ScopedLock lock (stateLock);
-    if (sceneRefreshPending) { lastMessageText="Scene changed: waiting for fresh pedal state"; return false; }
+    if (sceneRefreshPending || juce::Time::getMillisecondCounterHiRes()<remoteSceneDeadline) { lastMessageText="Scene changed: waiting for fresh pedal state"; return false; }
     if (midiOutput == nullptr)
     {
         lastMessageText = "Cannot change Patch VOL: MIDI output not open";
@@ -1406,7 +1411,7 @@ bool MidiConnection::sendPatchVolume (int value)
 bool MidiConnection::sendPatchPan (int pan)
 {
     const juce::ScopedLock lock (stateLock);
-    if (sceneRefreshPending) { lastMessageText="Scene changed: waiting for fresh pedal state"; return false; }
+    if (sceneRefreshPending || juce::Time::getMillisecondCounterHiRes()<remoteSceneDeadline) { lastMessageText="Scene changed: waiting for fresh pedal state"; return false; }
     if (midiOutput == nullptr)
     {
         lastMessageText = "Cannot change Patch PAN: MIDI output not open";
@@ -1451,7 +1456,7 @@ bool MidiConnection::sendPatchPan (int pan)
 bool MidiConnection::sendPatchTempoBpm (int bpm)
 {
     const juce::ScopedLock lock (stateLock);
-    if (sceneRefreshPending) { lastMessageText="Scene changed: waiting for fresh pedal state"; return false; }
+    if (sceneRefreshPending || juce::Time::getMillisecondCounterHiRes()<remoteSceneDeadline) { lastMessageText="Scene changed: waiting for fresh pedal state"; return false; }
     if (midiOutput == nullptr)
     {
         lastMessageText = "Cannot change Patch Tempo: MIDI output not open";
@@ -1516,7 +1521,7 @@ bool MidiConnection::sendTunerOnOff (bool shouldBeOn)
 bool MidiConnection::sendEffectOnOff (int blockIndex, bool shouldBeOn)
 {
     const juce::ScopedLock lock (stateLock);
-    if (sceneRefreshPending) { lastMessageText="Scene changed: waiting for fresh pedal state"; return false; }
+    if (sceneRefreshPending || juce::Time::getMillisecondCounterHiRes()<remoteSceneDeadline) { lastMessageText="Scene changed: waiting for fresh pedal state"; return false; }
     if (midiOutput == nullptr)
     {
         lastMessageText = "Cannot toggle effect: MIDI output not open";
@@ -1613,7 +1618,7 @@ bool MidiConnection::sendEffectOnOff (int blockIndex, bool shouldBeOn)
 bool MidiConnection::sendEffectChange (int blockIndex, juce::uint32 effectId)
 {
     const juce::ScopedLock lock (stateLock);
-    if (sceneRefreshPending) { lastMessageText="Scene changed: waiting for fresh pedal state"; return false; }
+    if (sceneRefreshPending || juce::Time::getMillisecondCounterHiRes()<remoteSceneDeadline) { lastMessageText="Scene changed: waiting for fresh pedal state"; return false; }
     if (blockIndex < 0 || blockIndex >= static_cast<int> (effectBlockCount))
     {
         lastMessageText = "Cannot change effect: invalid block index";
@@ -1663,7 +1668,7 @@ bool MidiConnection::sendAutoCabMatch (bool shouldBeEnabled)
 bool MidiConnection::sendParamChange (int blockIndex, int paramIndex, juce::uint32 effectId, float value)
 {
     const juce::ScopedLock lock (stateLock);
-    if (sceneRefreshPending) { lastMessageText="Scene changed: waiting for fresh pedal state"; return false; }
+    if (sceneRefreshPending || juce::Time::getMillisecondCounterHiRes()<remoteSceneDeadline) { lastMessageText="Scene changed: waiting for fresh pedal state"; return false; }
     if (blockIndex < 0 || blockIndex >= static_cast<int> (effectBlockCount))
     {
         lastMessageText = "Cannot change parameter: invalid block index";
@@ -1700,7 +1705,7 @@ bool MidiConnection::sendParamChange (int blockIndex, int paramIndex, juce::uint
 bool MidiConnection::sendReorderEffects (const RoutingOrder& routingOrder, int fxLoopSend, int fxLoopReturn)
 {
     const juce::ScopedLock lock (stateLock);
-    if (sceneRefreshPending) { lastMessageText="Scene changed: waiting for fresh pedal state"; return false; }
+    if (sceneRefreshPending || juce::Time::getMillisecondCounterHiRes()<remoteSceneDeadline) { lastMessageText="Scene changed: waiting for fresh pedal state"; return false; }
     if (midiOutput == nullptr)
     {
         lastMessageText = "Cannot reorder effects: MIDI output not open";
@@ -1852,6 +1857,39 @@ bool MidiConnection::sendChainAdjustment (int frames, bool inverted, int expecte
     return true;
 }
 
+int MidiConnection::getRemoteSceneStatus () const
+{
+    const juce::ScopedLock lock(stateLock);
+    return remoteSceneSlot==currentSlot ? remoteSceneStatus : -1;
+}
+bool MidiConnection::isSceneCommandPending () const
+{
+    const juce::ScopedLock lock(stateLock);
+    return juce::Time::getMillisecondCounterHiRes()<remoteSceneDeadline;
+}
+bool MidiConnection::sendSceneCommand (int command)
+{
+    const juce::ScopedLock lock(stateLock);
+    const auto now=juce::Time::getMillisecondCounterHiRes();
+    if(command<0 || command>10 || midiOutput==nullptr || !currentPresetDataIsLive
+       || currentSlot<0 || currentSlot>255 || sceneRefreshPending || routingStage!=0
+       || blendWritePending || presetRestoreTransactionActive || modSyncActive
+       || presetDumpSlot>=0 || currentStateRequestPending
+       || irUploadPhase!=IRUploadPhase::Idle || soundCloneUploadPhase!=SoundCloneUploadPhase::Idle
+       || now<remoteSceneDeadline || now-remoteSceneLastSend<500.0) return false;
+    if(remoteSceneSlot!=currentSlot || remoteSceneStatus<0)return false;
+    if(command>=3 && remoteSceneStatus!=5 && !(remoteSceneStatus>=0 && remoteSceneStatus<4))return false;
+    const auto word=0x53430000u | (static_cast<std::uint32_t>(currentSlot)<<8) | static_cast<std::uint32_t>(command);
+    const auto preset=GP200PresetCodec::decodeLivePresetDump(currentPresetDecodedData);
+    if(!preset.isValid)return false;
+    // P15 is the command mailbox, not one of the 15 stored parameters.
+    const auto bytes=buildParamChange(10,15,preset.effects[10].effectId,std::bit_cast<float>(word));
+    midiOutput->sendMessageNow(juce::MidiMessage::createSysExMessage(bytes.data()+1,static_cast<int>(bytes.size()-2)));
+    remoteSceneLastSend=now;remoteSceneDeadline=now+2500.0;
+    lastMessageText="Scene command sent: awaiting GP200 confirmation";
+    return true;
+}
+
 std::uint64_t MidiConnection::getSceneChangeRevision () const
 {
     const juce::ScopedLock lock (stateLock);
@@ -1863,7 +1901,9 @@ bool MidiConnection::handleSceneChangeNotification (const juce::uint8* data, int
     const int slot = sceneChangeSlot(data,size);
     if (slot < 0) return false;
     if (slot != currentSlot) return true; // Discard an event from a previous slot.
+    if(((data[41]<<4)|data[42])==0x52 || (remoteSceneSlot==slot && remoteSceneStatus>=0)){remoteSceneStatus=sceneStatus(data,size); remoteSceneSlot=slot; remoteSceneDeadline=0;}
     ++sceneChangeRevision;
+    if(sceneStatus(data,size)>=4) return true;
     sceneRefreshPending=true; currentPresetDataIsLive=false; ++presetRevision;
     blendWritePending=false; adjustmentWritePending=false; restoreChainMetadataReadback=false;
     if(presetRestoreTransactionActive) {
@@ -1949,6 +1989,7 @@ bool MidiConnection::canSaveCurrentPreset () const
     const int boundary = isExtendedRoutingMode (routingModeSnapshot.mode) ? routingModeSnapshot.mode & 15 : preset.fxLoopSend;
     return preset.isValid && validFlexibleRouting (preset.routingOrder, preset.fxLoopSend, boundary, preset.fxLoopReturn)
         && midiOutput != nullptr && currentSlot >= 0 && currentPresetDataIsLive && routingStage == 0
+        && juce::Time::getMillisecondCounterHiRes()>=remoteSceneDeadline
         && !blendWritePending && !presetRestoreTransactionActive && !currentStateRequestPending && presetDumpSlot < 0
         && irUploadPhase == IRUploadPhase::Idle && soundCloneUploadPhase == SoundCloneUploadPhase::Idle
         && routingModeSnapshot.slot == currentSlot && routingModeSnapshot.revision > presetModeBaseline
@@ -2503,6 +2544,7 @@ void MidiConnection::beginPresetRestoreTransaction ()
     const juce::ScopedLock lock (stateLock);
 
     blendWritePending = false; adjustmentWritePending=false; restoreChainMetadataReadback=false; sceneRefreshPending=false;
+    remoteSceneStatus=-1; remoteSceneSlot=-1; remoteSceneDeadline=0;
     if (routingStage != 0) failRoutingTransaction ("Recall started");
     currentPresetDataIsLive = false;
     routingModeSnapshot.mode = -1; ++routingModeSnapshot.revision;

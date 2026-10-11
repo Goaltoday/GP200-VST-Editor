@@ -328,6 +328,9 @@ CompareSnapshot selectedCompareSnapshot{
     juce::Slider chainBlendSlider;
     juce::Label chainAlignLabel;
     juce::Slider chainAlignSlider;
+    juce::TextButton sceneModeButton{"SCENE"}, sceneCaptureButton{"Capture Scene"};
+    std::array<juce::TextButton,4> sceneSelectButtons;
+    void syncSceneControls ();
     juce::TextButton chainPhaseButton{"PHASE B: NORMAL"};
     bool chainAdjustmentQueued{false};
     int chainAdjustmentFrames{0};

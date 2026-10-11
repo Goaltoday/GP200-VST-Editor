@@ -1,35 +1,34 @@
-# Compilar VST3 y aplicación independiente — 11/10/2026
+> Documento vigente para distribución VST. Firmware vigente: CAPTURE LED. Este paquete consolida documentación y conserva el código existente.
 
-## Compilar desde GitHub
+# Compilar VST3 y Standalone desde GitHub — GP200 VST
 
-Sube al repositorio los cambios de `CMakeLists.txt` (FORMATS VST3 Standalone) y `.github/workflows/build-windows.yml`. En GitHub abre **Actions → Build Windows VST3 + Standalone → Run workflow**. También se ejecuta al hacer push en main, develop o feature/*. Cuando termine correctamente, descarga el artefacto **GP200-VST-Windows-VST3-Standalone** de esa ejecución; contiene `GP200 VST.vst3` y `GP200 VST.exe`. El artefacto queda disponible 14 días. Si la acción falla, abre el job y revisa el paso que marque error.
+## Integración requerida
 
-## Compilar localmente
+En el repositorio del editor, actualiza `CMakeLists.txt` para usar `FORMATS VST3 Standalone` y sustituye `.github/workflows/build-windows.yml` por el workflow actualizado de la rama Standalone (no incluido en el overlay documental adjunto). Conserva el submódulo JUCE y su revisión fijada en el repositorio. No hace falta modificar fuentes C++ ni firmware para añadir el formato Standalone.
 
-Conserva external/JUCE y su revisión actual. Copia CMakeLists.txt en la raíz del proyecto y build_windows.cmd junto a él. Cada compilación del proyecto completo genera ambos formatos, compartiendo fuentes. También puedes usar los fuentes completos incluidos.
+## Ejecutar
 
-En CMD, desde la raíz:
+1. Sube los cambios a `main`, `develop` o `feature/*`, o abre **Actions → Build Windows VST3 + Standalone → Run workflow**.
+2. Espera a que termine el job `build-windows` en Windows 2022.
+3. Descarga el artefacto `GP200-VST-Windows-VST3-Standalone` de esa ejecución.
+
+El ZIP contiene `GP200 VST.vst3` (bundle completo) y `GP200 VST.exe`. GitHub Actions conserva el artefacto durante 14 días. Un fallo de compilación o la ausencia de cualquiera de las dos salidas hace fallar el job. Si la acción falla, abre el paso marcado en rojo y conserva el log completo.
+
+## Build local
+
+Desde el directorio del proyecto VST en CMD:
 
 ```bat
 cmake -S . -B build -A x64
 cmake --build build --config Release --parallel
 ```
 
-O ejecuta `build_windows.cmd`, que reconfigura antes de compilar y detiene el proceso si hay errores.
+La salida habitual es `build\GP200Plugin_artefacts\Release\VST3\GP200 VST.vst3` y `build\GP200Plugin_artefacts\Release\Standalone\GP200 VST.exe`.
 
-Salidas Windows con el directorio build por defecto:
+## Estado de verificación
 
-- `build\GP200Plugin_artefacts\Release\VST3\GP200 VST.vst3` (copiar la carpeta completa para instalar el plugin).
-- `build\GP200Plugin_artefacts\Release\Standalone\GP200 VST.exe` (abrir sin DAW).
+La configuración de CMake y workflow debe comprobarse al integrar los dos archivos actualizados. En este árbol siguen estando los archivos VST3-only; su actualización está pendiente. El artefacto de GitHub sólo se considera generado cuando una ejecución nueva termina correctamente. Después, probar apertura del EXE, MIDI bidireccional, Scene, ALIGN/PHASE, presets y dispositivos de audio. No hay aún medición de audio/latencia del EXE.
 
-Un build dirigido sólo al target GP200Plugin_VST3 genera sólo ese formato. El script compila explícitamente GP200Plugin_VST3 y GP200Plugin_Standalone. No cambia el nombre, identidad o versión del plugin ni requiere nuevo firmware.
+## Actualización Scene Remote — archivos incluidos
 
-El EXE usa el wrapper Standalone estándar de JUCE: mismo editor y puertos USB MIDI propios del proyecto. Sus ajustes de audio permiten seleccionar dispositivo/entrada para afinador y ToneMatch; no es un motor de efectos GP200 en el PC. El DSP de la GP200 sigue en el pedal. Si otro programa ocupa sus puertos MIDI, ciérralo antes de conectar.
-
-CONFIRMADO EN ARCHIVOS: FORMATS VST3 Standalone; comparten GP200Plugin, sus fuentes, recursos y bibliotecas; no se modifica ningún .cpp/.h ni el tráfico MIDI.
-
-HARDWARE/USUARIO REPORTADO: el usuario indica que ha compilado la revisión MIDI Sync anterior. No consta log, hash del binario ni confirmación de todas las funciones.
-
-PRUEBA LOCAL: cambio de configuración y comparación byte a byte del resto de fuentes con el ZIP aportado. No se ha compilado un EXE Windows en este entorno.
-
-PENDIENTE: compilar ambos targets con Visual Studio 2022; abrir EXE sin DAW; comprobar conexión/reconexión, Scenes, ALIGN/PHASE, guardado; comprobar entrada de audio/afinador/ToneMatch y ausencia de cortes bajo tráfico. Mantener las comprobaciones físicas pendientes de MIDI Sync 1.
+Esta entrega ya incorpora `FORMATS VST3 Standalone` y el workflow que exige y publica ambos resultados. Sustituir CMakeLists y el workflow junto a las fuentes de los controles. Conservar el submódulo JUCE restaurado en el repositorio, revisión `3cc224c3e84d6acbabf62358ba1ccbf133cd2095`. La ejecución y aceptación de los binarios Windows sigue pendiente.

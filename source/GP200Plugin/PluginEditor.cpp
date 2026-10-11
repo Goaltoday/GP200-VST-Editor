@@ -1921,6 +1921,27 @@ addAndMakeVisible (soundCloneButton);
     addAndMakeVisible (tunerButton);
     addAndMakeVisible (seriesParallelButton);
     chainSeenSceneRevision=midiConnection.getSceneChangeRevision();
+    addAndMakeVisible(sceneModeButton);
+    sceneModeButton.setColour(juce::TextButton::buttonOnColourId,statusOnColour);
+    sceneModeButton.setTooltip("Toggle GP200 Scene / Patch mode. Enabled after the Scene Remote firmware announces support.");
+    sceneModeButton.onClick=[this] {
+        const int status=midiConnection.getRemoteSceneStatus();
+        if(status>=0 && midiConnection.sendSceneCommand(status==4?2:1)) effectsStatusText="Waiting for mode confirmation";
+    };
+    for(int i=0;i<4;++i) {
+        addChildComponent(sceneSelectButtons[static_cast<std::size_t>(i)]);
+        sceneSelectButtons[static_cast<std::size_t>(i)].setColour(juce::TextButton::buttonOnColourId,statusOnColour);
+        sceneSelectButtons[static_cast<std::size_t>(i)].setButtonText(juce::String::charToString(static_cast<juce::juce_wchar>('A'+i)));
+        sceneSelectButtons[static_cast<std::size_t>(i)].onClick=[this,i] {
+            if(midiConnection.sendSceneCommand(3+i))effectsStatusText="Waiting for Scene confirmation";
+        };
+    }
+    addChildComponent(sceneCaptureButton);
+    sceneCaptureButton.setTooltip("Capture current sound into the active Scene. Use Store to GP200 afterwards to retain it on power off.");
+    sceneCaptureButton.onClick=[this] {
+        const int active=midiConnection.getRemoteSceneStatus();
+        if(active>=0 && active<4 && midiConnection.sendSceneCommand(7+active))effectsStatusText="Waiting for Scene capture confirmation";
+    };
     addAndMakeVisible (chainBlendLabel); addAndMakeVisible (chainBlendSlider);
     chainBlendLabel.setText ("BLEND", juce::dontSendNotification);
     chainBlendSlider.setSliderStyle (juce::Slider::LinearHorizontal);
@@ -2665,6 +2686,9 @@ allBlocksOffButton.setBounds (170, 191, 120, 28);
 autoCabButton.setBounds (300, 191, 108, 28);
 seriesParallelButton.setBounds (418, 191, 130, 28);
 // Overlay in the clear upper-right corner of the routing panel.
+sceneModeButton.setBounds(32,250,84,24);
+for(int i=0;i<4;++i)sceneSelectButtons[static_cast<std::size_t>(i)].setBounds(124+i*42,250,36,24);
+sceneCaptureButton.setBounds(302,250,132,24);
 chainBlendLabel.setBounds (getWidth () - 284, 250, 48, 22);
 chainBlendSlider.setBounds (getWidth () - 232, 250, 208, 22);
 chainBlendLabel.toFront (false);
@@ -2689,6 +2713,8 @@ tunerDisplay.setBounds (
     const auto ribbonHeight = parallelRoutingSelected ? 188 : 116;
     const auto effectsTop = parallelRoutingSelected ? 444 : 372;
     effectChainRibbon.setBounds (20, 246, getWidth () - 40, ribbonHeight);
+    sceneModeButton.toFront(false);sceneCaptureButton.toFront(false);
+    for(auto& button:sceneSelectButtons)button.toFront(false);
 
     const bool hasSelectedBlock = selectedEffectBlockIndex >= 0;
     effectsViewport.setVisible (hasSelectedBlock);
@@ -2708,10 +2734,24 @@ if (toneMatchPanel != nullptr)
 }
 
 //==============================================================================
+void AudioPluginAudioProcessorEditor::syncSceneControls ()
+{
+    const bool connected=midiConnection.isConnected();
+    const int status=connected?midiConnection.getRemoteSceneStatus():-1;
+    const bool scenes=status>=0 && status!=4;
+    const bool ready=!midiConnection.isSceneCommandPending() && midiConnection.hasLiveCurrentPresetData()
+        && !midiConnection.isRoutingTransactionBusy();
+    sceneModeButton.setEnabled(connected && status>=0 && ready);
+    sceneModeButton.setToggleState(scenes,juce::dontSendNotification);
+    for(int i=0;i<4;++i){auto& button=sceneSelectButtons[static_cast<std::size_t>(i)];button.setVisible(scenes);button.setEnabled(scenes && ready);button.setToggleState(status==i,juce::dontSendNotification);}
+    sceneCaptureButton.setVisible(scenes);sceneCaptureButton.setEnabled(scenes && status<4 && ready);
+}
+
 void AudioPluginAudioProcessorEditor::timerCallback ()
 {
     const auto nowMs = juce::Time::getMillisecondCounterHiRes();
     syncFlexibleRoutingFromDevice ();
+    syncSceneControls ();
     syncChainBlendControls ();
     syncChainAdjustmentControls ();
 

@@ -1,4 +1,4 @@
-name: Build Windows VST3 + Standalone
+name: Build Windows VST3 and Standalone
 
 on:
   workflow_dispatch:
@@ -7,9 +7,6 @@ on:
       - main
       - develop
       - "feature/**"
-
-permissions:
-  contents: read
 
 jobs:
   build-windows:
@@ -21,7 +18,7 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Verify HOT1/HOT2 sources
+      - name: Verify HOT1 sources
         shell: powershell
         run: |
           $cloneSource = Get-Content "source/libgp200/GP200SoundClone.cpp" -Raw
@@ -55,24 +52,19 @@ jobs:
       - name: Build Release
         run: cmake --build build --config Release --parallel
 
-      - name: Package VST3 and Standalone
+      - name: Verify VST3 and Standalone
         shell: powershell
         run: |
-          $plugin = Get-ChildItem -Path build -Recurse -Directory -Filter "GP200 VST.vst3" | Select-Object -First 1
-          if (-not $plugin) { throw "The VST3 bundle was not generated." }
-          $exe = Get-ChildItem -Path build -Recurse -File -Filter "GP200 VST.exe" |
-            Where-Object { $_.FullName -match '\\Standalone\\' } | Select-Object -First 1
-          if (-not $exe) { throw "The Standalone executable was not generated. Check FORMATS VST3 Standalone in CMakeLists.txt." }
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Copy-Item -Recurse $plugin.FullName (Join-Path (Resolve-Path dist) "GP200 VST.vst3")
-          Copy-Item $exe.FullName (Join-Path (Resolve-Path dist) "GP200 VST.exe")
-          Compress-Archive -Path "dist\GP200 VST.vst3", "dist\GP200 VST.exe" -DestinationPath "GP200-VST-Windows-VST3-Standalone.zip" -Force
-          Get-Item "GP200-VST-Windows-VST3-Standalone.zip" | Format-List Name,Length
+          $vst = @(Get-ChildItem build -Recurse -Directory -Filter "*.vst3" | Where-Object { $_.FullName -match 'Release[\\/]VST3' })
+          $exe = @(Get-ChildItem build -Recurse -File -Filter "*.exe" | Where-Object { $_.FullName -match 'Release[\\/]Standalone' })
+          if ($vst.Count -eq 0 -or $exe.Count -eq 0) { throw "Missing VST3 or Standalone output" }
 
-      - name: Upload VST3 and Standalone bundle
+      - name: Upload VST3 and Standalone
         uses: actions/upload-artifact@v7
         with:
-          name: GP200-VST-Windows-VST3-Standalone
-          path: GP200-VST-Windows-VST3-Standalone.zip
+          name: GP200-VST-Windows-VST3-Standalone-Scene-Remote
+          path: |
+            build/**/*_artefacts/Release/VST3/*.vst3/**
+            build/**/*_artefacts/Release/Standalone/*.exe
           if-no-files-found: error
           retention-days: 14
