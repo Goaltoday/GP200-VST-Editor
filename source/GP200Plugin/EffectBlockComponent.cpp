@@ -712,8 +712,15 @@ void EffectBlockComponent::rebuildParameterControls ()
         {
             const auto displayEffectId = gp200::GP200EffectParamDatabase::resolveEffectIdForModule (
                 effect.effectId, getBlockName ());
-            control.usesDiscreteOptions =
-                gp200::GP200EffectParamDatabase::hasDiscreteOptions (displayEffectId, param.idx);
+            // A Factory AMP loaded from CLO uses the common five-knob schema
+            // (Gain, Volume, Bass, Middle, Treble). Do not apply discrete
+            // options from the stock AMP that occupies the same effect ID:
+            // a stock toggle such as Bright can otherwise turn CLO Middle
+            // into an ON/OFF control.
+            const bool customFactoryClo = getBlockName ().equalsIgnoreCase ("AMP")
+                && gp200::GP200ModSync::isCustomCloAmp (effect.effectId);
+            control.usesDiscreteOptions = ! customFactoryClo
+                && gp200::GP200EffectParamDatabase::hasDiscreteOptions (displayEffectId, param.idx);
 
             if (control.usesDiscreteOptions)
             {
