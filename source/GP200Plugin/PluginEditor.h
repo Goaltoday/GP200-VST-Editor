@@ -20,6 +20,7 @@
 #include <array>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -328,8 +329,43 @@ CompareSnapshot selectedCompareSnapshot{
     juce::Slider chainBlendSlider;
     juce::Label chainAlignLabel;
     juce::Slider chainAlignSlider;
-    juce::TextButton sceneModeButton{"SCENE"}, sceneCaptureButton{"Capture Scene"};
-    std::array<juce::TextButton,4> sceneSelectButtons;
+    // Popup gestures capture directly; never forward them to Button's recall handler.
+    class SceneSelectButton final : public juce::TextButton
+    {
+    public:
+        std::function<void()> onCapture;
+
+        void mouseDown (const juce::MouseEvent& event) override
+        {
+            captureGesture = event.mods.isPopupMenu ();
+            if (!captureGesture)
+                juce::TextButton::mouseDown (event);
+        }
+
+        void mouseDrag (const juce::MouseEvent& event) override
+        {
+            if (!captureGesture)
+                juce::TextButton::mouseDrag (event);
+        }
+
+        void mouseUp (const juce::MouseEvent& event) override
+        {
+            if (captureGesture)
+            {
+                captureGesture = false;
+                if (isEnabled () && isVisible () && getLocalBounds ().contains (event.getPosition ()) && onCapture)
+                    onCapture ();
+                return;
+            }
+            juce::TextButton::mouseUp (event);
+        }
+
+    private:
+        bool captureGesture {false};
+    };
+
+    juce::TextButton sceneModeButton{"SCENE"};
+    std::array<SceneSelectButton, 4> sceneSelectButtons;
     void syncSceneControls ();
     juce::TextButton chainPhaseButton{"PHASE B: NORMAL"};
     bool chainAdjustmentQueued{false};

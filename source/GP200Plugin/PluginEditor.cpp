@@ -1932,16 +1932,18 @@ addAndMakeVisible (soundCloneButton);
         addChildComponent(sceneSelectButtons[static_cast<std::size_t>(i)]);
         sceneSelectButtons[static_cast<std::size_t>(i)].setColour(juce::TextButton::buttonOnColourId,statusOnColour);
         sceneSelectButtons[static_cast<std::size_t>(i)].setButtonText(juce::String::charToString(static_cast<juce::juce_wchar>('A'+i)));
-        sceneSelectButtons[static_cast<std::size_t>(i)].onClick=[this,i] {
-            if(midiConnection.sendSceneCommand(3+i))effectsStatusText="Waiting for Scene confirmation";
+        auto& sceneButton = sceneSelectButtons[static_cast<std::size_t> (i)];
+        sceneButton.setTooltip ("Left-click: load this Scene. Right-click: capture current sound here. Store to GP-200 to retain after power off.");
+        sceneButton.onClick = [this, i] {
+            if (midiConnection.sendSceneCommand (3 + i))
+                effectsStatusText = "Waiting for Scene confirmation";
+        };
+        sceneButton.onCapture = [this, i] {
+            if (midiConnection.sendSceneCommand (7 + i))
+                effectsStatusText = "Waiting for capture confirmation into Scene "
+                    + juce::String::charToString (static_cast<juce::juce_wchar> ('A' + i));
         };
     }
-    addChildComponent(sceneCaptureButton);
-    sceneCaptureButton.setTooltip("Capture current sound into the active Scene. Use Store to GP200 afterwards to retain it on power off.");
-    sceneCaptureButton.onClick=[this] {
-        const int active=midiConnection.getRemoteSceneStatus();
-        if(active>=0 && active<4 && midiConnection.sendSceneCommand(7+active))effectsStatusText="Waiting for Scene capture confirmation";
-    };
     addAndMakeVisible (chainBlendLabel); addAndMakeVisible (chainBlendSlider);
     chainBlendLabel.setText ("BLEND", juce::dontSendNotification);
     chainBlendSlider.setSliderStyle (juce::Slider::LinearHorizontal);
@@ -2698,7 +2700,6 @@ tapTempoButton.setBounds (882, 150, 46, 24);
     // Dedicated Scene row above the routing panel; never cover effect tiles.
     for (int i = 0; i < 4; ++i)
         sceneSelectButtons[static_cast<std::size_t> (i)].setBounds (32 + i * 42, 250, 36, 24);
-    sceneCaptureButton.setBounds (210, 250, 132, 24);
 chainBlendLabel.setBounds (getWidth () - 284, 282, 48, 22);
 chainBlendSlider.setBounds (getWidth () - 232, 282, 208, 22);
 chainBlendLabel.toFront (false);
@@ -2721,7 +2722,7 @@ tunerDisplay.setBounds (
     const auto ribbonHeight = parallelRoutingSelected ? 188 : 116;
     const auto effectsTop = parallelRoutingSelected ? 476 : 404;
     effectChainRibbon.setBounds (20, 278, getWidth () - 40, ribbonHeight);
-    sceneModeButton.toFront(false);sceneCaptureButton.toFront(false);
+    sceneModeButton.toFront(false);
     for(auto& button:sceneSelectButtons)button.toFront(false);
 
     const bool hasSelectedBlock = selectedEffectBlockIndex >= 0;
@@ -2752,7 +2753,6 @@ void AudioPluginAudioProcessorEditor::syncSceneControls ()
     sceneModeButton.setEnabled(connected && status>=0 && ready);
     sceneModeButton.setToggleState(scenes,juce::dontSendNotification);
     for(int i=0;i<4;++i){auto& button=sceneSelectButtons[static_cast<std::size_t>(i)];button.setVisible(scenes);button.setEnabled(scenes && ready);button.setToggleState(status==i,juce::dontSendNotification);}
-    sceneCaptureButton.setVisible(scenes);sceneCaptureButton.setEnabled(scenes && status<4 && ready);
 }
 
 void AudioPluginAudioProcessorEditor::timerCallback ()
