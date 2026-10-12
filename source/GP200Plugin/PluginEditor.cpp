@@ -1894,7 +1894,7 @@ AudioPluginAudioProcessorEditor::AudioPluginAudioProcessorEditor (
       offlinePatchPan (p.getOfflinePatchPan()),
       offlinePatchTempo (p.getOfflinePatchTempo())
 {
-    setSize (960, 390);
+    setSize (960, 422);
 
     addAndMakeVisible (previousBankButton);
     addAndMakeVisible (previousPresetButton);
@@ -2666,7 +2666,6 @@ exportPrstButton.setBounds (
     buttonWidth,
     buttonHeight - prstButtonHeight - prstButtonGap);
 
-    importIRButton.setBounds (563, 191, 135, 28);
 
     // ============================================================
     // Patch settings
@@ -2681,38 +2680,47 @@ tapTempoButton.setBounds (882, 150, 46, 24);
     // Utility bar
     // ============================================================
 
-    tunerButton.setBounds (30, 191, 130, 28);
-allBlocksOffButton.setBounds (170, 191, 120, 28);
-autoCabButton.setBounds (300, 191, 108, 28);
-seriesParallelButton.setBounds (418, 191, 130, 28);
-// Overlay in the clear upper-right corner of the routing panel.
-sceneModeButton.setBounds(32,250,84,24);
-for(int i=0;i<4;++i)sceneSelectButtons[static_cast<std::size_t>(i)].setBounds(124+i*42,250,36,24);
-sceneCaptureButton.setBounds(302,250,132,24);
-chainBlendLabel.setBounds (getWidth () - 284, 250, 48, 22);
-chainBlendSlider.setBounds (getWidth () - 232, 250, 208, 22);
+    // Eight utility buttons share the available width, including Scene mode.
+    constexpr int utilityGap = 8;
+    const std::array<juce::TextButton*, 8> utilityButtons {
+        &tunerButton, &allBlocksOffButton, &autoCabButton, &seriesParallelButton,
+        &sceneModeButton, &importIRButton, &toneMatchButton, &soundCloneButton
+    };
+    const int utilityWidth = getWidth () - 52;
+    const int utilityButtonSpace = utilityWidth - utilityGap * 7;
+    for (int i = 0; i < static_cast<int> (utilityButtons.size ()); ++i)
+    {
+        const int left = 30 + i * utilityButtonSpace / 8 + i * utilityGap;
+        const int right = 30 + (i + 1) * utilityButtonSpace / 8 + i * utilityGap;
+        utilityButtons[static_cast<std::size_t> (i)]->setBounds (left, 191, right - left, 28);
+    }
+
+    // Dedicated Scene row above the routing panel; never cover effect tiles.
+    for (int i = 0; i < 4; ++i)
+        sceneSelectButtons[static_cast<std::size_t> (i)].setBounds (32 + i * 42, 250, 36, 24);
+    sceneCaptureButton.setBounds (210, 250, 132, 24);
+chainBlendLabel.setBounds (getWidth () - 284, 282, 48, 22);
+chainBlendSlider.setBounds (getWidth () - 232, 282, 208, 22);
 chainBlendLabel.toFront (false);
 chainBlendSlider.toFront (false);
-chainAlignLabel.setBounds (getWidth () - 284, 274, 48, 22);
-chainAlignSlider.setBounds (getWidth () - 232, 274, 208, 22);
-chainPhaseButton.setBounds (getWidth () - 232, 298, 208, 22);
+chainAlignLabel.setBounds (getWidth () - 284, 306, 48, 22);
+chainAlignSlider.setBounds (getWidth () - 232, 306, 208, 22);
+chainPhaseButton.setBounds (getWidth () - 232, 330, 208, 22);
 chainAlignLabel.toFront (false); chainAlignSlider.toFront (false); chainPhaseButton.toFront (false);
-toneMatchButton.setBounds (708, 191, 110, 28);
-soundCloneButton.setBounds (828, 191, 110, 28);
 
 tunerDisplay.setBounds (
-    418,
-    189,
-    getWidth() - 448,
-    32);
+    getWidth () - 370,
+    248,
+    338,
+    28);
 
     // ============================================================
     // Effects list
     // ============================================================
 
     const auto ribbonHeight = parallelRoutingSelected ? 188 : 116;
-    const auto effectsTop = parallelRoutingSelected ? 444 : 372;
-    effectChainRibbon.setBounds (20, 246, getWidth () - 40, ribbonHeight);
+    const auto effectsTop = parallelRoutingSelected ? 476 : 404;
+    effectChainRibbon.setBounds (20, 278, getWidth () - 40, ribbonHeight);
     sceneModeButton.toFront(false);sceneCaptureButton.toFront(false);
     for(auto& button:sceneSelectButtons)button.toFront(false);
 
@@ -5424,8 +5432,8 @@ void AudioPluginAudioProcessorEditor::scheduleEditorHeightUpdate ()
 
 void AudioPluginAudioProcessorEditor::updateEditorHeight ()
 {
-    const int compactHeight = parallelRoutingSelected ? 462 : 390;
-    const int editorTop = parallelRoutingSelected ? 444 : 372;
+    const int compactHeight = parallelRoutingSelected ? 494 : 422;
+    const int editorTop = parallelRoutingSelected ? 476 : 404;
     constexpr int editorBottomMargin = 20;
     constexpr int maximumHeight = 900;
 
