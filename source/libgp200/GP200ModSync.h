@@ -13,6 +13,10 @@ class GP200ModSync final
     static bool replaceFromDevice (const juce::var& snapshot, int userIRSamples);
     static std::uint64_t getRevision ();
 
+    // NAM profiles come from GP200_MOD_SYNC.json; MS11 cannot discover them.
+    static bool isNamAmp (juce::uint32 effectId);
+    static bool canWriteFactoryClo (int zeroBasedFactoryAmpIndex);
+    static juce::String getNamMetadataStatus ();
     static bool isCustomCloAmp (juce::uint32 effectId);
     static juce::String getDisplayName (juce::uint32 effectId);
     static juce::String getSourceFile (juce::uint32 effectId);

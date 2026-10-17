@@ -1,0 +1,22 @@
+{
+  "release": "GP200 VST NAM2 0.1.8",
+  "date": "2026-10-17",
+  "baseline": "Unified M7OPT 1.3 / antecedentes/CF0.3/sources/VST; source previously confirmed identical to VST ZIP (9)",
+  "tests": {
+    "previous_regressions": "PASS (see regressions.log)",
+    "nam2_metadata_and_parameter_checks": 1309,
+    "cold_process_cache_checks": 14,
+    "nam2_transport_checks": 116,
+    "receive_checks": 10,
+    "catalog_validation": "PASS"
+  },
+  "evidence_scope": "Production .cpp compilation and extracted full methods with modeled JUCE, JSON, filesystem, ports and clock",
+  "juce_linked_build": false,
+  "windows_vst3_standalone_build": false,
+  "hardware_tested": false,
+  "firmware_modified": false,
+  "requires_matching_generated_mod_sync_json": true,
+  "automatic_nam_midi_discovery": false,
+  "firmware_protocol_changed": false,
+  "kernel_modified": false
+}

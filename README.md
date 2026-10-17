@@ -4,6 +4,10 @@ A VST3 editor for the Valeton GP-200. Connect the pedal to your computer over US
 
 ![GP200 VST Editor main window](docs/images/main-editor.jpg)
 
+## NAM2 firmware support (0.1.8)
+
+NAM A2 Lite M7OPT amplifiers installed by Unified 1.3 can be edited using the matching generated `GP200_MOD_SYNC.json`. NAM has Input/Output controls and is protected from Factory SnapTone operations. See [NAM2 setup and limitations](README_NAM2_ES.md). The current firmware cannot identify NAM over MIDI; the matching JSON is required.
+
 ## Features
 
 - **Preset editing:** inspect and edit supported effect blocks, reorder the signal chain, choose models, change bypass and parameters, and adjust preset name, volume, pan, BPM, and bank or slot.

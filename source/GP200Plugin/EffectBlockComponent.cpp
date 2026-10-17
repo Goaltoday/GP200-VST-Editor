@@ -716,10 +716,11 @@ void EffectBlockComponent::rebuildParameterControls ()
             // (Gain, Volume, Bass, Middle, Treble). Do not apply discrete
             // options from the stock AMP that occupies the same effect ID:
             // a stock toggle such as Bright can otherwise turn CLO Middle
-            // into an ON/OFF control.
-            const bool customFactoryClo = getBlockName ().equalsIgnoreCase ("AMP")
-                && gp200::GP200ModSync::isCustomCloAmp (effect.effectId);
-            control.usesDiscreteOptions = ! customFactoryClo
+            // into an ON/OFF control. NAM2 likewise exposes only continuous Input/Output.
+            const bool customFactoryAmp = getBlockName ().equalsIgnoreCase ("AMP")
+                && (gp200::GP200ModSync::isCustomCloAmp (effect.effectId)
+                    || gp200::GP200ModSync::isNamAmp (effect.effectId));
+            control.usesDiscreteOptions = ! customFactoryAmp
                 && gp200::GP200EffectParamDatabase::hasDiscreteOptions (displayEffectId, param.idx);
 
             if (control.usesDiscreteOptions)

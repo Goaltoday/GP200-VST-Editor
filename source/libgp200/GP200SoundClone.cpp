@@ -1,4 +1,5 @@
 #include "GP200SoundClone.h"
+#include "GP200ModSync.h"
 
 #include <algorithm>
 #include <array>
@@ -286,6 +287,8 @@ juce::Result GP200SoundClone::buildFactoryAmpUpload (const juce::File& cloFile,
         return juce::Result::fail ("The selected Factory AMP CLO file does not exist.");
     if (!juce::isPositiveAndBelow (zeroBasedFactoryAmpIndex, 71))
         return juce::Result::fail ("The Factory AMP destination must be between 1 and 71.");
+    if (!GP200ModSync::canWriteFactoryClo (zeroBasedFactoryAmpIndex))
+        return juce::Result::fail ("SnapTone requires a known CLO destination; NAM and stock AMP are protected.");
 
     std::array<juce::uint8, physicalContainerBytes> preparedContainer{};
     const auto preparationResult = prepareSoundCloneModelForGP200 (cloFile, preparedContainer);
@@ -350,6 +353,8 @@ juce::Result GP200SoundClone::buildFactoryAmpRename (
 {
     if (!juce::isPositiveAndBelow (zeroBasedFactoryAmpIndex, 71))
         return juce::Result::fail ("The Factory AMP destination must be between 1 and 71.");
+    if (!GP200ModSync::canWriteFactoryClo (zeroBasedFactoryAmpIndex))
+        return juce::Result::fail ("SnapTone requires a known CLO destination; NAM and stock AMP are protected.");
 
     const auto displayName = requestedDisplayName.trim ().substring (0, 16);
     if (displayName.isEmpty ())

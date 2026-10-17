@@ -16,3 +16,5 @@ with tempfile.TemporaryDirectory() as work:
  binary=Path(work)/'pre_protocol_test'
  subprocess.run(['g++','-std=c++20','-Wall','-Wextra','-Werror',str(r/'pre_protocol_test.cpp'),'-o',str(binary)],check=True)
  subprocess.run([str(binary),str(r/'pre_fixtures')],check=True)
+
+subprocess.run(['python3',str(r/'run_nam2_tests.py')],check=True)

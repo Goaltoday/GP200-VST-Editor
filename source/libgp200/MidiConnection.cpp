@@ -335,6 +335,13 @@ bool MidiConnection::startFactoryAmpUpload (const juce::File& cloFile,
         return false;
     }
 
+    if (!GP200ModSync::canWriteFactoryClo (zeroBasedFactoryAmpIndex))
+    {
+        irUploadStatusText = "SnapTone operation blocked: destination is NAM, stock or not a known CLO mapping";
+        lastMessageText = irUploadStatusText;
+        return false;
+    }
+
     GP200IRUpload prepared;
     const auto result = GP200SoundClone::buildFactoryAmpUpload (cloFile,
                                                                 zeroBasedFactoryAmpIndex,
@@ -387,6 +394,13 @@ bool MidiConnection::startFactoryAmpRename (int zeroBasedFactoryAmpIndex,
         soundCloneUploadPhase != SoundCloneUploadPhase::Idle)
     {
         irUploadStatusText = "Factory AMP rename unavailable: another transfer is in progress";
+        lastMessageText = irUploadStatusText;
+        return false;
+    }
+
+    if (!GP200ModSync::canWriteFactoryClo (zeroBasedFactoryAmpIndex))
+    {
+        irUploadStatusText = "SnapTone operation blocked: destination is NAM, stock or not a known CLO mapping";
         lastMessageText = irUploadStatusText;
         return false;
     }
@@ -453,6 +467,18 @@ void MidiConnection::processIRUpload ()
 
     if (irUploadPhase == IRUploadPhase::WaitingBeforeCommit)
     {
+        if (isFactoryAmpOperation && !GP200ModSync::canWriteFactoryClo (hot1FactoryAmpUploadIndex))
+        {
+            irUploadPhase = IRUploadPhase::Idle;
+            hot1FactoryAmpUploadIndex = -1;
+            hot1FactoryAmpSourceFile.clear ();
+            hot2FactoryAmpRename = false;
+            irUpload = {};
+            irUploadStatusText = "SnapTone operation cancelled before commit: destination metadata changed";
+            lastMessageText = irUploadStatusText;
+            return;
+        }
+
         if (isFactoryAmpOperation && !hot2FactoryAmpRename
             && !isFactoryAmpDestinationInactiveLocked (hot1FactoryAmpUploadIndex))
         {
@@ -1027,6 +1053,8 @@ void MidiConnection::applyModSyncSnapshot ()
     }
     const bool saved = GP200ModSync::replaceFromDevice (juce::var(root), (modSyncPages[0].bytes[19]&2) ? 2048 : 1024);
     modSyncStatus = saved && preSaved ? "MOD_SYNC OK: 70 CAB, " + juce::String (amps.size ()) + " AMP overrides" + (modSyncTargetPages == modsync::pageCount ? ", PRE synchronized" : ", PRE requires updated firmware") : "MOD_SYNC applied; cache save failed";
+    const auto namStatus = GP200ModSync::getNamMetadataStatus ();
+    if (namStatus.isNotEmpty ()) modSyncStatus += "; " + namStatus;
     lastMessageText = modSyncStatus;
 }
 
@@ -1678,6 +1706,13 @@ bool MidiConnection::sendParamChange (int blockIndex, int paramIndex, juce::uint
     if (paramIndex < 0 || paramIndex >= static_cast<int> (effectParamCount))
     {
         lastMessageText = "Cannot change parameter: invalid parameter index";
+        return false;
+    }
+
+    if (GP200ModSync::isNamAmp (effectId)
+        && (paramIndex > 1 || !std::isfinite (value) || value < 0.0f || value > 100.0f))
+    {
+        lastMessageText = "NAM2 accepts only Input / Output in the range 0-100";
         return false;
     }
 

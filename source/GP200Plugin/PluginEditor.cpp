@@ -966,9 +966,13 @@ private:
         {
             if ((effect.effectId & 0xFF000000u) == 0x0F000000u)
                 continue;
+            const bool nam = gp200::GP200ModSync::isNamAmp (effect.effectId);
             destinationBox.addItem ("Factory AMP " + juce::String (factoryIndex + 1) + " - "
-                                        + gp200::GP200EffectDatabase::getEffectName (effect.effectId),
+                                        + gp200::GP200EffectDatabase::getEffectName (effect.effectId)
+                                        + (nam ? " [NAM - protected]" : ""),
                                     1001 + factoryIndex);
+            destinationBox.setItemEnabled (1001 + factoryIndex,
+                gp200::GP200ModSync::canWriteFactoryClo (factoryIndex));
             ++factoryIndex;
         }
 
@@ -980,8 +984,10 @@ private:
         const auto selectedId = destinationBox.getSelectedId ();
         const bool isSnapTone = selectedId >= 1 && selectedId <= 10;
         const bool isFactoryAmp = selectedId >= 1001 && selectedId <= 1071;
-        renameEditor.setEnabled (isSnapTone || isFactoryAmp);
-        renameButton.setEnabled ((isSnapTone || isFactoryAmp) && !isCurrentlyBusy ());
+        const bool writable = isSnapTone || (isFactoryAmp
+            && gp200::GP200ModSync::canWriteFactoryClo (selectedId - 1001));
+        renameEditor.setEnabled (writable);
+        renameButton.setEnabled (writable && !isCurrentlyBusy ());
         if (isFactoryAmp)
         {
             const auto selectedRow = fileList.getSelectedRow ();
@@ -1024,6 +1030,12 @@ private:
         const auto newName = renameEditor.getText ().trim ().substring (0, 16);
         if (selectedId >= 1001 && selectedId <= 1071)
         {
+            if (!gp200::GP200ModSync::canWriteFactoryClo (selectedId - 1001))
+            {
+                statusLabel.setText ("NAM and unmapped AMP destinations are protected from SnapTone operations.",
+                                     juce::dontSendNotification);
+                return;
+            }
             if (newName.isEmpty () || onFactoryAmpRename == nullptr)
             {
                 statusLabel.setColour (juce::Label::textColourId, statusOffColour);
@@ -1255,6 +1267,13 @@ private:
         if (selectedId <= 0)
             return;
 
+        if (selectedId >= 1001 && !gp200::GP200ModSync::canWriteFactoryClo (selectedId - 1001))
+        {
+            statusLabel.setText ("NAM and unmapped AMP destinations are protected from SnapTone operations.",
+                                 juce::dontSendNotification);
+            return;
+        }
+
         activeImportFile = entry.file;
         uploadWasBusy = true;
         statusLabel.setColour (juce::Label::textColourId, panelOutlineColour);
@@ -1274,6 +1293,13 @@ private:
 
     void timerCallback () override
     {
+        const auto metadataRevision = gp200::GP200ModSync::getRevision ();
+        if (metadataRevision != destinationMetadataRevision)
+        {
+            destinationMetadataRevision = metadataRevision;
+            refreshDestinationItems ();
+            updateRenameEditorForSelectedSlot ();
+        }
         const bool busy = isCurrentlyBusy ();
         if (busy)
         {
@@ -1301,10 +1327,13 @@ private:
         const bool selectedFile =
             juce::isPositiveAndBelow (selectedRow, static_cast<int> (entries.size ()))
             && !entries[static_cast<std::size_t> (selectedRow)].isDirectory;
-        importButton.setEnabled (selectedFile);
         const auto selectedId = destinationBox.getSelectedId ();
-        renameButton.setEnabled ((selectedId >= 1 && selectedId <= 10)
-                                 || (selectedId >= 1001 && selectedId <= 1071));
+        const bool writable = (selectedId >= 1 && selectedId <= 10)
+            || (selectedId >= 1001 && selectedId <= 1071
+                && gp200::GP200ModSync::canWriteFactoryClo (selectedId - 1001));
+        importButton.setEnabled (selectedFile && writable);
+        renameEditor.setEnabled (writable);
+        renameButton.setEnabled (writable);
     }
 
     gp200ui::SpaceGroteskLookAndFeel spaceGroteskLookAndFeel;
@@ -1328,6 +1357,7 @@ private:
     juce::File currentFolder;
     juce::File activeImportFile;
     bool uploadWasBusy{false};
+    std::uint64_t destinationMetadataRevision{0};
     std::unique_ptr<juce::FileChooser> folderChooser;
     std::unique_ptr<juce::PropertiesFile> settings;
 };} // namespace

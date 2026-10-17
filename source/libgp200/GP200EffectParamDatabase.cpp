@@ -1200,6 +1200,18 @@ juce::String formatFloatValue (float value)
 
 const GP200EffectParamSet* GP200EffectParamDatabase::findParamsForEffect (juce::uint32 effectId)
 {
+    if (GP200ModSync::isNamAmp (effectId))
+    {
+        static constexpr GP200EffectParamInfo namParams[] = {
+            {0, "Input", GP200ParamKind::continuous, 50.0f, 0.0f, 100.0f, 1.0f},
+            {1, "Output", GP200ParamKind::continuous, 50.0f, 0.0f, 100.0f, 1.0f},
+        };
+        thread_local GP200EffectParamSet namSet;
+        namSet.effectId = effectId;
+        namSet.params = namParams;
+        namSet.count = 2;
+        return &namSet;
+    }
     if (GP200ModSync::isCustomCloAmp (effectId))
     {
         thread_local GP200EffectParamSet customCloSet;
@@ -1703,6 +1715,7 @@ const DiscreteOptionEntry* findDiscreteOptionEntry (juce::uint32 effectId,
 
 bool GP200EffectParamDatabase::hasDiscreteOptions (juce::uint32 effectId, int paramIndex)
 {
+    if (GP200ModSync::isNamAmp (effectId)) return false;
     for (const auto& entry : discreteOptionEntries)
         if (entry.effectId == effectId && entry.paramIndex == paramIndex)
             return true;
@@ -1712,6 +1725,7 @@ bool GP200EffectParamDatabase::hasDiscreteOptions (juce::uint32 effectId, int pa
 
 float GP200EffectParamDatabase::getDiscreteOptionMinimum (juce::uint32 effectId, int paramIndex)
 {
+    if (GP200ModSync::isNamAmp (effectId)) return 0.0f;
     int result = 0;
     bool found = false;
 
@@ -1729,6 +1743,7 @@ float GP200EffectParamDatabase::getDiscreteOptionMinimum (juce::uint32 effectId,
 
 float GP200EffectParamDatabase::getDiscreteOptionMaximum (juce::uint32 effectId, int paramIndex)
 {
+    if (GP200ModSync::isNamAmp (effectId)) return 100.0f;
     int result = 0;
     bool found = false;
 
@@ -1748,6 +1763,7 @@ juce::String GP200EffectParamDatabase::getDiscreteOptionLabel (juce::uint32 effe
                                                                int paramIndex,
                                                                float value)
 {
+    if (GP200ModSync::isNamAmp (effectId)) return {};
     const auto integerValue = juce::roundToInt (value);
 
     if (const auto* entry = findDiscreteOptionEntry (effectId, paramIndex, integerValue))
