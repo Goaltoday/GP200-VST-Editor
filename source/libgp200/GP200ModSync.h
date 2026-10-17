@@ -2,13 +2,33 @@
 
 #include <JuceHeader.h>
 #include <cstdint>
+#include <memory>
+#include "GP200EffectParamDatabase.h"
 
 namespace gp200
 {
+// Immutable after import. Owning names keep parameter C strings valid.
+struct GP200EffectBankEntry
+{
+    juce::uint32 destinationEffectId{0}, sourceEffectId{0};
+    juce::String destinationModule, sourceModule, displayName, profile;
+    std::array<juce::String, effectParamCount> parameterNames;
+    std::array<GP200EffectParamInfo, effectParamCount> parameters;
+    std::array<int, effectParamCount> sourceParameterIndices{};
+    GP200EffectParamSet parameterSet;
+};
+
 class GP200ModSync final
 {
   public:
+    // Explicit I/O entry points; getters below only consult memory.
     static void reloadIfChanged ();
+    static void pollForChanges ();
+    static bool hasEffectBank ();
+    static std::shared_ptr<const GP200EffectBankEntry> findEffectBankEntry (
+        juce::uint32 effectId, const juce::String& moduleName);
+    static juce::String getEffectBankStatus ();
+    static juce::File getEffectBankFile ();
     static bool replacePreBankFromDevice (const juce::var& snapshot);
     static bool replaceFromDevice (const juce::var& snapshot, int userIRSamples);
     static std::uint64_t getRevision ();

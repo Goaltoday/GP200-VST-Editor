@@ -20,7 +20,7 @@ void install(const juce::var& m){auto f=GP200ModSync::getManifestFile();f.getPar
 juce::var live(bool clo=true){auto x=object();juce::Array<juce::var> amp,cab;if(clo)amp.add(entry(modsync::ampIds[8],"LIVE_CLO"));cab.add(entry(0x0a000000,"LIVE_CAB"));set(x,"factory_amp_overrides",amp);set(x,"factory_cab_overrides",cab);return x;}
 void verifyProfile(std::uint32_t id){CHECK(GP200ModSync::isNamAmp(id));CHECK(!GP200ModSync::isCustomCloAmp(id));auto p=GP200EffectParamDatabase::findParamsForEffect(id,"AMP");CHECK(p&&p->count==2);for(int i=0;i<2;++i){CHECK(p->params[i].idx==i);CHECK(std::string(p->params[i].name)==(i==0?"Input":"Output"));CHECK(p->params[i].minValue==0&&p->params[i].maxValue==100&&p->params[i].defaultValue==50);CHECK(!GP200EffectParamDatabase::hasDiscreteOptions(id,i));}CHECK(GP200EffectParamDatabase::findParam(id,2)==nullptr);}
 int main(int argc,char**){
- if(argc>1){verifyProfile(modsync::ampIds[0]);CHECK(GP200ModSync::getDisplayName(modsync::ampIds[0])=="NAM1");CHECK(GP200ModSync::canWriteFactoryClo(8));std::cout<<checks<<" cold-process NAM2 cache checks passed.\n";return 0;}
+ if(argc>1){GP200ModSync::reloadIfChanged();verifyProfile(modsync::ampIds[0]);CHECK(GP200ModSync::getDisplayName(modsync::ampIds[0])=="NAM1");CHECK(GP200ModSync::canWriteFactoryClo(8));std::cout<<checks<<" cold-process NAM2 cache checks passed.\n";return 0;}
  // Import before any getter: MIDI must not erase the NAM startup import.
  auto f=GP200ModSync::getManifestFile();f.getParentDirectory().createDirectory();CHECK(f.replaceWithText(juce::JSON::toString(manifest(5))));CHECK(GP200ModSync::replaceFromDevice(live(),1024));
  for(int i=0;i<5;++i){verifyProfile(modsync::ampIds[size_t(i)]);CHECK(!GP200ModSync::canWriteFactoryClo(i));}

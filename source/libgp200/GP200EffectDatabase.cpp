@@ -27,6 +27,7 @@ constexpr GP200EffectAdditionalModule additionalModules[] = {
     {0X0000000Bu, "DST"}, // B-Boost
     {0X0000000Cu, "DST"}, // P-Boost
     {0X0000000Eu, "DST"}, // 14 Boost
+    {0X00000014u, "DST"}, // Micro Boost (expanded firmware destination)
     {0X00000019u, "DST"}, // FAT BB
     {0X0000001Au, "DST"}, // Boost
 
@@ -654,6 +655,7 @@ juce::String GP200EffectDatabase::getEffectName (juce::uint32 effectId)
 
 juce::String GP200EffectDatabase::getEffectName (juce::uint32 effectId, const juce::String& moduleName)
 {
+    if (const auto entry = GP200ModSync::findEffectBankEntry (effectId, moduleName)) return entry->displayName;
     if (moduleName.equalsIgnoreCase ("PRE"))
     {
         const auto dynamicName = GP200ModSync::getPreBankDisplayName (effectId);
@@ -690,6 +692,7 @@ juce::String GP200EffectDatabase::getEffectDescription (juce::uint32 effectId)
 juce::String GP200EffectDatabase::getEffectDescription (juce::uint32 effectId,
                                                          const juce::String& moduleName)
 {
+    if (const auto entry = GP200ModSync::findEffectBankEntry (effectId, moduleName)) return entry->sourceModule + " effect in " + entry->destinationModule + " (" + entry->profile + ")";
     if (moduleName.equalsIgnoreCase ("PRE"))
     {
         const auto sourceId = GP200ModSync::getPreBankSourceEffectId (effectId);

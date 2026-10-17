@@ -18,3 +18,5 @@ with tempfile.TemporaryDirectory() as work:
  subprocess.run([str(binary),str(r/'pre_fixtures')],check=True)
 
 subprocess.run(['python3',str(r/'run_nam2_tests.py')],check=True)
+
+subprocess.run(['python3',str(r/'run_effect_bank_tests.py')],check=True)

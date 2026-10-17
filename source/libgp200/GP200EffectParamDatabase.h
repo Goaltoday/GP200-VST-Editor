@@ -53,6 +53,13 @@ class GP200EffectParamDatabase
                                                 int paramIndex,
                                                 float value);
 
+    // Module-aware display choices also respect imported parameter ABI indices.
+    static bool hasDiscreteOptions (juce::uint32 effectId, int paramIndex, const juce::String& moduleName);
+    static float getDiscreteOptionMinimum (juce::uint32 effectId, int paramIndex, const juce::String& moduleName);
+    static float getDiscreteOptionMaximum (juce::uint32 effectId, int paramIndex, const juce::String& moduleName);
+    static juce::String getDiscreteOptionLabel (juce::uint32 effectId, int paramIndex, float value,
+                                                const juce::String& moduleName);
+
     static juce::String formatKnownParams (juce::uint32 effectId,
                                            const std::array<float, effectParamCount>& values,
                                            int maxParamsToShow = 5);

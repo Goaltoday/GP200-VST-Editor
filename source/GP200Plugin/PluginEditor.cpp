@@ -2462,8 +2462,10 @@ void AudioPluginAudioProcessorEditor::paint (juce::Graphics& g)
     g.drawEllipse (244.0f, 17.0f, 12.0f, 12.0f, 1.0f);
     g.setFont (gp200ui::semibold (12.0f));
     g.setColour (panelOutlineColour);
-    g.drawText (midiConnection.getStatusText ().fromFirstOccurrenceOf ("MOD_SYNC", true, false),
-                270, 11, getWidth () - 282, 26, juce::Justification::centredLeft);
+    auto headerStatus = midiConnection.getStatusText ().fromFirstOccurrenceOf ("MOD_SYNC", true, false);
+    const auto bankStatus = gp200::GP200ModSync::getEffectBankStatus ();
+    if (bankStatus.isNotEmpty ()) headerStatus += "; " + bankStatus;
+    g.drawText (headerStatus, 270, 11, getWidth () - 282, 26, juce::Justification::centredLeft);
 
 
     // ============================================================
@@ -2793,6 +2795,7 @@ void AudioPluginAudioProcessorEditor::timerCallback ()
     syncChainBlendControls ();
     syncChainAdjustmentControls ();
 
+    gp200::GP200ModSync::pollForChanges ();
     const auto modSyncRevision = gp200::GP200ModSync::getRevision ();
     if (modSyncRevision != lastModSyncRevision)
     {

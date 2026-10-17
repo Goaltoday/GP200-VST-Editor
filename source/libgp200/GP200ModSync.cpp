@@ -1,6 +1,8 @@
 #include "GP200ModSync.h"
 
 #include "GP200ModSyncProtocol.h"
+#include "GP200EffectDatabase.h"
+#include <cmath>
 
 #include <algorithm>
 #include <map>
@@ -47,6 +49,31 @@ bool livePreSnapshot{false};
 std::map<juce::uint32, PreBankEntry> wahConfigOverrides;
 juce::int64 wahConfigLastModificationMs{-1};
 bool wahConfigLoadedOnce{false};
+
+using EffectKey = std::pair<juce::String, juce::uint32>;
+using EffectBank = std::map<EffectKey, std::shared_ptr<const GP200EffectBankEntry>>;
+EffectBank effectBank;
+bool effectBankLoaded{false};
+juce::int64 effectBankModificationMs{-1}, effectBankSize{-1};
+juce::String effectBankHash, effectBankFirmware, effectBankError;
+double nextMetadataPollMs{0.0};
+
+juce::String canonicalModule (const juce::String& module)
+{
+    const auto result = module.trim ().toUpperCase ();
+    return result == "DIST" ? juce::String ("DST") : result;
+}
+
+bool isEffectBankModule (const juce::String& module)
+{
+    return module == "WAH" || module == "PRE" || module == "DST" || module == "EQ";
+}
+
+bool effectBankActiveUnlocked ()
+{
+    return effectBankLoaded && (manifestFirmware.isEmpty () || manifestFirmware == effectBankFirmware)
+        && (manifestFirmwareSha.isEmpty () || manifestFirmwareSha.equalsIgnoreCase (effectBankHash));
+}
 
 juce::uint32 parseEffectId (const juce::var& value)
 {
@@ -156,6 +183,127 @@ bool parseNamOverrides (const juce::var& root,
         destination[id] = std::move (entry);
     }
     return true;
+}
+
+bool readBankNumber (const juce::var& object, const char* name, float& result)
+{
+    const auto value = object.getProperty (name, {});
+    if (! value.isInt () && ! value.isInt64 () && ! value.isDouble ()) return false;
+    result = static_cast<float> (static_cast<double> (value));
+    return std::isfinite (result);
+}
+
+bool parseEffectBank (const juce::var& root, EffectBank& next)
+{
+    if (root.getProperty ("schema", {}).toString () != "gp200-effect-bank/v1"
+        || root.getProperty ("product", {}).toString () != "GP-200") return false;
+    const auto firmware = root.getProperty ("firmware", {}).toString ();
+    const auto hash = root.getProperty ("firmware_sha256", {}).toString ();
+    if ((firmware != "V180" && firmware != "V182") || hash.length () != 64
+        || ! hash.containsOnly ("0123456789abcdefABCDEF")) return false;
+    const auto slots = root.getProperty ("slots", {});
+    const auto* rows = slots.getArray ();
+    if (rows == nullptr || rows->size () > 80) return false;
+    for (const auto& row : *rows)
+    {
+        if (row.getDynamicObject () == nullptr) return false;
+        const auto module = canonicalModule (row.getProperty ("destination_module", {}).toString ());
+        const auto idValue = row.getProperty ("destination_effect_id", {});
+        const auto sourceValue = row.getProperty ("source_effect_id", {});
+        if (idValue.isVoid () || sourceValue.isVoid () || ! isEffectBankModule (module)) return false;
+        const auto id = parseEffectId (idValue), sourceId = parseEffectId (sourceValue);
+        const auto sourceModule = canonicalModule (row.getProperty ("source_module", {}).toString ());
+        if (! isEffectBankModule (sourceModule) && sourceModule != "MOD"
+            && sourceModule != "DLY" && sourceModule != "RVB") return false;
+        const auto destinations = GP200EffectDatabase::getEffectsForModule (module);
+        if (std::none_of (destinations.begin (), destinations.end (), [id](const auto& e){return e.effectId == id;})) return false;
+        const auto sources = GP200EffectDatabase::getEffectsForModule (sourceModule);
+        if (std::none_of (sources.begin (), sources.end (), [sourceId](const auto& e){return e.effectId == sourceId;})) return false;
+        const EffectKey key{module, id};
+        if (next.count (key) != 0) return false;
+        auto entry = std::make_shared<GP200EffectBankEntry> ();
+        entry->destinationModule = module; entry->destinationEffectId = id;
+        entry->sourceModule = sourceModule; entry->sourceEffectId = sourceId;
+        entry->displayName = row.getProperty ("display_name", {}).toString ().trim ();
+        entry->profile = row.getProperty ("profile", {}).toString ();
+        if (entry->displayName.isEmpty () || entry->displayName.length () > 64) return false;
+        const auto params = row.getProperty ("parameters", {});
+        const auto* values = params.getArray ();
+        if (values == nullptr || values->isEmpty () || values->size () > static_cast<int> (effectParamCount)) return false;
+        std::set<int> seen;
+        for (int i = 0; i < values->size (); ++i)
+        {
+            const auto& value = (*values)[i];
+            const auto index = value.getProperty ("index", {});
+            if (! index.isInt ()) return false;
+            const int idx = static_cast<int> (index);
+            if (idx < 0 || idx >= static_cast<int> (effectParamCount) || ! seen.insert (idx).second) return false;
+            auto& param = entry->parameters[static_cast<std::size_t> (i)];
+            auto& name = entry->parameterNames[static_cast<std::size_t> (i)];
+            name = value.getProperty ("name", {}).toString ().trim ();
+            if (name.isEmpty () || name.length () > 64) return false;
+            for (auto c : name) if (c < 32 || c > 126) return false;
+            param.idx = idx; param.name = name.toRawUTF8 ();
+            if (! readBankNumber (value, "minimum", param.minValue)
+                || ! readBankNumber (value, "maximum", param.maxValue)
+                || ! readBankNumber (value, "default", param.defaultValue)
+                || ! readBankNumber (value, "step", param.step)
+                || param.minValue > param.maxValue || param.step <= 0
+                || param.defaultValue < param.minValue || param.defaultValue > param.maxValue) return false;
+            param.kind = param.minValue == 0.0f && param.maxValue == 1.0f && param.step == 1.0f
+                ? GP200ParamKind::toggle : GP200ParamKind::continuous;
+            // Relocated ABI indices may differ from the old VST catalog.
+            // Match optional display choices by name once, at import time.
+            auto& sourceIndex = entry->sourceParameterIndices[static_cast<std::size_t> (i)];
+            sourceIndex = -1;
+            if (const auto* source = GP200EffectParamDatabase::findParamsForEffect (sourceId))
+                for (int j = 0; j < source->count; ++j)
+                {
+                    const auto sourceName = juce::String (source->params[j].name);
+                    if (sourceName.equalsIgnoreCase (name)
+                        || (name == "A Sync" && sourceName == "Sync A")
+                        || (name == "B Sync" && sourceName == "Sync B"))
+                    {
+                        sourceIndex = source->params[j].idx;
+                        param.kind = source->params[j].kind;
+                        break;
+                    }
+                }
+        }
+        entry->parameterSet = {id, entry->parameters.data (), values->size ()};
+        next.emplace (key, std::move (entry));
+    }
+    return true;
+}
+
+void reloadEffectBankUnlocked ()
+{
+    const auto file = GP200ModSync::getEffectBankFile ();
+    if (! file.existsAsFile ())
+    {
+        if (effectBankLoaded || effectBankModificationMs >= 0)
+        {
+            effectBank.clear (); effectBankLoaded = false;
+            effectBankModificationMs = -1; effectBankSize = -1; effectBankError.clear ();
+            ++revision;
+        }
+        return;
+    }
+    const auto stamp = file.getLastModificationTime ().toMilliseconds (), size = file.getSize ();
+    if (stamp == effectBankModificationMs && size == effectBankSize) return;
+    effectBankModificationMs = stamp; effectBankSize = size;
+    EffectBank next;
+    const auto root = size <= 1024 * 1024 ? juce::JSON::parse (file.loadFileAsString ()) : juce::var ();
+    if (! parseEffectBank (root, next))
+    {
+        effectBankError = "Invalid GP200_EFFECT_BANK.json; previous valid bank retained";
+        ++revision;
+        return;
+    }
+    effectBank = std::move (next); effectBankLoaded = true;
+    effectBankHash = root.getProperty ("firmware_sha256", {}).toString ();
+    effectBankFirmware = root.getProperty ("firmware", {}).toString ();
+    effectBankError.clear (); ++revision;
 }
 
 void loadPreBankUnlocked (const juce::File& file)
@@ -469,6 +617,7 @@ juce::File GP200ModSync::getWahConfigFile ()
 void GP200ModSync::reloadIfChanged ()
 {
     const juce::ScopedLock lock (syncLock);
+    reloadEffectBankUnlocked ();
     if (!livePreSnapshot) reloadPreBankUnlocked ();
     reloadWahConfigUnlocked ();
     // Retain a live snapshot after a failed cache write, but allow the user
@@ -496,16 +645,52 @@ void GP200ModSync::reloadIfChanged ()
         loadUnlocked (file);
 }
 
+void GP200ModSync::pollForChanges ()
+{
+    const juce::ScopedLock lock (syncLock);
+    const auto now = juce::Time::getMillisecondCounterHiRes ();
+    if (now < nextMetadataPollMs) return;
+    nextMetadataPollMs = now + 1000.0;
+    reloadIfChanged ();
+}
+
+juce::File GP200ModSync::getEffectBankFile ()
+{
+    return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
+        .getChildFile ("GP200").getChildFile ("GP200_EFFECT_BANK.json");
+}
+
+bool GP200ModSync::hasEffectBank ()
+{
+    const juce::ScopedLock lock (syncLock);
+    return effectBankActiveUnlocked ();
+}
+
+std::shared_ptr<const GP200EffectBankEntry> GP200ModSync::findEffectBankEntry (
+    juce::uint32 effectId, const juce::String& moduleName)
+{
+    const juce::ScopedLock lock (syncLock);
+    if (! effectBankActiveUnlocked ()) return {};
+    const auto it = effectBank.find ({canonicalModule (moduleName), effectId});
+    return it != effectBank.end () ? it->second : nullptr;
+}
+
+juce::String GP200ModSync::getEffectBankStatus ()
+{
+    const juce::ScopedLock lock (syncLock);
+    if (effectBankError.isNotEmpty ()) return effectBankError;
+    if (effectBankLoaded && ! effectBankActiveUnlocked ()) return "Effect bank / NAM manifest firmware metadata differ";
+    return effectBankLoaded ? juce::String (static_cast<int> (effectBank.size ())) + " effect assignments from JSON" : juce::String ();
+}
+
 std::uint64_t GP200ModSync::getRevision ()
 {
-    reloadIfChanged ();
     const juce::ScopedLock lock (syncLock);
     return revision;
 }
 
 bool GP200ModSync::isCustomCloAmp (juce::uint32 effectId)
 {
-    reloadIfChanged ();
     const juce::ScopedLock lock (syncLock);
     const auto it = overrides.find (effectId);
     return it != overrides.end () && it->second.customCloAmp;
@@ -513,7 +698,6 @@ bool GP200ModSync::isCustomCloAmp (juce::uint32 effectId)
 
 bool GP200ModSync::isNamAmp (juce::uint32 effectId)
 {
-    reloadIfChanged ();
     const juce::ScopedLock lock (syncLock);
     const auto it = overrides.find (effectId);
     return it != overrides.end () && it->second.customNamAmp;
@@ -521,7 +705,6 @@ bool GP200ModSync::isNamAmp (juce::uint32 effectId)
 
 bool GP200ModSync::canWriteFactoryClo (int zeroBasedFactoryAmpIndex)
 {
-    reloadIfChanged ();
     const juce::ScopedLock lock (syncLock);
     if (metadataError.isNotEmpty () || zeroBasedFactoryAmpIndex < 0
         || zeroBasedFactoryAmpIndex >= static_cast<int> (modsync::ampIds.size ())) return false;
@@ -531,7 +714,6 @@ bool GP200ModSync::canWriteFactoryClo (int zeroBasedFactoryAmpIndex)
 
 juce::String GP200ModSync::getNamMetadataStatus ()
 {
-    reloadIfChanged ();
     const juce::ScopedLock lock (syncLock);
     if (metadataError.isNotEmpty ()) return metadataError;
     int count = 0;
@@ -542,7 +724,6 @@ juce::String GP200ModSync::getNamMetadataStatus ()
 
 juce::String GP200ModSync::getDisplayName (juce::uint32 effectId)
 {
-    reloadIfChanged ();
     const juce::ScopedLock lock (syncLock);
     const auto it = overrides.find (effectId);
     return it != overrides.end () ? it->second.displayName : juce::String{};
@@ -550,7 +731,6 @@ juce::String GP200ModSync::getDisplayName (juce::uint32 effectId)
 
 juce::String GP200ModSync::getSourceFile (juce::uint32 effectId)
 {
-    reloadIfChanged ();
     const juce::ScopedLock lock (syncLock);
     const auto it = overrides.find (effectId);
     return it != overrides.end () ? it->second.sourceFile : juce::String{};
@@ -558,7 +738,6 @@ juce::String GP200ModSync::getSourceFile (juce::uint32 effectId)
 
 juce::String GP200ModSync::getDescription (juce::uint32 effectId)
 {
-    reloadIfChanged ();
     const juce::ScopedLock lock (syncLock);
     const auto it = overrides.find (effectId);
     if (it == overrides.end ())
@@ -580,7 +759,8 @@ juce::String GP200ModSync::getDescription (juce::uint32 effectId)
 
 juce::uint32 GP200ModSync::getPreBankSourceEffectId (juce::uint32 preEffectId)
 {
-    reloadIfChanged ();
+    if (const auto entry = findEffectBankEntry (preEffectId, "PRE")) return entry->sourceEffectId;
+    if (hasEffectBank ()) return 0u;
     const juce::ScopedLock lock (syncLock);
     const auto it = preBankOverrides.find (preEffectId);
     return it != preBankOverrides.end () ? it->second.sourceEffectId : 0u;
@@ -588,7 +768,8 @@ juce::uint32 GP200ModSync::getPreBankSourceEffectId (juce::uint32 preEffectId)
 
 juce::String GP200ModSync::getPreBankDisplayName (juce::uint32 preEffectId)
 {
-    reloadIfChanged ();
+    if (const auto entry = findEffectBankEntry (preEffectId, "PRE")) return entry->displayName;
+    if (hasEffectBank ()) return {};
     const juce::ScopedLock lock (syncLock);
     const auto it = preBankOverrides.find (preEffectId);
     return it != preBankOverrides.end () ? it->second.displayName : juce::String{};
@@ -596,7 +777,8 @@ juce::String GP200ModSync::getPreBankDisplayName (juce::uint32 preEffectId)
 
 juce::String GP200ModSync::getPreBankSourceModule (juce::uint32 preEffectId)
 {
-    reloadIfChanged ();
+    if (const auto entry = findEffectBankEntry (preEffectId, "PRE")) return entry->sourceModule;
+    if (hasEffectBank ()) return {};
     const juce::ScopedLock lock (syncLock);
     const auto it = preBankOverrides.find (preEffectId);
     return it != preBankOverrides.end () ? it->second.sourceModule : juce::String{};
@@ -604,7 +786,8 @@ juce::String GP200ModSync::getPreBankSourceModule (juce::uint32 preEffectId)
 
 juce::String GP200ModSync::getPreBankDescription (juce::uint32 preEffectId)
 {
-    reloadIfChanged ();
+    if (const auto entry = findEffectBankEntry (preEffectId, "PRE")) return entry->profile;
+    if (hasEffectBank ()) return {};
     const juce::ScopedLock lock (syncLock);
     const auto it = preBankOverrides.find (preEffectId);
     if (it == preBankOverrides.end ()) return {};
@@ -615,7 +798,8 @@ juce::String GP200ModSync::getPreBankDescription (juce::uint32 preEffectId)
 
 juce::uint32 GP200ModSync::getWahConfigSourceEffectId (juce::uint32 wahEffectId)
 {
-    reloadIfChanged ();
+    if (const auto entry = findEffectBankEntry (wahEffectId, "WAH")) return entry->sourceEffectId;
+    if (hasEffectBank ()) return 0u;
     const juce::ScopedLock lock (syncLock);
     const auto it = wahConfigOverrides.find (wahEffectId);
     return it != wahConfigOverrides.end () ? it->second.sourceEffectId : 0u;
@@ -623,7 +807,8 @@ juce::uint32 GP200ModSync::getWahConfigSourceEffectId (juce::uint32 wahEffectId)
 
 juce::String GP200ModSync::getWahConfigDisplayName (juce::uint32 wahEffectId)
 {
-    reloadIfChanged ();
+    if (const auto entry = findEffectBankEntry (wahEffectId, "WAH")) return entry->displayName;
+    if (hasEffectBank ()) return {};
     const juce::ScopedLock lock (syncLock);
     const auto it = wahConfigOverrides.find (wahEffectId);
     return it != wahConfigOverrides.end () ? it->second.displayName : juce::String{};
@@ -631,7 +816,8 @@ juce::String GP200ModSync::getWahConfigDisplayName (juce::uint32 wahEffectId)
 
 juce::String GP200ModSync::getWahConfigSourceModule (juce::uint32 wahEffectId)
 {
-    reloadIfChanged ();
+    if (const auto entry = findEffectBankEntry (wahEffectId, "WAH")) return entry->sourceModule;
+    if (hasEffectBank ()) return {};
     const juce::ScopedLock lock (syncLock);
     const auto it = wahConfigOverrides.find (wahEffectId);
     return it != wahConfigOverrides.end () ? it->second.sourceModule : juce::String{};
@@ -639,7 +825,8 @@ juce::String GP200ModSync::getWahConfigSourceModule (juce::uint32 wahEffectId)
 
 juce::String GP200ModSync::getWahConfigDescription (juce::uint32 wahEffectId)
 {
-    reloadIfChanged ();
+    if (const auto entry = findEffectBankEntry (wahEffectId, "WAH")) return entry->profile;
+    if (hasEffectBank ()) return {};
     const juce::ScopedLock lock (syncLock);
     const auto it = wahConfigOverrides.find (wahEffectId);
     if (it == wahConfigOverrides.end ()) return {};

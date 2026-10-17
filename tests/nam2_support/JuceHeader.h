@@ -19,6 +19,7 @@
 #include <variant>
 #include <vector>
 namespace juce {
+inline constexpr int dontSendNotification=0;
 using uint8=std::uint8_t; using uint32=std::uint32_t; using int64=long long;
 class String {
 public:
@@ -60,6 +61,7 @@ public:
  Array<var>* getArray()const{auto p=std::get_if<List>(&data);return p?p->get():nullptr;}
  explicit operator int64()const{if(auto p=std::get_if<int>(&data))return *p;if(auto p=std::get_if<int64>(&data))return *p;if(auto p=std::get_if<double>(&data))return int64(*p);return 0;}
  explicit operator int()const{return int(static_cast<int64>(*this));}
+ explicit operator double()const{if(auto p=std::get_if<double>(&data))return *p;return double(static_cast<int64>(*this));}
  String toString()const{if(auto p=std::get_if<String>(&data))return *p;if(auto p=std::get_if<bool>(&data))return *p?"1":"0";if(isDouble()){std::ostringstream o;o<<std::get<double>(data);return o.str();}if(isInt()||isInt64())return String(static_cast<int64>(*this));return {};}
  var getProperty(Identifier key,var fallback)const;
 };
@@ -73,19 +75,21 @@ struct JSON {
  if(s.compare(at,4,"null")==0){at+=4;return {};}if(s.compare(at,4,"true")==0){at+=4;return true;}if(s.compare(at,5,"false")==0){at+=5;return false;}
  size_t start=at;while(at<s.size()&&(std::isdigit(static_cast<unsigned char>(s[at]))||s[at]=='-'||s[at]=='+'||s[at]=='.'||s[at]=='e'||s[at]=='E'))++at;if(at==start)throw std::runtime_error("json value");auto n=s.substr(start,at-start);if(n.find_first_of(".eE")!=std::string::npos)return std::stod(n);auto x=std::stoll(n);return x>=INT32_MIN&&x<=INT32_MAX?var(int(x)):var(int64(x));}
  };
- static var parse(String s){try{Parser p{s.s};auto v=p.val();p.ws();return p.at==p.s.size()?v:var();}catch(...){return {};}}
+ static inline unsigned parseCalls=0;
+ static var parse(String s){++parseCalls;try{Parser p{s.s};auto v=p.val();p.ws();return p.at==p.s.size()?v:var();}catch(...){return {};}}
  static std::string quote(String s){std::ostringstream o;o<<'"';for(unsigned char c:s.s){switch(c){case '"':o<<"\\\"";break;case '\\':o<<"\\\\";break;case '\n':o<<"\\n";break;case '\r':o<<"\\r";break;case '\t':o<<"\\t";break;default:if(c<32)o<<"\\u"<<std::hex<<std::setw(4)<<std::setfill('0')<<int(c);else o<<char(c);}}o<<'"';return o.str();}
  static String toString(const var& v,bool=false){if(v.isVoid())return "null";if(auto p=v.getDynamicObject()){std::string s="{";for(auto& [k,x]:p->fields){if(s.size()>1)s+=',';s+=quote(k)+":"+toString(x).s;}return s+"}";}if(auto a=v.getArray()){std::string s="[";for(auto& x:*a){if(s.size()>1)s+=',';s+=toString(x).s;}return s+"]";}if(v.isString())return quote(v.toString());if(v.isBool())return v.toString()=="1"?"true":"false";return v.toString();}
 };
 struct Result {bool success;String error;static Result ok(){return {true,{}};}static Result fail(String s){return {false,s};}bool failed()const{return !success;}bool wasOk()const{return success;}String getErrorMessage()const{return error;}};
 struct Time {int64 stamp=0;static inline double now=0;int64 toMilliseconds()const{return stamp;}static double getMillisecondCounterHiRes(){return now;}};
 struct File {
- std::filesystem::path p;static inline bool failWrites=false;static inline std::map<std::string,int64> stamps;static inline int64 nextStamp=1;
+ std::filesystem::path p;static inline unsigned statCalls=0,readCalls=0;static inline bool failWrites=false;static inline std::map<std::string,int64> stamps;static inline int64 nextStamp=1;
  enum SpecialLocationType{userDocumentsDirectory};File()=default;File(String s):p(s.s){}explicit File(std::filesystem::path s):p(std::move(s)){}
  static File getSpecialLocation(SpecialLocationType){return File(String(std::getenv("TEST_NAM2_DIR")));}
  File getChildFile(String x)const{return File(p/x.s);}File getParentDirectory()const{return File(p.parent_path());}
- bool existsAsFile()const{return std::filesystem::is_regular_file(p);}String loadFileAsString()const{std::ifstream f(p);return std::string(std::istreambuf_iterator<char>(f),{});}
- Time getLastModificationTime()const{auto key=p.string();auto i=stamps.find(key);return {i==stamps.end()?0:i->second};}
+ bool existsAsFile()const{++statCalls;return std::filesystem::is_regular_file(p);}String loadFileAsString()const{++readCalls;std::ifstream f(p);return std::string(std::istreambuf_iterator<char>(f),{});}
+ int64 getSize()const{++statCalls;return existsAsFile()?int64(std::filesystem::file_size(p)):0;}
+ Time getLastModificationTime()const{++statCalls;auto key=p.string();auto i=stamps.find(key);return {i==stamps.end()?0:i->second};}
  Result createDirectory()const{std::error_code ec;std::filesystem::create_directories(p,ec);return ec?Result::fail(ec.message()):Result::ok();}
  bool replaceWithText(String x)const{if(failWrites)return false;std::ofstream f(p);f<<x.s;bool ok=bool(f);if(ok)stamps[p.string()]=nextStamp++;return ok;}
  String getFileName()const{return p.filename().string();}String getFileNameWithoutExtension()const{return p.stem().string();}

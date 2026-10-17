@@ -1,0 +1,31 @@
+{
+  "release": "GP200 VST Generic Effect Bank 0.1.9",
+  "date": "2026-10-17",
+  "base": "NAM2 0.1.8 (user reported working)",
+  "firmware_modified": false,
+  "audio_callback_unchanged": true,
+  "midi_parameter_and_effect_serializers_unchanged": true,
+  "additional_periodic_midi_requests": 0,
+  "getters_file_io": 0,
+  "getters_json_parse": 0,
+  "gui_file_poll_interval_ms": 1000,
+  "tests": {
+    "regressions": "PASS",
+    "nam2_checks": 1309,
+    "nam2_cold_process_checks": 14,
+    "nam2_transport_checks": 116,
+    "generic_bank_assertions_including_100000_iteration_loop": 106744,
+    "generic_cold_process_assertions": 141,
+    "destinations": 80,
+    "assignable_sources_tested": 130,
+    "total_source_catalog_entries": 140,
+    "receive_checks": 10,
+    "catalog_validation": "PASS"
+  },
+  "juce_test_doubles": true,
+  "linked_juce_build": false,
+  "windows_build": false,
+  "gui_visual_test": false,
+  "hardware_test": false,
+  "timings_scope": "Host only, modeled JUCE/JSON/filesystem; not GP200 DSP or DAW latency. See benchmark.json."
+}

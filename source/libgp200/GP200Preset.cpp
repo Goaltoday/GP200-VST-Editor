@@ -86,7 +86,7 @@ juce::String GP200EffectSlot::getSummaryLine () const
 {
     const auto blockName = GP200PresetCodec::blockNameForSlotIndex (slotIndex >= 0 ? slotIndex : blockIndex);
     const auto state = enabled ? "ON " : "OFF";
-    const auto effectName = GP200PresetCodec::effectNameForId (effectId);
+    const auto effectName = GP200EffectDatabase::getEffectName (effectId, blockName);
 
     return blockName.paddedRight (' ', 4) + " " + juce::String (state).paddedRight (' ', 3) + "  " +
            effectName.paddedRight (' ', 22) + "  ID " + GP200PresetCodec::effectIdToHex (effectId);
@@ -98,7 +98,8 @@ juce::StringArray GP200EffectSlot::getDetailedLines () const
 
     lines.add (getSummaryLine ());
 
-    const auto* paramSet = GP200EffectParamDatabase::findParamsForEffect (effectId);
+    const auto* paramSet = GP200EffectParamDatabase::findParamsForEffect (
+        effectId, GP200PresetCodec::blockNameForSlotIndex (slotIndex >= 0 ? slotIndex : blockIndex));
 
     if (paramSet != nullptr && paramSet->count > 0)
     {

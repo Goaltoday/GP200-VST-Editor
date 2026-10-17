@@ -92,6 +92,8 @@ bool usesDelayTimeControls (const gp200::GP200EffectSlot& effect,
     // parameter ABI is the same as the Pure delay. Treat only this relocated
     // algorithm as a delay for the Time/Sync presentation.
     if (blockName.equalsIgnoreCase ("DLY")) return true;
+    if (const auto entry = gp200::GP200ModSync::findEffectBankEntry (effect.effectId, blockName))
+        return entry->sourceModule == "DLY";
     if (! blockName.equalsIgnoreCase ("PRE")) return false;
     const auto dynamicModule = gp200::GP200ModSync::getPreBankSourceModule (effect.effectId);
     return dynamicModule.equalsIgnoreCase ("DLY");
@@ -109,11 +111,26 @@ juce::String getDelaySyncTimeLabel (int index)
 
 bool isDelayTimeParameter (const gp200::GP200EffectParamInfo& param)
 {
-    return param.idx == 1 && juce::String (param.name).containsIgnoreCase ("Time");
+    const auto name = juce::String (param.name);
+    return name.equalsIgnoreCase ("Time") || name.equalsIgnoreCase ("Time A") || name.equalsIgnoreCase ("Time B");
 }
 
-int findDelayTimeSyncParamIndex (const gp200::GP200EffectParamSet& paramSet)
+int findDelayTimeSyncParamIndex (const gp200::GP200EffectParamSet& paramSet, int timeParamIndex = -1)
 {
+    if (timeParamIndex >= 0)
+        for (int i = 0; i < paramSet.count; ++i)
+            if (paramSet.params[i].idx == timeParamIndex)
+            {
+                const auto name = juce::String (paramSet.params[i].name);
+                const auto wanted = name.equalsIgnoreCase ("Time A") ? "A Sync"
+                                  : name.equalsIgnoreCase ("Time B") ? "B Sync" : "";
+                if (wanted[0] != 0)
+                    for (int j = 0; j < paramSet.count; ++j)
+                        if (juce::String (paramSet.params[j].name).equalsIgnoreCase (wanted)
+                            || (name.equalsIgnoreCase ("Time A") && juce::String (paramSet.params[j].name).equalsIgnoreCase ("Sync A"))
+                            || (name.equalsIgnoreCase ("Time B") && juce::String (paramSet.params[j].name).equalsIgnoreCase ("Sync B")))
+                            return paramSet.params[j].idx;
+            }
     for (int i = 0; i < paramSet.count; ++i)
     {
         const auto name = juce::String (paramSet.params[i].name);
@@ -133,9 +150,9 @@ int findDelayTimeSyncParamIndex (const gp200::GP200EffectParamSet& paramSet)
     return -1;
 }
 
-bool isDelayTimeSyncEnabled (const gp200::GP200EffectSlot& effect, const gp200::GP200EffectParamSet& paramSet)
+bool isDelayTimeSyncEnabled (const gp200::GP200EffectSlot& effect, const gp200::GP200EffectParamSet& paramSet, int timeParamIndex)
 {
-    const auto syncParamIndex = findDelayTimeSyncParamIndex (paramSet);
+    const auto syncParamIndex = findDelayTimeSyncParamIndex (paramSet, timeParamIndex);
 
     if (syncParamIndex < 0 || syncParamIndex >= static_cast<int> (effect.params.size ()))
         return false;
@@ -518,9 +535,15 @@ void EffectBlockComponent::setParameterValueForDisplay (int paramIndex, float va
 
     if (usesDelayTimeControls (effect, getBlockName ()) && paramSet != nullptr)
     {
-        const auto syncParamIndex = findDelayTimeSyncParamIndex (*paramSet);
+        bool changedTimeSync = false;
+        for (int i = 0; i < paramSet->count; ++i)
+            if (isDelayTimeParameter (paramSet->params[i])
+                && paramIndex == findDelayTimeSyncParamIndex (*paramSet, paramSet->params[i].idx)
+                && delayTimeSyncDisplayed[static_cast<std::size_t> (paramSet->params[i].idx)]
+                    != isDelayTimeSyncEnabled (effect, *paramSet, paramSet->params[i].idx))
+                changedTimeSync = true;
 
-        if (paramIndex == syncParamIndex)
+        if (changedTimeSync)
         {
             // The MIDI echo for Sync can arrive while the Sync slider is still
             // inside juce::Slider::mouseUp(). Rebuilding here would destroy that
@@ -541,7 +564,7 @@ void EffectBlockComponent::setParameterValueForDisplay (int paramIndex, float va
             {
                 control.valueLabel->setText (
                     gp200::GP200EffectParamDatabase::getDiscreteOptionLabel (
-                        effect.effectId, paramIndex, value),
+                        effect.effectId, paramIndex, value, getBlockName ()),
                     juce::dontSendNotification);
             }
 
@@ -655,6 +678,7 @@ void EffectBlockComponent::setBlendForDisplay (bool blend)
 void EffectBlockComponent::rebuildParameterControls ()
 {
     parameterControls.clear ();
+    delayTimeSyncDisplayed.fill (false);
 
     const auto* paramSet = gp200::GP200EffectParamDatabase::findParamsForEffect (effect.effectId, getBlockName ());
 
@@ -690,7 +714,8 @@ void EffectBlockComponent::rebuildParameterControls ()
 
         const auto usesDelayControls = usesDelayTimeControls (effect, getBlockName ());
         const auto isSyncedDelayTime =
-            usesDelayControls && isDelayTimeParameter (param) && isDelayTimeSyncEnabled (effect, *paramSet);
+            usesDelayControls && isDelayTimeParameter (param) && isDelayTimeSyncEnabled (effect, *paramSet, param.idx);
+        delayTimeSyncDisplayed[static_cast<std::size_t> (param.idx)] = isSyncedDelayTime;
 
         if (isSyncedDelayTime)
         {
@@ -710,8 +735,7 @@ void EffectBlockComponent::rebuildParameterControls ()
         }
         else
         {
-            const auto displayEffectId = gp200::GP200EffectParamDatabase::resolveEffectIdForModule (
-                effect.effectId, getBlockName ());
+            const auto displayEffectId = effect.effectId;
             // A Factory AMP loaded from CLO uses the common five-knob schema
             // (Gain, Volume, Bass, Middle, Treble). Do not apply discrete
             // options from the stock AMP that occupies the same effect ID:
@@ -721,14 +745,14 @@ void EffectBlockComponent::rebuildParameterControls ()
                 && (gp200::GP200ModSync::isCustomCloAmp (effect.effectId)
                     || gp200::GP200ModSync::isNamAmp (effect.effectId));
             control.usesDiscreteOptions = ! customFactoryAmp
-                && gp200::GP200EffectParamDatabase::hasDiscreteOptions (displayEffectId, param.idx);
+                && gp200::GP200EffectParamDatabase::hasDiscreteOptions (displayEffectId, param.idx, getBlockName ());
 
             if (control.usesDiscreteOptions)
             {
                 const auto minimum =
-                    gp200::GP200EffectParamDatabase::getDiscreteOptionMinimum (displayEffectId, param.idx);
+                    gp200::GP200EffectParamDatabase::getDiscreteOptionMinimum (displayEffectId, param.idx, getBlockName ());
                 const auto maximum =
-                    gp200::GP200EffectParamDatabase::getDiscreteOptionMaximum (displayEffectId, param.idx);
+                    gp200::GP200EffectParamDatabase::getDiscreteOptionMaximum (displayEffectId, param.idx, getBlockName ());
 
                 control.slider->setRange (minimum, maximum, 1.0);
                 control.slider->setDoubleClickReturnValue (true, param.defaultValue);
@@ -768,7 +792,7 @@ void EffectBlockComponent::rebuildParameterControls ()
                     gp200::GP200EffectParamDatabase::getDiscreteOptionLabel (
                         displayEffectId,
                         param.idx,
-                        effect.params[static_cast<std::size_t> (param.idx)]),
+                        effect.params[static_cast<std::size_t> (param.idx)], getBlockName ()),
                     juce::dontSendNotification);
             }
         }
@@ -814,8 +838,7 @@ void EffectBlockComponent::rebuildParameterControls ()
                 {
                     parameterControl.valueLabel->setText (
                         gp200::GP200EffectParamDatabase::getDiscreteOptionLabel (
-                            gp200::GP200EffectParamDatabase::resolveEffectIdForModule (
-                                effect.effectId, getBlockName ()), paramIndex, value),
+                            effect.effectId, paramIndex, value, getBlockName ()),
                         juce::dontSendNotification);
                     break;
                 }
@@ -1034,6 +1057,8 @@ juce::String EffectBlockComponent::getEffectName () const
 juce::String EffectBlockComponent::getEffectDisplayName (juce::uint32 effectId,
                                                          const juce::String& fallbackName) const
 {
+    if (const auto entry = gp200::GP200ModSync::findEffectBankEntry (effectId, getBlockName ()))
+        return entry->displayName;
     if (effectDisplayNameResolver)
     {
         const auto resolvedName = effectDisplayNameResolver (effectId).trim ();

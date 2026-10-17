@@ -287,6 +287,7 @@ juce::Result GP200SoundClone::buildFactoryAmpUpload (const juce::File& cloFile,
         return juce::Result::fail ("The selected Factory AMP CLO file does not exist.");
     if (!juce::isPositiveAndBelow (zeroBasedFactoryAmpIndex, 71))
         return juce::Result::fail ("The Factory AMP destination must be between 1 and 71.");
+    GP200ModSync::reloadIfChanged ();
     if (!GP200ModSync::canWriteFactoryClo (zeroBasedFactoryAmpIndex))
         return juce::Result::fail ("SnapTone requires a known CLO destination; NAM and stock AMP are protected.");
 
@@ -353,6 +354,7 @@ juce::Result GP200SoundClone::buildFactoryAmpRename (
 {
     if (!juce::isPositiveAndBelow (zeroBasedFactoryAmpIndex, 71))
         return juce::Result::fail ("The Factory AMP destination must be between 1 and 71.");
+    GP200ModSync::reloadIfChanged ();
     if (!GP200ModSync::canWriteFactoryClo (zeroBasedFactoryAmpIndex))
         return juce::Result::fail ("SnapTone requires a known CLO destination; NAM and stock AMP are protected.");
 

@@ -8,6 +8,7 @@
 #include "../source/libgp200/GP200EffectParamDatabase.h"
 namespace gp200 {
 using EffectParameters=std::array<float,effectParamCount>;
+struct GP200PresetCodec{static juce::String blockNameForSlotIndex(int i){static const char* modules[]={"PRE","WAH","DST","AMP","NR","CAB","EQ","MOD","DLY","RVB","VOL"};return modules[i];}};
 struct MidiConnection {
  mutable juce::CriticalSection stateLock;
  struct Output{std::vector<juce::MidiMessage> messages;void sendMessageNow(const juce::MidiMessage& m){messages.push_back(m);}}output;

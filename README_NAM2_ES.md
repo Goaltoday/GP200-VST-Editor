@@ -1,5 +1,7 @@
 # GP200 VST — NAM2 0.1.8
 
+Nota de continuidad: para la actualización 0.1.9, lee también `README_EFFECT_BANK_ES.md`. Esta guía describe el alcance original de 0.1.8.
+
 Esta entrega añade soporte de edición para los NAM A2 Lite 48 kHz M7OPT ya instalados con el generador Unified 1.3, perfiles GP-200 V180 y V182.
 
 ## Uso

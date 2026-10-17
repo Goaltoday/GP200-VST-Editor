@@ -1,0 +1,17 @@
+{
+  "audio": {
+    "file": "source/GP200Plugin/PluginProcessor.cpp",
+    "method": "AudioPluginAudioProcessor::processBlock (",
+    "sha256": "c941cdee0b3b37dd01d9d62e298c05247f52e5f88b3905c7a1d8755cf89c6a0c"
+  },
+  "parameters": {
+    "file": "source/libgp200/MidiConnection.cpp",
+    "method": "MidiConnection::buildParamChange (",
+    "sha256": "84e40ee7e2d162c02fb5d306e401fd7e04970a135712c38e7df39e18a8a1f638"
+  },
+  "effects": {
+    "file": "source/libgp200/MidiConnection.cpp",
+    "method": "MidiConnection::buildEffectChange (",
+    "sha256": "94683fda45430254e2babe0b5e3b600844d20f9672a4caeee17c619f1abee8cb"
+  }
+}

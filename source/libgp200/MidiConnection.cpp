@@ -335,6 +335,7 @@ bool MidiConnection::startFactoryAmpUpload (const juce::File& cloFile,
         return false;
     }
 
+    GP200ModSync::reloadIfChanged ();
     if (!GP200ModSync::canWriteFactoryClo (zeroBasedFactoryAmpIndex))
     {
         irUploadStatusText = "SnapTone operation blocked: destination is NAM, stock or not a known CLO mapping";
@@ -398,6 +399,7 @@ bool MidiConnection::startFactoryAmpRename (int zeroBasedFactoryAmpIndex,
         return false;
     }
 
+    GP200ModSync::reloadIfChanged ();
     if (!GP200ModSync::canWriteFactoryClo (zeroBasedFactoryAmpIndex))
     {
         irUploadStatusText = "SnapTone operation blocked: destination is NAM, stock or not a known CLO mapping";
@@ -467,6 +469,7 @@ void MidiConnection::processIRUpload ()
 
     if (irUploadPhase == IRUploadPhase::WaitingBeforeCommit)
     {
+        if (isFactoryAmpOperation) GP200ModSync::reloadIfChanged ();
         if (isFactoryAmpOperation && !GP200ModSync::canWriteFactoryClo (hot1FactoryAmpUploadIndex))
         {
             irUploadPhase = IRUploadPhase::Idle;
@@ -2280,7 +2283,8 @@ void MidiConnection::updateCurrentPresetEffectId (int blockIndex, juce::uint32 e
 
     EffectParameters defaultParams{};
 
-    if (const auto* paramSet = GP200EffectParamDatabase::findParamsForEffect (effectId))
+    if (const auto* paramSet = GP200EffectParamDatabase::findParamsForEffect (
+            effectId, GP200PresetCodec::blockNameForSlotIndex (blockIndex)))
     {
         for (int i = 0; i < paramSet->count; ++i)
         {

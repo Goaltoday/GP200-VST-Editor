@@ -104,6 +104,7 @@ class EffectBlockComponent final : public juce::Component
     bool expanded{false};
     std::vector<ParameterControl> parameterControls;
     bool delaySyncControlRebuildPending{false};
+    std::array<bool, gp200::effectParamCount> delayTimeSyncDisplayed{};
 
     bool dragCandidate{false};
     bool draggingForReorder{false};

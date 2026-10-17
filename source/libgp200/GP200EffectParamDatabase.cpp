@@ -1233,6 +1233,11 @@ const GP200EffectParamSet* GP200EffectParamDatabase::findParamsForEffect (juce::
 juce::uint32 GP200EffectParamDatabase::resolveEffectIdForModule (juce::uint32 effectId,
                                                                  const juce::String& moduleName)
 {
+    if (const auto entry = GP200ModSync::findEffectBankEntry (effectId, moduleName)) return entry->sourceEffectId;
+    if (GP200ModSync::hasEffectBank ()
+        && (moduleName.equalsIgnoreCase ("PRE") || moduleName.equalsIgnoreCase ("WAH")
+            || moduleName.equalsIgnoreCase ("DST") || moduleName.equalsIgnoreCase ("DIST")
+            || moduleName.equalsIgnoreCase ("EQ"))) return effectId;
     if (moduleName.equalsIgnoreCase ("PRE"))
     {
         if (const auto dynamicSource = GP200ModSync::getPreBankSourceEffectId (effectId); dynamicSource != 0u)
@@ -1250,6 +1255,10 @@ juce::uint32 GP200EffectParamDatabase::resolveEffectIdForModule (juce::uint32 ef
 const GP200EffectParamSet* GP200EffectParamDatabase::findParamsForEffect (juce::uint32 effectId,
                                                                           const juce::String& moduleName)
 {
+    // The lease keeps the returned C strings/table alive across bank replacement.
+    thread_local std::shared_ptr<const GP200EffectBankEntry> lease;
+    lease = GP200ModSync::findEffectBankEntry (effectId, moduleName);
+    if (lease) return &lease->parameterSet;
     const auto resolved = resolveEffectIdForModule (effectId, moduleName);
     return findParamsForEffect (resolved);
 }
@@ -1770,6 +1779,69 @@ juce::String GP200EffectParamDatabase::getDiscreteOptionLabel (juce::uint32 effe
         return entry->label;
 
     return juce::String (integerValue);
+}
+
+namespace
+{
+int bankParameterPosition (const GP200EffectBankEntry& entry, int idx)
+{
+    for (int i = 0; i < entry.parameterSet.count; ++i)
+        if (entry.parameters[static_cast<std::size_t> (i)].idx == idx) return i;
+    return -1;
+}
+}
+
+bool GP200EffectParamDatabase::hasDiscreteOptions (juce::uint32 effectId, int paramIndex, const juce::String& moduleName)
+{
+    if (const auto entry = GP200ModSync::findEffectBankEntry (effectId, moduleName))
+    {
+        const int pos = bankParameterPosition (*entry, paramIndex);
+        if (pos < 0) return false;
+        const auto at = static_cast<std::size_t> (pos);
+        const auto& param = entry->parameters[at];
+        return (param.minValue == 0 && param.maxValue == 1 && param.step == 1)
+            || (entry->sourceParameterIndices[at] >= 0
+                && hasDiscreteOptions (entry->sourceEffectId, entry->sourceParameterIndices[at]));
+    }
+    return hasDiscreteOptions (resolveEffectIdForModule (effectId, moduleName), paramIndex);
+}
+
+float GP200EffectParamDatabase::getDiscreteOptionMinimum (juce::uint32 effectId, int paramIndex, const juce::String& moduleName)
+{
+    if (const auto entry = GP200ModSync::findEffectBankEntry (effectId, moduleName))
+    {
+        const int pos = bankParameterPosition (*entry, paramIndex);
+        return pos >= 0 ? entry->parameters[static_cast<std::size_t> (pos)].minValue : 0.0f;
+    }
+    return getDiscreteOptionMinimum (resolveEffectIdForModule (effectId, moduleName), paramIndex);
+}
+
+float GP200EffectParamDatabase::getDiscreteOptionMaximum (juce::uint32 effectId, int paramIndex, const juce::String& moduleName)
+{
+    if (const auto entry = GP200ModSync::findEffectBankEntry (effectId, moduleName))
+    {
+        const int pos = bankParameterPosition (*entry, paramIndex);
+        return pos >= 0 ? entry->parameters[static_cast<std::size_t> (pos)].maxValue : 0.0f;
+    }
+    return getDiscreteOptionMaximum (resolveEffectIdForModule (effectId, moduleName), paramIndex);
+}
+
+juce::String GP200EffectParamDatabase::getDiscreteOptionLabel (juce::uint32 effectId, int paramIndex, float value,
+                                                             const juce::String& moduleName)
+{
+    if (const auto entry = GP200ModSync::findEffectBankEntry (effectId, moduleName))
+    {
+        const int pos = bankParameterPosition (*entry, paramIndex);
+        if (pos < 0) return {};
+        const auto at = static_cast<std::size_t> (pos);
+        const int sourceIndex = entry->sourceParameterIndices[at];
+        if (sourceIndex >= 0 && hasDiscreteOptions (entry->sourceEffectId, sourceIndex))
+            return getDiscreteOptionLabel (entry->sourceEffectId, sourceIndex, value);
+        const auto& param = entry->parameters[at];
+        if (param.minValue == 0 && param.maxValue == 1 && param.step == 1) return value >= 0.5f ? "ON" : "OFF";
+        return juce::String (juce::roundToInt (value));
+    }
+    return getDiscreteOptionLabel (resolveEffectIdForModule (effectId, moduleName), paramIndex, value);
 }
 
 } // namespace gp200
