@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(GP200VST VERSION 0.1.9)
+project(GP200VST VERSION 0.1.10)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -94,6 +94,8 @@ target_sources(GP200Plugin
         source/libgp200/GP200IR.cpp
         source/libgp200/GP200IR.h
         source/libgp200/GP200SoundClone.cpp
+        source/libgp200/GP200NAM.cpp
+        source/libgp200/GP200NAM.h
         source/libgp200/GP200SoundClone.h
 	source/GP200Plugin/ToneMatch/ToneMatchTypes.h
         source/GP200Plugin/ToneMatch/IToneMatchSolver.h
@@ -187,6 +189,8 @@ source_group(
         source/libgp200/GP200IR.cpp
         source/libgp200/GP200IR.h
         source/libgp200/GP200SoundClone.cpp
+        source/libgp200/GP200NAM.cpp
+        source/libgp200/GP200NAM.h
         source/libgp200/GP200SoundClone.h
 	source/GP200Plugin/ToneMatch/ToneMatchTypes.h
         source/GP200Plugin/ToneMatch/IToneMatchSolver.h

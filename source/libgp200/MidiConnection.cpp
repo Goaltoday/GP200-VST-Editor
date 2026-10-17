@@ -178,6 +178,9 @@ void MidiConnection::disconnect ()
     assignmentNamesStatusText = "Assignment names: not requested";
     ++presetRevision;
     ++assignmentNamesRevision;
+    if (namHotStage != NamHotStage::None) finishNamHot ("disconnected; pending write cancelled, persistence unconfirmed");
+    namHotNonce = (namHotNonce + 1u) & 65535u;
+
 }
 
 bool MidiConnection::isConnected () const
@@ -431,6 +434,104 @@ bool MidiConnection::startFactoryAmpRename (int zeroBasedFactoryAmpIndex,
     return true;
 }
 
+bool MidiConnection::startNamHotUpload (const juce::File& file, int index)
+{
+    const juce::ScopedLock lock (stateLock);
+    if (!midiOutput || routingStage != 0 || presetRestoreTransactionActive
+        || irUploadPhase != IRUploadPhase::Idle || soundCloneUploadPhase != SoundCloneUploadPhase::Idle)
+    { irUploadStatusText = "NAM HOT unavailable: MIDI disconnected or another transaction is busy"; return false; }
+    GP200ModSync::reloadIfChanged ();
+    if (index < 0 || index >= 71 || !GP200ModSync::isNamAmp (modsync::ampIds[static_cast<std::size_t> (index)]))
+    { irUploadStatusText = "NAM HOT blocked: destination is not a known NAM2 AMP"; return false; }
+    if (!isFactoryAmpDestinationInactiveLocked (index))
+    { irUploadStatusText = "NAM HOT: select a different AMP and wait for the live preset; bypass is not enough"; return false; }
+    std::vector<juce::uint8> weights;
+    const auto result = GP200NAM::readWeights (file, weights);
+    if (result.failed ()) { irUploadStatusText = "NAM HOT: " + result.getErrorMessage (); return false; }
+    namHotNonce = (namHotNonce + 1u) & 65535u; if (!namHotNonce) ++namHotNonce;
+    const unsigned writeNonce = (namHotNonce == 65535u ? 1u : namHotNonce + 1u);
+    namPendingUpload = GP200NAM::upload (weights, index, writeNonce);
+    irUpload = GP200NAM::query (index, namHotNonce);
+    namHotIndex = index; namHotStage = NamHotStage::Query;
+    hot1FactoryAmpUploadIndex = -1; hot2FactoryAmpRename = false;
+    irUploadChunkIndex = 0; irUploadLabel = "NAM HOT";
+    irUploadPhase = IRUploadPhase::WaitingAfterPrepare;
+    irUploadNextActionMs = juce::Time::getMillisecondCounterHiRes () + 250.0;
+    irUploadStatusText = "NAM HOT: checking firmware and destination (read only)";
+    lastMessageText = irUploadStatusText;
+    midiOutput->sendMessageNow (irUpload.prepareMessage);
+    return true;
+}
+
+void MidiConnection::finishNamHot (const juce::String& status)
+{
+    namHotStage = NamHotStage::None; namHotIndex = -1;
+    namPendingUpload = {}; irUpload = {}; irUploadPhase = IRUploadPhase::Idle;
+    irUploadStatusText = "NAM HOT: " + status; lastMessageText = irUploadStatusText;
+}
+
+void MidiConnection::processNamHotUpload ()
+{
+    const auto now = juce::Time::getMillisecondCounterHiRes ();
+    if (now < irUploadNextActionMs) return;
+    if (irUploadPhase == IRUploadPhase::WaitingAfterPrepare || irUploadPhase == IRUploadPhase::SendingChunks)
+    {
+        if (irUploadChunkIndex < static_cast<int> (irUpload.chunks.size ()))
+        {
+            midiOutput->sendMessageNow (irUpload.chunks[static_cast<std::size_t> (irUploadChunkIndex++)]);
+            irUploadPhase = IRUploadPhase::SendingChunks; irUploadNextActionMs = now + 40.0;
+            irUploadStatusText = "NAM HOT: sending " + juce::String (irUploadChunkIndex) + "/" + juce::String (static_cast<int> (irUpload.chunks.size ()));
+            return;
+        }
+        irUploadPhase = IRUploadPhase::WaitingBeforeCommit; irUploadNextActionMs = now + 400.0; return;
+    }
+    if (irUploadPhase == IRUploadPhase::WaitingBeforeCommit)
+    {
+        GP200ModSync::reloadIfChanged ();
+        if (routingStage != 0 || presetRestoreTransactionActive || namHotIndex < 0
+            || !GP200ModSync::isNamAmp (modsync::ampIds[static_cast<std::size_t> (namHotIndex)])
+            || !isFactoryAmpDestinationInactiveLocked (namHotIndex))
+        { finishNamHot ("cancelled before commit: destination or live preset changed"); return; }
+        irUploadPhase = IRUploadPhase::WaitingAfterCommit; irUploadNextActionMs = now + 10000.0;
+        irUploadStatusText = namHotStage == NamHotStage::Query
+            ? "NAM HOT: waiting for firmware capability response" : "NAM HOT: waiting for flash readback ACK";
+        midiOutput->sendMessageNow (irUpload.commitMessage); return;
+    }
+    if (irUploadPhase == IRUploadPhase::WaitingAfterCommit)
+        finishNamHot (namHotStage == NamHotStage::Query
+            ? "firmware did not confirm NH01; model write was not sent"
+            : "no readback ACK; persistence unconfirmed; transfer was not retried");
+}
+
+bool MidiConnection::handleNamHotAck (const juce::uint8* data, int size)
+{
+    GP200NAM::Ack ack;
+    if (!GP200NAM::decodeAck (data, size, ack)) return false;
+    if (namHotStage == NamHotStage::None || irUploadPhase != IRUploadPhase::WaitingAfterCommit
+        || ack.nonce != namHotNonce || namHotIndex < 0
+        || ack.id != modsync::ampIds[static_cast<std::size_t> (namHotIndex)]) return true;
+    if (ack.status != 1 || ack.physical >= 17)
+    {
+        finishNamHot (ack.status == 6
+            ? juce::String ("device could not verify flash; persistence unconfirmed")
+            : "device rejected operation (status " + juce::String (static_cast<int> (ack.status)) + ")");
+        return true;
+    }
+    if (namHotStage == NamHotStage::Query)
+    {
+        namHotPhysical = ack.physical;
+        namHotNonce = (namHotNonce == 65535u ? 1u : namHotNonce + 1u);
+        irUpload = std::move (namPendingUpload); namHotStage = NamHotStage::Write;
+        irUploadChunkIndex = 0; irUploadPhase = IRUploadPhase::WaitingAfterPrepare;
+        irUploadNextActionMs = juce::Time::getMillisecondCounterHiRes () + 250.0;
+        irUploadStatusText = "NAM HOT: firmware confirmed; preparing model transfer";
+        midiOutput->sendMessageNow (irUpload.prepareMessage); return true;
+    }
+    if (ack.physical != namHotPhysical) return true;
+    finishNamHot ("flash verified; select the destination AMP. Name and NAM2 controls are retained");
+    return true;
+}
+
 void MidiConnection::processIRUpload ()
 {
     const juce::ScopedLock lock (stateLock);
@@ -440,6 +541,8 @@ void MidiConnection::processIRUpload ()
     const auto now = juce::Time::getMillisecondCounterHiRes ();
     if (now < irUploadNextActionMs)
         return;
+
+    if (namHotStage != NamHotStage::None) { processNamHotUpload (); return; }
 
     const bool isFactoryAmpOperation = hot1FactoryAmpUploadIndex >= 0;
     const double chunkDelayMs      = isFactoryAmpOperation ? 40.0   : 30.0;
@@ -3528,6 +3631,8 @@ void MidiConnection::parseGP200SysEx (const juce::uint8* data, int size)
 
     if (!isGP200Header)
         return;
+
+    if (handleNamHotAck (data, size)) return;
 
     if (handleModSyncResponse (data, size)) return;
 

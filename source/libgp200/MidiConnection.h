@@ -13,6 +13,7 @@
 #include "GP200ModSyncProtocol.h"
 #include "GP200IR.h"
 #include "GP200SoundClone.h"
+#include "GP200NAM.h"
 #include "GP200PresetNameScanner.h"
 
 #include <JuceHeader.h>
@@ -73,6 +74,7 @@ class MidiConnection final : private juce::MidiInputCallback, private juce::Time
                                 const juce::String& requestedDisplayName);
     bool startFactoryAmpRename (int zeroBasedFactoryAmpIndex,
                                 const juce::String& requestedDisplayName);
+    bool startNamHotUpload (const juce::File&, int zeroBasedFactoryAmpIndex);
     void processIRUpload ();
     bool isIRUploadInProgress () const;
     juce::String getIRUploadStatusText () const;
@@ -162,6 +164,9 @@ class MidiConnection final : private juce::MidiInputCallback, private juce::Time
     double presetReadStartedMs{0}, presetReadResumeMs{0}, modePollMs{0};
     int presetReadRetries{0};
     bool presetReadIsLive{false};
+    void processNamHotUpload ();
+    bool handleNamHotAck (const juce::uint8*, int);
+    void finishNamHot (const juce::String&);
     bool isFactoryAmpDestinationInactiveLocked (int zeroBasedFactoryAmpIndex) const;
     bool processModSyncStartup (double nowMs);
     bool handleModSyncResponse (const juce::uint8* data, int size);
@@ -320,6 +325,11 @@ class MidiConnection final : private juce::MidiInputCallback, private juce::Time
 
     enum class IRUploadPhase { Idle, WaitingAfterPrepare, SendingChunks, WaitingBeforeCommit, WaitingAfterCommit };
     GP200IRUpload irUpload;
+    GP200IRUpload namPendingUpload;
+    enum class NamHotStage { None, Query, Write };
+    NamHotStage namHotStage{NamHotStage::None};
+    int namHotIndex{-1};
+    unsigned namHotNonce{0}, namHotPhysical{0};
     IRUploadPhase irUploadPhase{IRUploadPhase::Idle};
     int irUploadChunkIndex{0};
     int hot1FactoryAmpUploadIndex{-1};

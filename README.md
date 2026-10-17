@@ -1,3 +1,5 @@
+Esta entrega es **0.1.10 NAM HOT experimental**, basada en 0.1.9. Consulta `README_NAM_HOT_ES.md` para el firmware 1.4, capacidad compartida y pruebas pendientes. Se entregan fuentes; no hay VST3 Windows compilado.
+
 # GP200 VST Editor
 
 A VST3 editor for the Valeton GP-200. Connect the pedal to your computer over USB MIDI to edit presets, manage IR and SnapTone libraries, use the tuner, and capture and compare audio with Tone Match.

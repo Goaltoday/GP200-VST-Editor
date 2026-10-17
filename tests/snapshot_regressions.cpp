@@ -52,6 +52,7 @@ bool isIRUploadInProgress(){return irUploadPhase!=IRUploadPhase::Idle;}bool isSo
 std::uint64_t presetRevision=1,livePresetRevision=1;
 juce::String currentPresetName="test",currentPresetDumpStatusText,lastMessageText;
 bool adjustmentWritePending=false,sceneRefreshPending=false,restoreChainMetadataReadback=false;std::uint32_t adjustmentWriteExpected=0;std::uint64_t sceneChangeRevision=0;
+int remoteSceneStatus=-1,remoteSceneSlot=-1;double remoteSceneDeadline=0,remoteSceneLastSend=0;
 int nativeRoutingMode=0;bool blendWritePending=false,blendWriteMarked=false;int blendWriteSlot=-1;std::uint64_t blendWriteBaseline=0;float blendWriteExpected=50.0f;double blendWriteDeadline=0;
 std::vector<std::pair<int,float>> parameterWrites;
 bool sendParamChange(int block,int param,juce::uint32,float value){parameterWrites.push_back({param,value});std::memcpy(currentPresetDecodedData.v.data()+effectBlockStart+block*effectBlockSize+paramsOffset+param*4,&value,4);return true;}
@@ -65,6 +66,11 @@ bool sendPatchVolume(int){return true;}bool sendPatchTempoBpm(int){return true;}
 void adoptCurrentPresetSnapshot(int slot,juce::String name,juce::MemoryBlock data){currentSlot=slot;currentPresetName=name;currentPresetDecodedData=data;currentPresetDataIsLive=false;++presetRevision;}
 bool isConnected()const{return midiOutput!=nullptr;}void stopTimer(){stopped=true;}void processIRUpload(){irTicks++;}void processSoundCloneUpload(){cloneTicks++;}void finishModSyncFailure(juce::String){modSyncActive=false;}bool requestCurrentPresetFromGP200(){return sendStateDumpRequestUnlocked();}void processStartupHandshake(){}void processPresetNameScan(){scanTicks++;}
 static juce::String sanitizePresetNameForStore(juce::String x){return x;}static std::vector<juce::uint8> buildStorePresetCommit(int slot,juce::String){return {0xf0,(juce::uint8)slot,0xf7};}
+int getRemoteSceneStatus () const;
+bool isSceneCommandPending () const;
+bool sendSceneCommand (int command);
+static std::vector<juce::uint8> buildParamChange (int blockIndex, int paramIndex, juce::uint32 effectId, float value);
+static std::array<juce::uint8, 2> encodeDisplayValue (float value);
 bool sendChainAdjustment (int frames, bool inverted, int expectedSlot);
 std::uint64_t getSceneChangeRevision () const;
 bool handleSceneChangeNotification (const juce::uint8* data, int size);
@@ -103,6 +109,97 @@ void endPresetRestoreTransaction (int expectedRoutingMode = -1);
 bool sendPresetRestoreRoutingMode (int expectedSlot, int mode);
 bool storeCurrentPresetToGP200 ();
 };
+int MidiConnection::getRemoteSceneStatus () const
+{
+    const juce::ScopedLock lock(stateLock);
+    return remoteSceneSlot==currentSlot ? remoteSceneStatus : -1;
+}
+bool MidiConnection::isSceneCommandPending () const
+{
+    const juce::ScopedLock lock(stateLock);
+    return juce::Time::getMillisecondCounterHiRes()<remoteSceneDeadline;
+}
+bool MidiConnection::sendSceneCommand (int command)
+{
+    const juce::ScopedLock lock(stateLock);
+    const auto now=juce::Time::getMillisecondCounterHiRes();
+    if(command<0 || command>10 || midiOutput==nullptr || !currentPresetDataIsLive
+       || currentSlot<0 || currentSlot>255 || sceneRefreshPending || routingStage!=0
+       || blendWritePending || presetRestoreTransactionActive || modSyncActive
+       || presetDumpSlot>=0 || currentStateRequestPending
+       || irUploadPhase!=IRUploadPhase::Idle || soundCloneUploadPhase!=SoundCloneUploadPhase::Idle
+       || now<remoteSceneDeadline || now-remoteSceneLastSend<500.0) return false;
+    if(remoteSceneSlot!=currentSlot || remoteSceneStatus<0)return false;
+    if(command>=3 && remoteSceneStatus!=5 && !(remoteSceneStatus>=0 && remoteSceneStatus<4))return false;
+    const auto word=0x53430000u | (static_cast<std::uint32_t>(currentSlot)<<8) | static_cast<std::uint32_t>(command);
+    const auto preset=GP200PresetCodec::decodeLivePresetDump(currentPresetDecodedData);
+    if(!preset.isValid)return false;
+    // P15 is the command mailbox, not one of the 15 stored parameters.
+    const auto bytes=buildParamChange(10,15,preset.effects[10].effectId,std::bit_cast<float>(word));
+    midiOutput->sendMessageNow(juce::MidiMessage::createSysExMessage(bytes.data()+1,static_cast<int>(bytes.size()-2)));
+    remoteSceneLastSend=now;remoteSceneDeadline=now+2500.0;
+    lastMessageText="Scene command sent: awaiting GP200 confirmation";
+    return true;
+}
+std::vector<juce::uint8> MidiConnection::buildParamChange (int blockIndex, int paramIndex, juce::uint32 effectId, float value)
+{
+    juce::uint8 decoded[24]{};
+
+    decoded[2] = 0x04;
+    decoded[8] = 0x05;
+    decoded[10] = 0x0C;
+    decoded[12] = static_cast<juce::uint8> (blockIndex & 0x0F);
+    decoded[13] = static_cast<juce::uint8> (paramIndex & 0x0F);
+
+    const auto displayValue = encodeDisplayValue (value);
+    decoded[14] = displayValue[0];
+    decoded[15] = displayValue[1];
+
+    decoded[16] = static_cast<juce::uint8> (effectId & 0xFF);
+    decoded[17] = static_cast<juce::uint8> ((effectId >> 8) & 0xFF);
+    decoded[18] = static_cast<juce::uint8> ((effectId >> 16) & 0xFF);
+    decoded[19] = static_cast<juce::uint8> ((effectId >> 24) & 0xFF);
+
+    std::memcpy (decoded + 20, &value, sizeof (float));
+
+    const auto nibbles = nibbleEncode (decoded, 24);
+
+    std::vector<juce::uint8> message;
+    message.reserve (62);
+
+    message.push_back (0xF0);
+    message.push_back (0x21);
+    message.push_back (0x25);
+    message.push_back (0x7E);
+    message.push_back (0x47);
+    message.push_back (0x50);
+    message.push_back (0x2D);
+    message.push_back (0x32);
+    message.push_back (0x12);
+    message.push_back (0x18);
+    message.push_back (0x00);
+    message.push_back (0x00);
+    message.push_back (0x00);
+
+    message.insert (message.end (), nibbles.begin (), nibbles.end ());
+
+    message.push_back (0xF7);
+
+    return message;
+}
+std::array<juce::uint8, 2> MidiConnection::encodeDisplayValue (float value)
+{
+    int encodedValue = 0;
+
+    if (std::isfinite (value) && value > 0.0f)
+    {
+        encodedValue = static_cast<int> (std::round (16367.0f + 16.0f * std::log2 (value)));
+        encodedValue = juce::jlimit (0, 0xFFFF, encodedValue);
+    }
+
+    return {static_cast<juce::uint8> (encodedValue & 0xFF),
+            static_cast<juce::uint8> ((encodedValue >> 8) & 0xFF)};
+}
 bool MidiConnection::sendChainAdjustment (int frames, bool inverted, int expectedSlot)
 {
     const juce::ScopedLock lock (stateLock);
@@ -132,7 +229,9 @@ bool MidiConnection::handleSceneChangeNotification (const juce::uint8* data, int
     const int slot = sceneChangeSlot(data,size);
     if (slot < 0) return false;
     if (slot != currentSlot) return true; // Discard an event from a previous slot.
+    if(((data[41]<<4)|data[42])==0x52 || (remoteSceneSlot==slot && remoteSceneStatus>=0)){remoteSceneStatus=sceneStatus(data,size); remoteSceneSlot=slot; remoteSceneDeadline=0;}
     ++sceneChangeRevision;
+    if(sceneStatus(data,size)>=4) return true;
     sceneRefreshPending=true; currentPresetDataIsLive=false; ++presetRevision;
     blendWritePending=false; adjustmentWritePending=false; restoreChainMetadataReadback=false;
     if(presetRestoreTransactionActive) {
@@ -216,6 +315,11 @@ MidiConnection::RoutingStateSnapshot MidiConnection::getRoutingStateSnapshot (bo
 }
 void MidiConnection::timerCallback ()
 {
+    { const juce::ScopedLock lock(stateLock);
+      if(remoteSceneDeadline>0 && juce::Time::getMillisecondCounterHiRes()>=remoteSceneDeadline) {
+          remoteSceneDeadline=0;lastMessageText="Scene command not confirmed; no automatic write retry";
+      }
+    }
     if (!isConnected ()) { stopTimer (); return; }
     const juce::ScopedLock lock (stateLock);
     // These operations belong to the connection, never to the editor window.
@@ -295,6 +399,7 @@ bool MidiConnection::canSaveCurrentPreset () const
     const int boundary = isExtendedRoutingMode (routingModeSnapshot.mode) ? routingModeSnapshot.mode & 15 : preset.fxLoopSend;
     return preset.isValid && validFlexibleRouting (preset.routingOrder, preset.fxLoopSend, boundary, preset.fxLoopReturn)
         && midiOutput != nullptr && currentSlot >= 0 && currentPresetDataIsLive && routingStage == 0
+        && juce::Time::getMillisecondCounterHiRes()>=remoteSceneDeadline
         && !blendWritePending && !presetRestoreTransactionActive && !currentStateRequestPending && presetDumpSlot < 0
         && irUploadPhase == IRUploadPhase::Idle && soundCloneUploadPhase == SoundCloneUploadPhase::Idle
         && routingModeSnapshot.slot == currentSlot && routingModeSnapshot.revision > presetModeBaseline
@@ -656,7 +761,7 @@ bool MidiConnection::requestRoutingModeFromGP200 ()
 bool MidiConnection::sendReorderEffects (const RoutingOrder& routingOrder, int fxLoopSend, int fxLoopReturn)
 {
     const juce::ScopedLock lock (stateLock);
-    if (sceneRefreshPending) { lastMessageText="Scene changed: waiting for fresh pedal state"; return false; }
+    if (sceneRefreshPending || juce::Time::getMillisecondCounterHiRes()<remoteSceneDeadline) { lastMessageText="Scene changed: waiting for fresh pedal state"; return false; }
     if (midiOutput == nullptr)
     {
         lastMessageText = "Cannot reorder effects: MIDI output not open";
@@ -808,6 +913,7 @@ void MidiConnection::beginPresetRestoreTransaction ()
     const juce::ScopedLock lock (stateLock);
 
     blendWritePending = false; adjustmentWritePending=false; restoreChainMetadataReadback=false; sceneRefreshPending=false;
+    remoteSceneStatus=-1; remoteSceneSlot=-1; remoteSceneDeadline=0;
     if (routingStage != 0) failRoutingTransaction ("Recall started");
     currentPresetDataIsLive = false;
     routingModeSnapshot.mode = -1; ++routingModeSnapshot.revision;

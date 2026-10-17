@@ -65,7 +65,7 @@ public:
  String toString()const{if(auto p=std::get_if<String>(&data))return *p;if(auto p=std::get_if<bool>(&data))return *p?"1":"0";if(isDouble()){std::ostringstream o;o<<std::get<double>(data);return o.str();}if(isInt()||isInt64())return String(static_cast<int64>(*this));return {};}
  var getProperty(Identifier key,var fallback)const;
 };
-struct DynamicObject {std::map<String,var> fields;void setProperty(Identifier key,var v){fields[key]=std::move(v);}var getProperty(Identifier key)const{auto i=fields.find(key);return i==fields.end()?var():i->second;}};
+struct DynamicObject {std::map<String,var> fields;struct Properties {const std::map<String,var>* fields;int size()const{return int(fields->size());}Identifier getName(int i)const{auto p=fields->begin();std::advance(p,i);return p->first;}};Properties getProperties()const{return {&fields};}bool hasProperty(Identifier k)const{return fields.find(k)!=fields.end();}void setProperty(Identifier key,var v){fields[key]=std::move(v);}var getProperty(Identifier key)const{auto i=fields.find(key);return i==fields.end()?var():i->second;}};
 inline var var::getProperty(Identifier key,var fallback)const{auto p=getDynamicObject();if(!p)return fallback;auto i=p->fields.find(key);return i==p->fields.end()?fallback:i->second;}
 struct JSON {
  struct Parser {std::string s;size_t at=0;void ws(){while(at<s.size()&&std::isspace(static_cast<unsigned char>(s[at])))++at;}char take(){if(at==s.size())throw std::runtime_error("json eof");return s[at++];}void expect(char c){ws();if(take()!=c)throw std::runtime_error("json token");}

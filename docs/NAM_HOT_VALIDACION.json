@@ -1,0 +1,19 @@
+{
+  "version": "0.1.10 experimental",
+  "baseline": "0.1.9",
+  "unchanged_sha256": {
+    "source/GP200Plugin/PluginProcessor.cpp": "71b71a823ff77f65b64cb18f731fcd4f02e01c55be68cb9b855411480e18da15",
+    "source/libgp200/GP200ModSync.cpp": "5c5c7a57e0b5c5cb7c24745a79793ab342a028057e17a940b7612c61cd5922a0",
+    "source/libgp200/GP200EffectParamDatabase.cpp": "741df0c43b12dcfc7e413ca879effa774ef2a736239e7251d9977d7b30c60336"
+  },
+  "full_regression_suite_passed": true,
+  "nam_import_and_transport_checks": 7696,
+  "nam2_checks": 1309,
+  "nam2_cold_checks": 14,
+  "nam2_transport_checks": 116,
+  "generic_bank_checks": 106744,
+  "generic_bank_cold_checks": 141,
+  "no_periodic_midi_added": true,
+  "physical_device_tested": false,
+  "windows_vst3_built": false
+}

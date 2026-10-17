@@ -1,0 +1,27 @@
+{
+  "juce_commit": "51a8a6d7aeae7326956d747737ccf1575e61e209",
+  "juce_release": "8.0.6",
+  "GP200NAM_full_syntax": true,
+  "MidiConnection_full_syntax": true,
+  "editor_new_errors_vs_0_1_9": 0,
+  "editor_full_syntax_passed": false,
+  "editor_baseline_errors": [
+    "default member initializer for \u2018tonematch::ToneAnalysis::Options::fftOrder\u2019 required before the end of its enclosing class",
+    "default member initializer for \u2018tonematch::ToneAnalysis::Options::overlapRatio\u2019 required before the end of its enclosing class",
+    "default member initializer for \u2018tonematch::ToneAnalysis::Options::silenceThresholdDb\u2019 required before the end of its enclosing class",
+    "default member initializer for \u2018tonematch::ToneAnalysis::Options::clippingThreshold\u2019 required before the end of its enclosing class",
+    "default member initializer for \u2018tonematch::ToneAnalysis::Options::minimumFrequencyHz\u2019 required before the end of its enclosing class",
+    "default member initializer for \u2018tonematch::ToneAnalysis::Options::maximumFrequencyHz\u2019 required before the end of its enclosing class",
+    "default member initializer for \u2018tonematch::ToneAnalysis::Options::powerFloor\u2019 required before the end of its enclosing class",
+    "default member initializer for \u2018tonematch::ToneAnalysis::Options::robustGroupCount\u2019 required before the end of its enclosing class",
+    "default member initializer for \u2018tonematch::ToneAnalysis::Options::confidenceReferenceDeviationDb\u2019 required before the end of its enclosing class",
+    "default member initializer for \u2018tonematch::ToneMatchComparison::Options::minimumFrequencyHz\u2019 required before the end of its enclosing class",
+    "default member initializer for \u2018tonematch::ToneMatchComparison::Options::maximumFrequencyHz\u2019 required before the end of its enclosing class",
+    "default member initializer for \u2018tonematch::ToneMatchComparison::Options::outputPointCount\u2019 required before the end of its enclosing class",
+    "default member initializer for \u2018tonematch::ToneMatchComparison::Options::levelReferenceMinimumHz\u2019 required before the end of its enclosing class",
+    "default member initializer for \u2018tonematch::ToneMatchComparison::Options::levelReferenceMaximumHz\u2019 required before the end of its enclosing class",
+    "default member initializer for \u2018tonematch::ToneMatchComparison::Options::minimumConfidenceForLevel\u2019 required before the end of its enclosing class"
+  ],
+  "linked_plugin_built": false,
+  "windows_vst3_built": false
+}

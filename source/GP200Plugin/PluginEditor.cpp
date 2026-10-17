@@ -758,6 +758,12 @@ private:
     std::unique_ptr<juce::PropertiesFile> settings;
 };
 
+bool namHotDestination(int index)
+{
+    return index >= 0 && index < 71 && gp200::GP200ModSync::isNamAmp (
+        gp200::modsync::ampIds[static_cast<std::size_t> (index)]);
+}
+
 class SoundCloneImportComponent final : public juce::Component,
                                               private juce::ListBoxModel,
                                               private juce::Timer
@@ -802,11 +808,11 @@ public:
         options.osxLibrarySubFolder = "Application Support";
         settings = std::make_unique<juce::PropertiesFile> (options);
 
-        pathLabel.setText ("Clone folder", juce::dontSendNotification);
+        pathLabel.setText ("Model folder", juce::dontSendNotification);
         pathLabel.setColour (juce::Label::textColourId, mutedTextColour);
 
         pathEditor.setTextToShowWhenEmpty (
-            "Choose or type a folder containing .clo or .tone files",
+            "Choose a folder containing .clo, .tone or .nam files",
             mutedTextColour.withAlpha (0.65f));
         pathEditor.setFont (gp200ui::regular (14.75f));
         pathEditor.setColour (juce::TextEditor::backgroundColourId, panelColour);
@@ -883,7 +889,7 @@ public:
         importButton.setEnabled (false);
         importButton.onClick = [this] { importSelectedFile (); };
 
-        statusLabel.setText ("Choose a folder to list its .clo and .tone files.",
+        statusLabel.setText ("Choose a folder to list its .clo, .tone and .nam files.",
                              juce::dontSendNotification);
         statusLabel.setColour (juce::Label::textColourId, mutedTextColour);
         statusLabel.setJustificationType (juce::Justification::centredLeft);
@@ -969,10 +975,10 @@ private:
             const bool nam = gp200::GP200ModSync::isNamAmp (effect.effectId);
             destinationBox.addItem ("Factory AMP " + juce::String (factoryIndex + 1) + " - "
                                         + gp200::GP200EffectDatabase::getEffectName (effect.effectId)
-                                        + (nam ? " [NAM - protected]" : ""),
+                                        + (nam ? " [NAM HOT · .nam only]" : ""),
                                     1001 + factoryIndex);
             destinationBox.setItemEnabled (1001 + factoryIndex,
-                gp200::GP200ModSync::canWriteFactoryClo (factoryIndex));
+                gp200::GP200ModSync::canWriteFactoryClo (factoryIndex) || nam);
             ++factoryIndex;
         }
 
@@ -1222,7 +1228,7 @@ private:
         for (const auto& file : allFiles)
         {
             const auto extension = file.getFileExtension ();
-            if (extension.equalsIgnoreCase (".clo") || extension.equalsIgnoreCase (".tone"))
+            if (extension.equalsIgnoreCase (".clo") || extension.equalsIgnoreCase (".tone") || extension.equalsIgnoreCase (".nam"))
                 cloneFiles.push_back (file);
         }
 
@@ -1267,9 +1273,12 @@ private:
         if (selectedId <= 0)
             return;
 
-        if (selectedId >= 1001 && !gp200::GP200ModSync::canWriteFactoryClo (selectedId - 1001))
+        const bool namFile = entry.file.getFileExtension ().equalsIgnoreCase (".nam");
+        const bool namDestination = selectedId >= 1001 && namHotDestination (selectedId - 1001);
+        if (namFile != namDestination || (selectedId >= 1001 && !namDestination
+            && !gp200::GP200ModSync::canWriteFactoryClo (selectedId - 1001)))
         {
-            statusLabel.setText ("NAM and unmapped AMP destinations are protected from SnapTone operations.",
+            statusLabel.setText ("A .nam file requires a NAM2 destination; SnapTone files require a CLO destination.",
                                  juce::dontSendNotification);
             return;
         }
@@ -1331,7 +1340,10 @@ private:
         const bool writable = (selectedId >= 1 && selectedId <= 10)
             || (selectedId >= 1001 && selectedId <= 1071
                 && gp200::GP200ModSync::canWriteFactoryClo (selectedId - 1001));
-        importButton.setEnabled (selectedFile && writable);
+        const bool namDestination = selectedId >= 1001 && namHotDestination (selectedId - 1001);
+        const bool namFile = selectedFile && entries[static_cast<std::size_t> (selectedRow)].file
+            .getFileExtension ().equalsIgnoreCase (".nam");
+        importButton.setEnabled (selectedFile && (namFile ? namDestination : writable));
         renameEditor.setEnabled (writable);
         renameButton.setEnabled (writable);
     }
@@ -3378,7 +3390,7 @@ void AudioPluginAudioProcessorEditor::openSoundCloneWindow ()
     }
 
     juce::DialogWindow::LaunchOptions options;
-    options.dialogTitle = "Sound Clone — SnapTone / Factory AMP CLO";
+    options.dialogTitle = "Models — SnapTone / Factory CLO / NAM HOT";
     options.dialogBackgroundColour = backgroundColour;
     options.escapeKeyTriggersCloseButton = true;
     options.useNativeTitleBar = true;
@@ -3394,8 +3406,9 @@ void AudioPluginAudioProcessorEditor::openSoundCloneWindow ()
         {
             if (safeThis == nullptr)
                 return juce::String ();
-            if (safeThis->midiConnection.isIRUploadInProgress ())
-                return safeThis->midiConnection.getIRUploadStatusText ();
+            const auto irStatus = safeThis->midiConnection.getIRUploadStatusText ();
+            if (safeThis->midiConnection.isIRUploadInProgress () || irStatus.startsWith ("NAM HOT"))
+                return irStatus;
             return safeThis->midiConnection.getSoundCloneUploadStatusText ();
         },
         [safeThis = juce::Component::SafePointer<AudioPluginAudioProcessorEditor> (this)]
@@ -3435,6 +3448,15 @@ void AudioPluginAudioProcessorEditor::importSoundCloneFile (
     if (globalSlot >= 1000)
     {
         const auto factoryAmpIndex = globalSlot - 1000;
+        if (file.getFileExtension ().equalsIgnoreCase (".nam"))
+        {
+            if (!midiConnection.startNamHotUpload (file, factoryAmpIndex))
+                juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+                    "NAM HOT import", midiConnection.getIRUploadStatusText ());
+            effectsStatusText = midiConnection.getIRUploadStatusText ();
+            repaint ();
+            return;
+        }
         if (!midiConnection.startFactoryAmpUpload (file, factoryAmpIndex, requestedName))
         {
             effectsStatusText = midiConnection.getIRUploadStatusText ();
