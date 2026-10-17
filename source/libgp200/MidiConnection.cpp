@@ -474,30 +474,46 @@ void MidiConnection::processNamHotUpload ()
 {
     const auto now = juce::Time::getMillisecondCounterHiRes ();
     if (now < irUploadNextActionMs) return;
+
     if (irUploadPhase == IRUploadPhase::WaitingAfterPrepare || irUploadPhase == IRUploadPhase::SendingChunks)
     {
-        if (irUploadChunkIndex < static_cast<int> (irUpload.chunks.size ()))
+        const auto chunkCount = static_cast<int> (irUpload.chunks.size ());
+        if (irUploadChunkIndex >= chunkCount)
+        { finishNamHot ("invalid transfer state; no final packet sent"); return; }
+
+        const bool isLastChunk = irUploadChunkIndex + 1 == chunkCount;
+        if (isLastChunk)
         {
-            midiOutput->sendMessageNow (irUpload.chunks[static_cast<std::size_t> (irUploadChunkIndex++)]);
-            irUploadPhase = IRUploadPhase::SendingChunks; irUploadNextActionMs = now + 40.0;
-            irUploadStatusText = "NAM HOT: sending " + juce::String (irUploadChunkIndex) + "/" + juce::String (static_cast<int> (irUpload.chunks.size ()));
-            return;
+            // The native MIDI dispatcher executes HQ/HN when reassembly completes,
+            // before any separate User IR commit. Guard before releasing that packet.
+            GP200ModSync::reloadIfChanged ();
+            if (routingStage != 0 || presetRestoreTransactionActive || namHotIndex < 0
+                || !GP200ModSync::isNamAmp (modsync::ampIds[static_cast<std::size_t> (namHotIndex)])
+                || !isFactoryAmpDestinationInactiveLocked (namHotIndex))
+            { finishNamHot ("cancelled before final packet: destination or live preset changed"); return; }
+
+            // Arm reception before sendMessageNow: the device can reply immediately.
+            irUploadPhase = IRUploadPhase::WaitingForNamAck;
+            irUploadNextActionMs = now + 10000.0;
+            irUploadStatusText = namHotStage == NamHotStage::Query
+                ? "NAM HOT: waiting for firmware capability response"
+                : "NAM HOT: waiting for flash readback ACK";
         }
-        irUploadPhase = IRUploadPhase::WaitingBeforeCommit; irUploadNextActionMs = now + 400.0; return;
+        else
+        {
+            irUploadPhase = IRUploadPhase::SendingChunks;
+            irUploadNextActionMs = now + 40.0;
+            irUploadStatusText = "NAM HOT: sending " + juce::String (irUploadChunkIndex + 1)
+                + "/" + juce::String (chunkCount);
+        }
+
+        // A synchronous callback may replace/clear irUpload after transmission.
+        const auto message = irUpload.chunks[static_cast<std::size_t> (irUploadChunkIndex++)];
+        midiOutput->sendMessageNow (message);
+        return;
     }
-    if (irUploadPhase == IRUploadPhase::WaitingBeforeCommit)
-    {
-        GP200ModSync::reloadIfChanged ();
-        if (routingStage != 0 || presetRestoreTransactionActive || namHotIndex < 0
-            || !GP200ModSync::isNamAmp (modsync::ampIds[static_cast<std::size_t> (namHotIndex)])
-            || !isFactoryAmpDestinationInactiveLocked (namHotIndex))
-        { finishNamHot ("cancelled before commit: destination or live preset changed"); return; }
-        irUploadPhase = IRUploadPhase::WaitingAfterCommit; irUploadNextActionMs = now + 10000.0;
-        irUploadStatusText = namHotStage == NamHotStage::Query
-            ? "NAM HOT: waiting for firmware capability response" : "NAM HOT: waiting for flash readback ACK";
-        midiOutput->sendMessageNow (irUpload.commitMessage); return;
-    }
-    if (irUploadPhase == IRUploadPhase::WaitingAfterCommit)
+
+    if (irUploadPhase == IRUploadPhase::WaitingForNamAck)
         finishNamHot (namHotStage == NamHotStage::Query
             ? "firmware did not confirm NH01; model write was not sent"
             : "no readback ACK; persistence unconfirmed; transfer was not retried");
@@ -507,16 +523,22 @@ bool MidiConnection::handleNamHotAck (const juce::uint8* data, int size)
 {
     GP200NAM::Ack ack;
     if (!GP200NAM::decodeAck (data, size, ack)) return false;
-    if (namHotStage == NamHotStage::None || irUploadPhase != IRUploadPhase::WaitingAfterCommit
-        || ack.nonce != namHotNonce || namHotIndex < 0
-        || ack.id != modsync::ampIds[static_cast<std::size_t> (namHotIndex)]) return true;
-    if (ack.status != 1 || ack.physical >= 17)
+    if (namHotStage == NamHotStage::None || irUploadPhase != IRUploadPhase::WaitingForNamAck
+        || ack.nonce != namHotNonce || namHotIndex < 0) return true;
+    if (ack.status >= 2 && ack.status <= 6)
     {
-        finishNamHot (ack.status == 6
-            ? juce::String ("device could not verify flash; persistence unconfirmed")
-            : "device rejected operation (status " + juce::String (static_cast<int> (ack.status)) + ")");
+        const char* reasons[] = {
+            "", "", "destination selected on device; select another AMP",
+            "device rejected model CRC or engine binding",
+            "firmware NH01 responded, but destination is not prepared for NAM HOT",
+            "device rejected incompatible weights",
+            "device could not verify flash; persistence unconfirmed"
+        };
+        finishNamHot (reasons[ack.status]);
         return true;
     }
+    if (ack.status != 1 || ack.physical >= 17
+        || ack.id != modsync::ampIds[static_cast<std::size_t> (namHotIndex)]) return true;
     if (namHotStage == NamHotStage::Query)
     {
         namHotPhysical = ack.physical;

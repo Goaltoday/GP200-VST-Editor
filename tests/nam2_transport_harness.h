@@ -1,4 +1,5 @@
 #pragma once
+#include <functional>
 // Exact MidiConnection method bodies are included by run_nam2_tests.py.
 // Only ports, timing and unrelated state are modeled.
 #include "../source/libgp200/GP200Constants.h"
@@ -13,11 +14,11 @@ using EffectParameters=std::array<float,effectParamCount>;
 struct GP200PresetCodec{static juce::String blockNameForSlotIndex(int i){static const char* modules[]={"PRE","WAH","DST","AMP","NR","CAB","EQ","MOD","DLY","RVB","VOL"};return modules[i];}};
 struct MidiConnection {
  mutable juce::CriticalSection stateLock;
- struct Output{std::vector<juce::MidiMessage> messages;void sendMessageNow(const juce::MidiMessage& m){messages.push_back(m);}}output;
+ struct Output{std::vector<juce::MidiMessage> messages;std::function<void(const juce::MidiMessage&)> onSend;void sendMessageNow(const juce::MidiMessage& m){messages.push_back(m);if(onSend)onSend(m);}}output;
  Output* midiOutput=&output;
  int routingStage=0;bool presetRestoreTransactionActive=false,currentPresetDataIsLive=true;
  juce::MemoryBlock currentPresetDecodedData;
- enum class IRUploadPhase{Idle,WaitingAfterPrepare,SendingChunks,WaitingBeforeCommit,WaitingAfterCommit};
+ enum class IRUploadPhase{Idle,WaitingAfterPrepare,SendingChunks,WaitingBeforeCommit,WaitingAfterCommit,WaitingForNamAck};
  enum class SoundCloneUploadPhase{Idle,Busy};
  IRUploadPhase irUploadPhase=IRUploadPhase::Idle;SoundCloneUploadPhase soundCloneUploadPhase=SoundCloneUploadPhase::Idle;
  juce::String lastMessageText,irUploadStatusText,irUploadLabel,hot1FactoryAmpSourceFile,assignmentNamesStatusText;

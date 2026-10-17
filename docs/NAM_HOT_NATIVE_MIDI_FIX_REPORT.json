@@ -1,0 +1,50 @@
+[
+  {
+    "profile": "V180",
+    "result": "RESULT PASS NAM HOT: flash verified; select the destination AMP. Name and NAM2 controls are retained replies=2 sent=45",
+    "client_messages": 45,
+    "native_receiver_calls": [
+      [
+        2,
+        20808,
+        28
+      ],
+      [
+        45,
+        20040,
+        7512
+      ]
+    ],
+    "query_read_only": true,
+    "write_only_on_final_model_packet": true,
+    "no_separate_commit_sent": true,
+    "native_reassembly_dispatch_and_ack_encoder_executed": true,
+    "flash_hardware_modeled": true,
+    "usb_endpoints_modeled": true,
+    "hardware_tested": false
+  },
+  {
+    "profile": "V182",
+    "result": "RESULT PASS NAM HOT: flash verified; select the destination AMP. Name and NAM2 controls are retained replies=2 sent=45",
+    "client_messages": 45,
+    "native_receiver_calls": [
+      [
+        2,
+        20808,
+        28
+      ],
+      [
+        45,
+        20040,
+        7512
+      ]
+    ],
+    "query_read_only": true,
+    "write_only_on_final_model_packet": true,
+    "no_separate_commit_sent": true,
+    "native_reassembly_dispatch_and_ack_encoder_executed": true,
+    "flash_hardware_modeled": true,
+    "usb_endpoints_modeled": true,
+    "hardware_tested": false
+  }
+]

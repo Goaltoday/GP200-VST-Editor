@@ -34,7 +34,7 @@ juce::MidiMessage midi(const std::vector<juce::uint8>&v){return juce::MidiMessag
 GP200IRUpload stage(const std::vector<juce::uint8>&blob){
  GP200IRUpload result;result.displayName="NAM HOT";
  result.prepareMessage=midi({0xf0,0x21,0x25,0x7e,0x47,0x50,0x2d,0x32,0x12,0x14,0,0,0,0,0,0,0,0,4,0,0,0,0,0,0,8,11,0,0,1,6,0,0,0,8,0,0,0,5,15,4,8,15,0,0,0,0,0,0,1,0,0,10,0xf7});
- result.commitMessage=midi({0xf0,0x21,0x25,0x7e,0x47,0x50,0x2d,0x32,0x12,12,0,0,0,0,11,1,0,0,8,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0xf7});
+ // HQ/HN executes on the final data packet; no separate commit is sent.
  const int n=static_cast<int>(blob.size());for(int offset=0;offset<n;offset+=183){std::vector<juce::uint8> full{0xf0,0x21,0x25,0x7e,0x47,0x50,0x2d,0x32,0x12,static_cast<juce::uint8>(n&127),static_cast<juce::uint8>(n>>7),static_cast<juce::uint8>(offset&127),static_cast<juce::uint8>(offset>>7)};for(int i=offset;i<std::min(n,offset+183);++i){full.push_back(blob[static_cast<std::size_t>(i)]>>4);full.push_back(blob[static_cast<std::size_t>(i)]&15);}full.push_back(0xf7);result.chunks.push_back(midi(full));}return result;
 }
 std::vector<juce::uint8> wrapper(int index,unsigned nonce,unsigned command){std::vector<juce::uint8>b(28);modsync::write32(b.data(),0x2018100a);modsync::write16(b.data()+4,nonce);modsync::write16(b.data()+6,command);b[10]=static_cast<juce::uint8>(index);b[11]=0xb1;return b;}

@@ -22,7 +22,7 @@ int main(int argc,char**argv){
  // Typed NAM2 metadata and an actual live inactive destination.
  auto root=new juce::DynamicObject();root->setProperty("schema","gp200-mod-sync/v1");root->setProperty("product","GP-200");root->setProperty("firmware","V182");root->setProperty("firmware_sha256",juce::String(std::string(64,'a')));auto row=new juce::DynamicObject();row->setProperty("effect_id",juce::int64(modsync::ampIds[0]));row->setProperty("display_name","NAM");row->setProperty("parameter_profile","NAM2");row->setProperty("parameter_count",2);row->setProperty("controls",juce::Array<juce::var>{"Input","Output"});row->setProperty("neutral",50);root->setProperty("nam_amp_overrides",juce::Array<juce::var>{row});root->setProperty("factory_amp_overrides",juce::Array<juce::var>{});root->setProperty("factory_cab_overrides",juce::Array<juce::var>{});auto mf=GP200ModSync::getManifestFile();mf.getParentDirectory().createDirectory();CHECK(mf.replaceWithText(juce::JSON::toString(root)));GP200ModSync::reloadIfChanged();CHECK(GP200ModSync::isNamAmp(modsync::ampIds[0]));
  MidiConnection midi;midi.currentPresetDecodedData.setSize(effectBlockStart+effectBlockCount*effectBlockSize);CHECK(midi.startNamHotUpload(file,0));CHECK(midi.namHotStage==MidiConnection::NamHotStage::Query);CHECK(midi.output.messages.size()==1);
- auto advance=[&](){for(int i=0;i<60&&midi.irUploadPhase!=MidiConnection::IRUploadPhase::WaitingAfterCommit;++i){juce::Time::now+=1000;midi.processIRUpload();}CHECK(midi.irUploadPhase==MidiConnection::IRUploadPhase::WaitingAfterCommit);};
+ auto advance=[&](){for(int i=0;i<60&&midi.irUploadPhase!=MidiConnection::IRUploadPhase::WaitingForNamAck;++i){juce::Time::now+=1000;midi.processIRUpload();}CHECK(midi.irUploadPhase==MidiConnection::IRUploadPhase::WaitingForNamAck);};
  advance();const auto queryNonce=midi.namHotNonce;auto ack=response(queryNonce+99);CHECK(midi.handleNamHotAck(ack.data(),int(ack.size())));CHECK(midi.namHotStage==MidiConnection::NamHotStage::Query);
  ack=response(queryNonce);CHECK(midi.handleNamHotAck(ack.data(),int(ack.size())));CHECK(midi.namHotStage==MidiConnection::NamHotStage::Write);CHECK(midi.namHotNonce!=queryNonce);advance();CHECK(midi.irUploadStatusText.contains("readback"));
  ack=response(queryNonce);midi.handleNamHotAck(ack.data(),int(ack.size()));CHECK(midi.namHotStage==MidiConnection::NamHotStage::Write);
@@ -30,6 +30,39 @@ int main(int argc,char**argv){
  ack=response(midi.namHotNonce);CHECK(midi.handleNamHotAck(ack.data(),int(ack.size())));CHECK(midi.namHotStage==MidiConnection::NamHotStage::None);CHECK(midi.irUploadStatusText.contains("flash verified"));
  CHECK(midi.startNamHotUpload(file,0));advance();juce::Time::now+=11000;midi.processIRUpload();CHECK(midi.namHotStage==MidiConnection::NamHotStage::None);CHECK(midi.irUploadStatusText.contains("write was not sent"));
  CHECK(midi.startNamHotUpload(file,0));advance();ack=response(midi.namHotNonce);midi.handleNamHotAck(ack.data(),int(ack.size()));advance();juce::Time::now+=11000;midi.processIRUpload();CHECK(midi.irUploadStatusText.contains("unconfirmed"));
- CHECK(midi.startNamHotUpload(file,0));midi.currentPresetDataIsLive=false;for(int i=0;i<10&&midi.namHotStage!=MidiConnection::NamHotStage::None;++i){juce::Time::now+=1000;midi.processIRUpload();}CHECK(midi.irUploadStatusText.contains("cancelled before commit"));
+ CHECK(midi.startNamHotUpload(file,0));midi.currentPresetDataIsLive=false;for(int i=0;i<10&&midi.namHotStage!=MidiConnection::NamHotStage::None;++i){juce::Time::now+=1000;midi.processIRUpload();}CHECK(midi.irUploadStatusText.contains("cancelled before final packet"));
+ // An immediate native ACK arrives during the final send, before it returns.
+ MidiConnection immediate;immediate.currentPresetDecodedData.setSize(effectBlockStart+effectBlockCount*effectBlockSize);
+ int immediateAcks=0;
+ immediate.output.onSend=[&](const juce::MidiMessage& message){
+  const auto* data=message.getRawData();const int size=message.getRawDataSize();
+  if(size<14)return;
+  const int total=data[9]|(data[10]<<7),offset=data[11]|(data[12]<<7);
+  const int amount=(size-14)/2;
+  if((total==28||total==7512)&&offset+amount==total){
+   CHECK(immediate.irUploadPhase==MidiConnection::IRUploadPhase::WaitingForNamAck);
+   auto reply=response(immediate.namHotNonce);++immediateAcks;
+   CHECK(immediate.handleNamHotAck(reply.data(),int(reply.size())));
+  }
+ };
+ CHECK(immediate.startNamHotUpload(file,0));
+ for(int i=0;i<60&&immediate.namHotStage!=MidiConnection::NamHotStage::None;++i){juce::Time::now+=1000;immediate.processIRUpload();}
+ CHECK(immediateAcks==2);CHECK(immediate.namHotStage==MidiConnection::NamHotStage::None);CHECK(immediate.irUploadStatusText.contains("flash verified"));
+ CHECK(immediate.output.messages.size()==45); // 2 prepare, 1 HQ, 42 HN; no commit.
+ for(const auto& message:immediate.output.messages){auto p=message.getRawData();CHECK(!(p[9]==12&&message.getRawDataSize()==38));}
+ // Cancel before the final model packet can dispatch the write.
+ MidiConnection cancelled;cancelled.currentPresetDecodedData.setSize(effectBlockStart+effectBlockCount*effectBlockSize);
+ CHECK(cancelled.startNamHotUpload(file,0));juce::Time::now+=1000;cancelled.processIRUpload();
+ auto ready=response(cancelled.namHotNonce);CHECK(cancelled.handleNamHotAck(ready.data(),int(ready.size())));
+ for(int i=0;i<41;++i){juce::Time::now+=1000;cancelled.processIRUpload();}
+ CHECK(cancelled.irUploadChunkIndex==41);auto sent=cancelled.output.messages.size();cancelled.currentPresetDataIsLive=false;
+ juce::Time::now+=1000;cancelled.processIRUpload();CHECK(cancelled.output.messages.size()==sent);CHECK(cancelled.irUploadStatusText.contains("cancelled before final packet"));
+ // Explicit NH01 errors may have ID zero and must not be mistaken for silence.
+ MidiConnection rejected;rejected.currentPresetDecodedData.setSize(effectBlockStart+effectBlockCount*effectBlockSize);
+ CHECK(rejected.startNamHotUpload(file,0));juce::Time::now+=1000;rejected.processIRUpload();
+ auto invalidDestination=response(rejected.namHotNonce,4,0xffffffffu);
+ for(int i=0;i<8;++i)invalidDestination[13+16*2+i]=0;
+ CHECK(rejected.handleNamHotAck(invalidDestination.data(),int(invalidDestination.size())));
+ CHECK(rejected.namHotStage==MidiConnection::NamHotStage::None);CHECK(rejected.irUploadStatusText.contains("not prepared"));
  std::cout<<checks<<" NAM import, weight order, wire and production transfer checks passed\n";
 }

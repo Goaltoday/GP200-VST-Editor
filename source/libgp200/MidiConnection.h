@@ -323,7 +323,7 @@ class MidiConnection final : private juce::MidiInputCallback, private juce::Time
     std::uint64_t presetRevision{0};
     std::uint64_t assignmentNamesRevision{0};
 
-    enum class IRUploadPhase { Idle, WaitingAfterPrepare, SendingChunks, WaitingBeforeCommit, WaitingAfterCommit };
+    enum class IRUploadPhase { Idle, WaitingAfterPrepare, SendingChunks, WaitingBeforeCommit, WaitingAfterCommit, WaitingForNamAck };
     GP200IRUpload irUpload;
     GP200IRUpload namPendingUpload;
     enum class NamHotStage { None, Query, Write };

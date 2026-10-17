@@ -1325,8 +1325,9 @@ private:
         if (uploadWasBusy)
         {
             uploadWasBusy = false;
-            statusLabel.setColour (juce::Label::textColourId, statusOnColour);
             const auto status = getUploadStatus != nullptr ? getUploadStatus() : juce::String();
+            const bool namFailed = status.startsWith ("NAM HOT:") && !status.contains ("flash verified");
+            statusLabel.setColour (juce::Label::textColourId, namFailed ? statusOffColour : statusOnColour);
             statusLabel.setText (status.isNotEmpty() ? status : juce::String ("Sound Clone import completed."),
                                  juce::dontSendNotification);
             refreshDestinationItems ();

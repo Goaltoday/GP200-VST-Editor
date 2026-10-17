@@ -1,3 +1,5 @@
+**Actualización 0.1.11:** consulta `README_ACK_FIX_ES.md` para corregir la confirmación. El texto siguiente describe el alcance del paquete firmware 1.4 original; este ZIP de corrección contiene únicamente las fuentes del VST.
+
 # GP200 NAM HOT persistente — versión experimental
 
 Incluye el generador **HTML 1.4** para GP-200 V180/V182 y las **fuentes del VST 0.1.10**, basadas en 0.1.9. No incluye un VST3 Windows compilado ni un BIN configurado con tus modelos. El botón «Fuentes y pruebas» del HTML descarga las fuentes del firmware y sus pruebas.

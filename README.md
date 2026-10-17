@@ -1,4 +1,4 @@
-Esta entrega es **0.1.10 NAM HOT experimental**, basada en 0.1.9. Consulta `README_NAM_HOT_ES.md` para el firmware 1.4, capacidad compartida y pruebas pendientes. Se entregan fuentes; no hay VST3 Windows compilado.
+Esta entrega es **VST 0.1.11 — corrección de confirmación NAM HOT**. Lee `README_ACK_FIX_ES.md`. Compatible con el firmware HTML 1.4 ya entregado; si ese BIN ya está instalado, esta corrección solo requiere recompilar y sustituir el VST. Se entregan fuentes, sin binario Windows.
 
 # GP200 VST Editor
 
