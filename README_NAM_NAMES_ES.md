@@ -1,5 +1,3 @@
-> Documento histórico. Para esta entrega usa README_FACTORY_NAM_ES.md.
-
 # GP200 NAM HOT 1.5 + VST 0.1.12 — nombres persistentes
 
 Esta entrega corrige el nombre de los modelos enviados a destinos NAM ya preparados. Mantiene la recuperación de pesos de 1.4.1, que el usuario confirmó en pedalera. La función nueva de nombres está comprobada en emulación y pendiente de confirmación física.

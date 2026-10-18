@@ -1,4 +1,4 @@
-Esta entrega es **VST 0.1.13 — NAM HOT en Factory AMP stock**, para firmware 1.6. Lee README_FACTORY_NAM_ES.md. Se entregan fuentes, sin VST3 Windows compilado.
+> Esta entrega es VST 0.1.14 / firmware 1.7 NH04. Consulta README_NAM_PROPIO_AMP_1.7_ES.md. Las referencias NAM HOT anteriores describen antecedentes.
 
 Esta entrega es **VST 0.1.12 — nombres NAM HOT persistentes**. Lee `README_NAM_NAMES_ES.md`. Requiere firmware 1.5 para enviar nombres. Se entregan fuentes, sin VST3 Windows compilado.
 

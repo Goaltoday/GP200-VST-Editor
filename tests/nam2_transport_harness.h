@@ -24,7 +24,6 @@ struct MidiConnection {
  juce::String lastMessageText,irUploadStatusText,irUploadLabel,hot1FactoryAmpSourceFile,assignmentNamesStatusText;
  enum class NamHotStage{None,Query,Write};NamHotStage namHotStage=NamHotStage::None;int namHotIndex=-1;unsigned namHotNonce=0,namHotPhysical=0;juce::String namHotName, namHotSource;
     GP200IRUpload namPendingUpload;
-    std::vector<juce::uint8> namHotWeights;
  GP200IRUpload irUpload;int hot1FactoryAmpUploadIndex=-1,irUploadChunkIndex=0;bool hot2FactoryAmpRename=false;double irUploadNextActionMs=0;
  struct Query{int a=0,b=0,c=0;};std::vector<Query> pendingAssignmentNameQueries;Query currentAssignmentNameQuery;
  std::array<juce::String,userIRCount> userIRNames;std::array<juce::String,snapToneCount> snapToneNames;

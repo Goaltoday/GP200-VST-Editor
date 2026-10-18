@@ -1,5 +1,3 @@
-> Documento histórico. Para esta entrega usa README_FACTORY_NAM_ES.md.
-
 > Histórico: para VST 0.1.12 usa README_NAM_NAMES_ES.md.
 
 # VST 0.1.11 — corrección de confirmación NAM HOT

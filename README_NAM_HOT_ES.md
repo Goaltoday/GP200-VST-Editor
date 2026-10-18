@@ -1,5 +1,3 @@
-> Documento histórico. Para esta entrega usa README_FACTORY_NAM_ES.md.
-
 > Histórico: para VST 0.1.12 usa README_NAM_NAMES_ES.md.
 
 **Actualización 0.1.11:** consulta `README_ACK_FIX_ES.md` para corregir la confirmación. El texto siguiente describe el alcance del paquete firmware 1.4 original; este ZIP de corrección contiene únicamente las fuentes del VST.

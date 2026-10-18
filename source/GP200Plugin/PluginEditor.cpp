@@ -760,7 +760,7 @@ private:
 
 bool namHotDestination(int index)
 {
-    return gp200::GP200ModSync::canUseNamHot (index);
+    return index >= 0 && index < 71 && gp200::GP200ModSync::canUseNamInPlace (index);
 }
 
 class SoundCloneImportComponent final : public juce::Component,
@@ -971,13 +971,13 @@ private:
         {
             if ((effect.effectId & 0xFF000000u) == 0x0F000000u)
                 continue;
-            const bool nam = gp200::GP200ModSync::isNamAmp (effect.effectId);
+            const bool nam = gp200::GP200ModSync::canUseNamInPlace (factoryIndex);
             destinationBox.addItem ("Factory AMP " + juce::String (factoryIndex + 1) + " - "
                                         + gp200::GP200EffectDatabase::getEffectName (effect.effectId)
                                         + (nam ? " [NAM HOT · .nam only]" : ""),
                                     1001 + factoryIndex);
             destinationBox.setItemEnabled (1001 + factoryIndex,
-                gp200::GP200ModSync::canWriteFactoryClo (factoryIndex) || namHotDestination (factoryIndex));
+                gp200::GP200ModSync::canWriteFactoryClo (factoryIndex) || nam);
             ++factoryIndex;
         }
 
@@ -991,7 +991,7 @@ private:
         const bool isFactoryAmp = selectedId >= 1001 && selectedId <= 1071;
         const bool writable = isSnapTone || (isFactoryAmp
             && gp200::GP200ModSync::canWriteFactoryClo (selectedId - 1001));
-        renameEditor.setInputRestrictions (16);
+        renameEditor.setInputRestrictions ((selectedId >= 1001 && namHotDestination (selectedId - 1001)) ? 12 : 16);
         renameEditor.setEnabled (writable || (selectedId >= 1001 && namHotDestination (selectedId - 1001)));
         renameButton.setEnabled (writable && !isCurrentlyBusy ());
         if (isFactoryAmp)
@@ -1001,7 +1001,7 @@ private:
                 && !entries[static_cast<std::size_t> (selectedRow)].isDirectory)
                 renameEditor.setText (
                     entries[static_cast<std::size_t> (selectedRow)].file
-                        .getFileNameWithoutExtension ().substring (0, entries[static_cast<std::size_t> (fileList.getSelectedRow ())].file.getFileExtension ().equalsIgnoreCase (".nam") ? 12 : 16),
+                        .getFileNameWithoutExtension ().substring (0, namHotDestination (destinationBox.getSelectedId () - 1001) ? 12 : 16),
                     juce::dontSendNotification);
             else
                 renameEditor.clear ();
@@ -1136,7 +1136,7 @@ private:
         if (selectedFile && destinationBox.getSelectedId () >= 1001)
             renameEditor.setText (
                 entries[static_cast<std::size_t> (lastRowSelected)].file
-                    .getFileNameWithoutExtension ().substring (0, entries[static_cast<std::size_t> (fileList.getSelectedRow ())].file.getFileExtension ().equalsIgnoreCase (".nam") ? 12 : 16),
+                    .getFileNameWithoutExtension ().substring (0, namHotDestination (destinationBox.getSelectedId () - 1001) ? 12 : 16),
                 juce::dontSendNotification);
     }
 
@@ -1275,10 +1275,10 @@ private:
 
         const bool namFile = entry.file.getFileExtension ().equalsIgnoreCase (".nam");
         const bool namDestination = selectedId >= 1001 && namHotDestination (selectedId - 1001);
-        if ((namFile && !namDestination) || (!namFile && selectedId >= 1001
+        if (namFile != namDestination || (selectedId >= 1001 && !namDestination
             && !gp200::GP200ModSync::canWriteFactoryClo (selectedId - 1001)))
         {
-            statusLabel.setText ("NAM requires an available Factory AMP; SnapTone files require a CLO destination.",
+            statusLabel.setText ("A .nam file requires an eligible NH04 AMP; SnapTone files require a CLO destination.",
                                  juce::dontSendNotification);
             return;
         }
@@ -1295,7 +1295,7 @@ private:
         {
             requestedName = renameEditor.getText ().trim ().substring (0, 16);
             if (requestedName.isEmpty ())
-                requestedName = activeImportFile.getFileNameWithoutExtension ().substring (0, entries[static_cast<std::size_t> (fileList.getSelectedRow ())].file.getFileExtension ().equalsIgnoreCase (".nam") ? 12 : 16);
+                requestedName = activeImportFile.getFileNameWithoutExtension ().substring (0, namHotDestination (destinationBox.getSelectedId () - 1001) ? 12 : 16);
         }
         onImport (activeImportFile, destinationCode, requestedName);
     }
@@ -1345,7 +1345,7 @@ private:
         const bool namFile = selectedFile && entries[static_cast<std::size_t> (selectedRow)].file
             .getFileExtension ().equalsIgnoreCase (".nam");
         importButton.setEnabled (selectedFile && (namFile ? namDestination : writable));
-        renameEditor.setInputRestrictions (namFile ? 12 : 16);
+        renameEditor.setInputRestrictions ((selectedId >= 1001 && namHotDestination (selectedId - 1001)) ? 12 : 16);
         renameEditor.setEnabled (writable || (selectedId >= 1001 && namHotDestination (selectedId - 1001)));
         renameButton.setEnabled (writable);
     }

@@ -441,20 +441,21 @@ bool MidiConnection::startNamHotUpload (const juce::File& file, int index, const
         || irUploadPhase != IRUploadPhase::Idle || soundCloneUploadPhase != SoundCloneUploadPhase::Idle)
     { irUploadStatusText = "NAM HOT unavailable: MIDI disconnected or another transaction is busy"; return false; }
     GP200ModSync::reloadIfChanged ();
-    if (!GP200ModSync::canUseNamHot (index))
-    { irUploadStatusText = "NAM HOT blocked: destination unavailable or occupied by Factory SnapTone"; return false; }
+    if (index < 0 || index >= 71 || !GP200ModSync::canUseNamInPlace (index))
+    { irUploadStatusText = "NAM HOT blocked: destination is excluded, occupied by CLO, or NH04 JSON is missing"; return false; }
     if (!isFactoryAmpDestinationInactiveLocked (index))
     { irUploadStatusText = "NAM HOT: select a different AMP and wait for the live preset; bypass is not enough"; return false; }
     std::vector<juce::uint8> weights;
     const auto result = GP200NAM::readWeights (file, weights);
     if (result.failed ()) { irUploadStatusText = "NAM HOT: " + result.getErrorMessage (); return false; }
     namHotNonce = (namHotNonce + 1u) & 65535u; if (!namHotNonce) ++namHotNonce;
+    const unsigned writeNonce = (namHotNonce == 65535u ? 1u : namHotNonce + 1u);
     namHotName = (requestedName.isEmpty () ? file.getFileNameWithoutExtension () : requestedName).trim ().substring (0, 12);
     if (namHotName.isEmpty ()) { irUploadStatusText = "NAM HOT: enter a name (1-12 ASCII characters)"; return false; }
     for (auto c : namHotName) if (c < 32 || c > 126)
     { irUploadStatusText = "NAM HOT: name must use ASCII characters"; return false; }
     namHotSource = file.getFileName ();
-    namHotWeights = std::move (weights);
+    namPendingUpload = GP200NAM::upload (weights, index, writeNonce, namHotName, true);
     irUpload = GP200NAM::query (index, namHotNonce, true, true);
     namHotIndex = index; namHotStage = NamHotStage::Query;
     hot1FactoryAmpUploadIndex = -1; hot2FactoryAmpRename = false;
@@ -470,7 +471,7 @@ bool MidiConnection::startNamHotUpload (const juce::File& file, int index, const
 void MidiConnection::finishNamHot (const juce::String& status)
 {
     namHotStage = NamHotStage::None; namHotIndex = -1;
-    namPendingUpload = {}; namHotWeights.clear (); namHotName.clear (); namHotSource.clear (); irUpload = {}; irUploadPhase = IRUploadPhase::Idle;
+    namPendingUpload = {}; namHotName.clear (); namHotSource.clear (); irUpload = {}; irUploadPhase = IRUploadPhase::Idle;
     irUploadStatusText = "NAM HOT: " + status; lastMessageText = irUploadStatusText;
 }
 
@@ -492,13 +493,13 @@ void MidiConnection::processNamHotUpload ()
             // before any separate User IR commit. Guard before releasing that packet.
             GP200ModSync::reloadIfChanged ();
             if (routingStage != 0 || presetRestoreTransactionActive || namHotIndex < 0
-                || !GP200ModSync::canUseNamHot (namHotIndex)
+                || !GP200ModSync::canUseNamInPlace (namHotIndex)
                 || !isFactoryAmpDestinationInactiveLocked (namHotIndex))
             { finishNamHot ("cancelled before final packet: destination or live preset changed"); return; }
 
             // Arm reception before sendMessageNow: the device can reply immediately.
             irUploadPhase = IRUploadPhase::WaitingForNamAck;
-            irUploadNextActionMs = now + 10000.0;
+            irUploadNextActionMs = now + 30000.0;
             irUploadStatusText = namHotStage == NamHotStage::Query
                 ? "NAM HOT: waiting for firmware capability response"
                 : "NAM HOT: waiting for flash readback ACK";
@@ -519,7 +520,7 @@ void MidiConnection::processNamHotUpload ()
 
     if (irUploadPhase == IRUploadPhase::WaitingForNamAck)
         finishNamHot (namHotStage == NamHotStage::Query
-            ? "firmware did not confirm NH03; model write was not sent"
+            ? "firmware did not confirm NH04; model write was not sent"
             : "no readback ACK; persistence unconfirmed; transfer was not retried");
 }
 
@@ -529,32 +530,29 @@ bool MidiConnection::handleNamHotAck (const juce::uint8* data, int size)
     if (!GP200NAM::decodeAck (data, size, ack)) return false;
     if (namHotStage == NamHotStage::None || irUploadPhase != IRUploadPhase::WaitingForNamAck
         || ack.nonce != namHotNonce || namHotIndex < 0) return true;
-    if (ack.status >= 2 && ack.status <= 10)
+    if (!ack.inplace) { finishNamHot ("update firmware to 1.7 NH04; model write was not sent"); return true; }
+    if (ack.status == 11) { finishNamHot ("flash recovery pending or failed; restart before another transfer"); return true; }
+    if (ack.status >= 2 && ack.status <= 7)
     {
         const char* reasons[] = {
             "", "", "destination selected on device; select another AMP",
             "device rejected model CRC or engine binding",
-            "firmware NH01 responded, but destination is not prepared for NAM HOT",
+            "destination is excluded, changed or occupied by SnapTone",
             "device rejected incompatible weights",
-            "device could not verify flash; persistence unconfirmed",
-            "device rejected NAM name",
-            "no free NAM/SnapTone storage remains",
-            "storage ownership changed; no write performed",
-            "flash verification failed; dynamic destination restored to stock"
+            "write failed or verification failed; previous AMP restored when rollback succeeded",
+            "device rejected NAM name"
         };
-        if (ack.status == 10 && ack.generic && ack.id == modsync::ampIds[static_cast<std::size_t> (namHotIndex)])
-            GP200ModSync::removeNamAmpOverride (ack.id);
         finishNamHot (reasons[ack.status]);
         return true;
     }
-    if (ack.status != 1 || ack.physical >= 17
+    if (ack.status != 1 || ack.physical != static_cast<unsigned> (namHotIndex)
         || ack.id != modsync::ampIds[static_cast<std::size_t> (namHotIndex)]) return true;
-    if (!ack.generic) { finishNamHot ("update firmware to 1.6 (NH03 Factory NAM); model write was not sent or name unconfirmed"); return true; }
+    
     if (namHotStage == NamHotStage::Query)
     {
         namHotPhysical = ack.physical;
         namHotNonce = (namHotNonce == 65535u ? 1u : namHotNonce + 1u);
-        irUpload = GP200NAM::upload (namHotWeights, namHotIndex, namHotNonce, namHotName, static_cast<int> (ack.physical)); namHotStage = NamHotStage::Write;
+        irUpload = std::move (namPendingUpload); namHotStage = NamHotStage::Write;
         irUploadChunkIndex = 0; irUploadPhase = IRUploadPhase::WaitingAfterPrepare;
         irUploadNextActionMs = juce::Time::getMillisecondCounterHiRes () + 250.0;
         irUploadStatusText = "NAM HOT: firmware confirmed; preparing model transfer";

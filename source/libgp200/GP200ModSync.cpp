@@ -34,6 +34,8 @@ bool unsavedDeviceSnapshot{false};
 juce::String manifestFirmware;
 juce::String manifestFirmwareSha;
 juce::String metadataError;
+std::array<bool,71> inplaceEligible{};
+juce::var inplaceDestinations;
 
 struct PreBankEntry
 {
@@ -139,7 +141,7 @@ bool validCloOverrides (const juce::var& root)
     return true;
 }
 
-// NAM2 is accepted from a generated manifest or an acknowledged HOT import, never inferred from
+// NAM2 is accepted only from the generated manifest, never inferred from
 // the name of an AMP or from a two-parameter stock amplifier.
 bool parseNamOverrides (const juce::var& root,
                         std::map<juce::uint32, OverrideEntry>& destination)
@@ -147,7 +149,7 @@ bool parseNamOverrides (const juce::var& root,
     const auto value = root.getProperty ("nam_amp_overrides", {});
     if (value.isVoid ()) return true; // Legacy manifest.
     const auto* rows = value.getArray ();
-    if (rows == nullptr || rows->size () > 17) return false;
+    if (rows == nullptr || rows->size () > (root.getProperty ("features", {}).getProperty ("nam_hot_protocol", {}).toString () == "NH04" ? 62 : 5)) return false;
     if (root.getProperty ("schema", {}).toString () != "gp200-mod-sync/v1"
         || root.getProperty ("product", {}).toString () != "GP-200") return false;
     const auto firmware = root.getProperty ("firmware", {}).toString ();
@@ -182,6 +184,35 @@ bool parseNamOverrides (const juce::var& root,
         entry.customNamAmp = true;
         destination[id] = std::move (entry);
     }
+    return true;
+}
+
+bool parseInplace (const juce::var& root, std::array<bool,71>& eligible, juce::var& destinations)
+{
+    const auto protocol = root.getProperty ("features", {}).getProperty ("nam_hot_protocol", {}).toString ();
+    const auto value = root.getProperty ("nam_inplace_destinations", {});
+    if (protocol != "NH04") return value.isVoid ();
+    const auto firmware = root.getProperty ("firmware", {}).toString ();
+    const auto hash = root.getProperty ("firmware_sha256", {}).toString ();
+    const auto* rows = value.getArray ();
+    if (root.getProperty ("schema", {}).toString () != "gp200-mod-sync/v1"
+        || root.getProperty ("product", {}).toString () != "GP-200"
+        || (firmware != "V180" && firmware != "V182")
+        || hash.length () != 64 || !hash.containsOnly ("0123456789abcdefABCDEF")
+        || rows == nullptr || rows->size () > 62) return false;
+    for (const auto& row : *rows)
+    {
+        const auto index = row.getProperty ("logical_index", {});
+        const auto size = row.getProperty ("package_bytes", {});
+        const auto offset = row.getProperty ("package_offset", {});
+        if (!index.isInt () || !size.isInt () || !offset.isInt ()) return false;
+        const int i = static_cast<int> (index), bytes = static_cast<int> (size), at = static_cast<int> (offset);
+        if (i < 0 || i >= 71 || eligible[static_cast<std::size_t> (i)] || bytes < 7696
+            || at < 68 || at > 0x200000 - bytes
+            || parseEffectId (row.getProperty ("effect_id", {})) != modsync::ampIds[static_cast<std::size_t> (i)]) return false;
+        eligible[static_cast<std::size_t> (i)] = true;
+    }
+    destinations = value;
     return true;
 }
 
@@ -426,6 +457,7 @@ void loadUnlocked (const juce::File& file)
         knownUserIRSamples = 0;
         manifestFirmware.clear ();
         manifestFirmwareSha.clear ();
+        inplaceEligible = {}; inplaceDestinations = juce::var{};
         metadataError.clear ();
         deviceSnapshot = false;
         lastModificationMs = -1;
@@ -436,13 +468,14 @@ void loadUnlocked (const juce::File& file)
 
     const auto parsed = juce::JSON::parse (file.loadFileAsString ());
     std::map<juce::uint32, OverrideEntry> next;
+    std::array<bool,71> nextEligible{}; juce::var nextDestinations;
     if (! parsed.isVoid () && parsed.getDynamicObject () != nullptr)
     {
         parseOverrideArray (parsed, "factory_amp_overrides", true, false, next);
         parseOverrideArray (parsed, "factory_cab_overrides", false, true, next);
     }
     if (parsed.isVoid () || parsed.getDynamicObject () == nullptr
-        || ! validCloOverrides (parsed) || ! parseNamOverrides (parsed, next))
+        || ! validCloOverrides (parsed) || ! parseNamOverrides (parsed, next) || !parseInplace (parsed, nextEligible, nextDestinations))
     {
         // A partially copied/invalid manifest must not remove NAM protections.
         metadataError = "Invalid firmware metadata; previous profiles retained";
@@ -452,6 +485,7 @@ void loadUnlocked (const juce::File& file)
         return;
     }
     overrides = std::move (next);
+    inplaceEligible = nextEligible; inplaceDestinations = nextDestinations;
     const auto features = parsed.getProperty ("features", {});
     const auto samples = static_cast<int> (features.getProperty ("user_ir_samples", 0));
     knownUserIRSamples = samples == 1024 || samples == 2048 ? samples : 0;
@@ -476,6 +510,12 @@ bool saveUnlocked ()
     auto* features = new juce::DynamicObject ();
     if (knownUserIRSamples != 0) features->setProperty ("user_ir_samples", knownUserIRSamples);
     rootObject->setProperty ("source", deviceSnapshot ? "device-midi-ms11" : "local-cache");
+    if (!inplaceDestinations.isVoid ())
+    {
+        features->setProperty ("nam_hot_protocol", "NH04");
+        features->setProperty ("nam_hot_storage", "own-amp-package");
+        rootObject->setProperty ("nam_inplace_destinations", inplaceDestinations);
+    }
     features->setProperty ("factory_cab_samples", 1024);
     rootObject->setProperty ("features", juce::var (features));
 
@@ -835,20 +875,12 @@ juce::String GP200ModSync::getWahConfigDescription (juce::uint32 wahEffectId)
     return text;
 }
 
-bool GP200ModSync::canUseNamHot (int index)
+bool GP200ModSync::canUseNamInPlace (int index)
 {
     const juce::ScopedLock lock (syncLock);
-    if (metadataError.isNotEmpty () || (manifestFirmware != "V180" && manifestFirmware != "V182") || manifestFirmwareSha.length () != 64 || index < 0 || index >= 71) return false;
+    if (index < 0 || index >= 71 || metadataError.isNotEmpty () || !inplaceEligible[static_cast<std::size_t> (index)]) return false;
     const auto it = overrides.find (modsync::ampIds[static_cast<std::size_t> (index)]);
     return it == overrides.end () || !it->second.customCloAmp;
-}
-
-bool GP200ModSync::removeNamAmpOverride (juce::uint32 id)
-{
-    const juce::ScopedLock lock (syncLock);
-    const auto it = overrides.find (id);
-    if (it == overrides.end () || !it->second.customNamAmp) return false;
-    overrides.erase (it); return saveUnlocked ();
 }
 
 bool GP200ModSync::recordNamAmpOverride (juce::uint32 effectId, const juce::String& displayName, const juce::String& sourceFile)
@@ -856,17 +888,17 @@ bool GP200ModSync::recordNamAmpOverride (juce::uint32 effectId, const juce::Stri
     reloadIfChanged ();
     const juce::ScopedLock lock (syncLock);
     if (!loadedOnce) loadUnlocked (getManifestFile ());
-    if (metadataError.isNotEmpty () || std::find (modsync::ampIds.begin (), modsync::ampIds.end (), effectId) == modsync::ampIds.end ()) return false;
     const auto existing = overrides.find (effectId);
-    if (existing != overrides.end () && existing->second.customCloAmp) return false;
-    if (existing == overrides.end ())
-    {
-        int count = 0; for (const auto& pair : overrides) if (pair.second.customNamAmp) ++count;
-        if (count >= 17) return false;
-    }
-    auto& entry = overrides[effectId];
-    entry.customNamAmp = true; entry.customCloAmp = false; entry.isCab = false;
-    entry.displayName = displayName; entry.sourceFile = sourceFile;
+    const auto pos = std::find (modsync::ampIds.begin (), modsync::ampIds.end (), effectId);
+    if (metadataError.isNotEmpty () || pos == modsync::ampIds.end ()
+        || (existing != overrides.end () && existing->second.customCloAmp)
+        || ((existing == overrides.end () || !existing->second.customNamAmp)
+            && !inplaceEligible[static_cast<std::size_t> (pos-modsync::ampIds.begin ())])) return false;
+    if (displayName.isEmpty () || displayName.length () > 12) return false;
+    for (auto c : displayName) if (c < 32 || c > 126) return false;
+    auto& entry = overrides[effectId]; entry.customNamAmp = true;
+    entry.displayName = displayName;
+    entry.sourceFile = sourceFile;
     return saveUnlocked ();
 }
 

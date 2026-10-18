@@ -39,7 +39,7 @@ int main(int argc,char**){
   case 10:set((*bad.getProperty("factory_amp_overrides",{}).getArray())[0],"parameter_profile","NAM2");break;
   case 11:set(row,"display_name","bad\nname");break;
   case 12:set(bad,"nam_amp_overrides",object());break;
-  case 13:{const auto serialized=juce::JSON::toString(row);for(int i=1;i<18;++i){auto copy=juce::JSON::parse(serialized);set(copy,"effect_id",juce::int64(modsync::ampIds[size_t(i)]));bad.getProperty("nam_amp_overrides",{}).getArray()->add(copy);}}break;}
+  case 13:{const auto serialized=juce::JSON::toString(row);for(int i=1;i<6;++i){auto copy=juce::JSON::parse(serialized);set(copy,"effect_id",juce::int64(modsync::ampIds[size_t(i)]));bad.getProperty("nam_amp_overrides",{}).getArray()->add(copy);}}break;}
   install(bad);CHECK(GP200ModSync::isNamAmp(modsync::ampIds[0]));CHECK(!GP200ModSync::canWriteFactoryClo(8));CHECK(GP200ModSync::getNamMetadataStatus().contains("Invalid"));CHECK(!GP200ModSync::replaceFromDevice(live(),1024));install(manifest(5));CHECK(GP200ModSync::canWriteFactoryClo(8));
  }
  // Live CLO contradiction must reject atomically and retain NAM.
@@ -49,12 +49,6 @@ int main(int argc,char**){
  // Stock manifest is an explicit replacement: remove NAM and restore stock ABI.
  install(manifest(0,"V180"));CHECK(!GP200ModSync::isNamAmp(modsync::ampIds[0]));CHECK(GP200EffectParamDatabase::findParamsForEffect(modsync::ampIds[0])->count!=2);CHECK(GP200EffectParamDatabase::findParamsForEffect(modsync::ampIds[8])->count==5);
  for(auto id:modsync::ampIds){auto one=manifest();one.getProperty("factory_amp_overrides",{}).getArray()->clear();auto& row=(*one.getProperty("nam_amp_overrides",{}).getArray())[0];set(row,"effect_id",juce::int64(id));install(one);verifyProfile(id);CHECK(GP200EffectDatabase::getEffectName(id)=="NAM1");}
- // NH03 cache accepts all 17 physical NAM models and rejects an eighteenth.
- auto full=manifest(17);full.getProperty("factory_amp_overrides",{}).getArray()->clear();install(full);
- for(int i=0;i<17;++i)verifyProfile(modsync::ampIds[size_t(i)]);
- CHECK(!GP200ModSync::recordNamAmpOverride(modsync::ampIds[30],"OVERFLOW","x.nam"));
- CHECK(GP200ModSync::removeNamAmpOverride(modsync::ampIds[0]));CHECK(GP200ModSync::recordNamAmpOverride(modsync::ampIds[30],"NEW_SLOT","x.nam"));
- auto cold=juce::JSON::parse(GP200ModSync::getManifestFile().loadFileAsString());CHECK(cold.getProperty("nam_amp_overrides",{}).getArray()->size()==17);install(cold);verifyProfile(modsync::ampIds[30]);
  // Builders themselves reject NAM, stock and invalid indices before staging.
  install(manifest());GP200IRUpload out;CHECK(GP200SoundClone::buildFactoryAmpRename(0,"Oops",out).failed());CHECK(out.chunks.empty());CHECK(GP200SoundClone::buildFactoryAmpRename(6,"Oops",out).failed());CHECK(GP200SoundClone::buildFactoryAmpRename(8,"GOOD",out).wasOk());CHECK(!out.chunks.empty());
  std::cout<<checks<<" NAM2 checks passed: actual ModSync, parameter/catalog DB and SoundClone builders; JUCE/filesystem/JSON modeled.\n";

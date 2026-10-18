@@ -1,5 +1,3 @@
-> Documento histórico. Para esta entrega usa README_FACTORY_NAM_ES.md.
-
 # Controles de Scenes desde el VST — 11/10/2026
 
 Este paquete es una actualización sobre `GP200_Fuentes_Consolidadas_CAPTURE_LED_VST_Standalone_2026-10-11.zip`; no es un sustituto completo de sus fuentes.

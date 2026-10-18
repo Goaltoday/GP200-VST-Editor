@@ -1,0 +1,298 @@
+--- 1.5/GP200-VST-Editor/source/GP200Plugin/PluginEditor.cpp
++++ 1.7/GP200-VST-Editor/source/GP200Plugin/PluginEditor.cpp
+@@ -760,8 +760,7 @@
+ 
+ bool namHotDestination(int index)
+ {
+-    return index >= 0 && index < 71 && gp200::GP200ModSync::isNamAmp (
+-        gp200::modsync::ampIds[static_cast<std::size_t> (index)]);
++    return index >= 0 && index < 71 && gp200::GP200ModSync::canUseNamInPlace (index);
+ }
+ 
+ class SoundCloneImportComponent final : public juce::Component,
+@@ -972,7 +971,7 @@
+         {
+             if ((effect.effectId & 0xFF000000u) == 0x0F000000u)
+                 continue;
+-            const bool nam = gp200::GP200ModSync::isNamAmp (effect.effectId);
++            const bool nam = gp200::GP200ModSync::canUseNamInPlace (factoryIndex);
+             destinationBox.addItem ("Factory AMP " + juce::String (factoryIndex + 1) + " - "
+                                         + gp200::GP200EffectDatabase::getEffectName (effect.effectId)
+                                         + (nam ? " [NAM HOT · .nam only]" : ""),
+@@ -1279,7 +1278,7 @@
+         if (namFile != namDestination || (selectedId >= 1001 && !namDestination
+             && !gp200::GP200ModSync::canWriteFactoryClo (selectedId - 1001)))
+         {
+-            statusLabel.setText ("A .nam file requires a NAM2 destination; SnapTone files require a CLO destination.",
++            statusLabel.setText ("A .nam file requires an eligible NH04 AMP; SnapTone files require a CLO destination.",
+                                  juce::dontSendNotification);
+             return;
+         }
+--- 1.5/GP200-VST-Editor/source/libgp200/GP200ModSync.cpp
++++ 1.7/GP200-VST-Editor/source/libgp200/GP200ModSync.cpp
+@@ -34,6 +34,8 @@
+ juce::String manifestFirmware;
+ juce::String manifestFirmwareSha;
+ juce::String metadataError;
++std::array<bool,71> inplaceEligible{};
++juce::var inplaceDestinations;
+ 
+ struct PreBankEntry
+ {
+@@ -147,7 +149,7 @@
+     const auto value = root.getProperty ("nam_amp_overrides", {});
+     if (value.isVoid ()) return true; // Legacy manifest.
+     const auto* rows = value.getArray ();
+-    if (rows == nullptr || rows->size () > 5) return false;
++    if (rows == nullptr || rows->size () > (root.getProperty ("features", {}).getProperty ("nam_hot_protocol", {}).toString () == "NH04" ? 62 : 5)) return false;
+     if (root.getProperty ("schema", {}).toString () != "gp200-mod-sync/v1"
+         || root.getProperty ("product", {}).toString () != "GP-200") return false;
+     const auto firmware = root.getProperty ("firmware", {}).toString ();
+@@ -182,6 +184,35 @@
+         entry.customNamAmp = true;
+         destination[id] = std::move (entry);
+     }
++    return true;
++}
++
++bool parseInplace (const juce::var& root, std::array<bool,71>& eligible, juce::var& destinations)
++{
++    const auto protocol = root.getProperty ("features", {}).getProperty ("nam_hot_protocol", {}).toString ();
++    const auto value = root.getProperty ("nam_inplace_destinations", {});
++    if (protocol != "NH04") return value.isVoid ();
++    const auto firmware = root.getProperty ("firmware", {}).toString ();
++    const auto hash = root.getProperty ("firmware_sha256", {}).toString ();
++    const auto* rows = value.getArray ();
++    if (root.getProperty ("schema", {}).toString () != "gp200-mod-sync/v1"
++        || root.getProperty ("product", {}).toString () != "GP-200"
++        || (firmware != "V180" && firmware != "V182")
++        || hash.length () != 64 || !hash.containsOnly ("0123456789abcdefABCDEF")
++        || rows == nullptr || rows->size () > 62) return false;
++    for (const auto& row : *rows)
++    {
++        const auto index = row.getProperty ("logical_index", {});
++        const auto size = row.getProperty ("package_bytes", {});
++        const auto offset = row.getProperty ("package_offset", {});
++        if (!index.isInt () || !size.isInt () || !offset.isInt ()) return false;
++        const int i = static_cast<int> (index), bytes = static_cast<int> (size), at = static_cast<int> (offset);
++        if (i < 0 || i >= 71 || eligible[static_cast<std::size_t> (i)] || bytes < 7696
++            || at < 68 || at > 0x200000 - bytes
++            || parseEffectId (row.getProperty ("effect_id", {})) != modsync::ampIds[static_cast<std::size_t> (i)]) return false;
++        eligible[static_cast<std::size_t> (i)] = true;
++    }
++    destinations = value;
+     return true;
+ }
+ 
+@@ -426,6 +457,7 @@
+         knownUserIRSamples = 0;
+         manifestFirmware.clear ();
+         manifestFirmwareSha.clear ();
++        inplaceEligible = {}; inplaceDestinations = juce::var{};
+         metadataError.clear ();
+         deviceSnapshot = false;
+         lastModificationMs = -1;
+@@ -436,13 +468,14 @@
+ 
+     const auto parsed = juce::JSON::parse (file.loadFileAsString ());
+     std::map<juce::uint32, OverrideEntry> next;
++    std::array<bool,71> nextEligible{}; juce::var nextDestinations;
+     if (! parsed.isVoid () && parsed.getDynamicObject () != nullptr)
+     {
+         parseOverrideArray (parsed, "factory_amp_overrides", true, false, next);
+         parseOverrideArray (parsed, "factory_cab_overrides", false, true, next);
+     }
+     if (parsed.isVoid () || parsed.getDynamicObject () == nullptr
+-        || ! validCloOverrides (parsed) || ! parseNamOverrides (parsed, next))
++        || ! validCloOverrides (parsed) || ! parseNamOverrides (parsed, next) || !parseInplace (parsed, nextEligible, nextDestinations))
+     {
+         // A partially copied/invalid manifest must not remove NAM protections.
+         metadataError = "Invalid firmware metadata; previous profiles retained";
+@@ -452,6 +485,7 @@
+         return;
+     }
+     overrides = std::move (next);
++    inplaceEligible = nextEligible; inplaceDestinations = nextDestinations;
+     const auto features = parsed.getProperty ("features", {});
+     const auto samples = static_cast<int> (features.getProperty ("user_ir_samples", 0));
+     knownUserIRSamples = samples == 1024 || samples == 2048 ? samples : 0;
+@@ -476,6 +510,12 @@
+     auto* features = new juce::DynamicObject ();
+     if (knownUserIRSamples != 0) features->setProperty ("user_ir_samples", knownUserIRSamples);
+     rootObject->setProperty ("source", deviceSnapshot ? "device-midi-ms11" : "local-cache");
++    if (!inplaceDestinations.isVoid ())
++    {
++        features->setProperty ("nam_hot_protocol", "NH04");
++        features->setProperty ("nam_hot_storage", "own-amp-package");
++        rootObject->setProperty ("nam_inplace_destinations", inplaceDestinations);
++    }
+     features->setProperty ("factory_cab_samples", 1024);
+     rootObject->setProperty ("features", juce::var (features));
+ 
+@@ -835,15 +875,30 @@
+     return text;
+ }
+ 
++bool GP200ModSync::canUseNamInPlace (int index)
++{
++    const juce::ScopedLock lock (syncLock);
++    if (index < 0 || index >= 71 || metadataError.isNotEmpty () || !inplaceEligible[static_cast<std::size_t> (index)]) return false;
++    const auto it = overrides.find (modsync::ampIds[static_cast<std::size_t> (index)]);
++    return it == overrides.end () || !it->second.customCloAmp;
++}
++
+ bool GP200ModSync::recordNamAmpOverride (juce::uint32 effectId, const juce::String& displayName, const juce::String& sourceFile)
+ {
+     reloadIfChanged ();
+     const juce::ScopedLock lock (syncLock);
+     if (!loadedOnce) loadUnlocked (getManifestFile ());
+     const auto existing = overrides.find (effectId);
+-    if (metadataError.isNotEmpty () || existing == overrides.end () || !existing->second.customNamAmp) return false;
+-    existing->second.displayName = displayName;
+-    existing->second.sourceFile = sourceFile;
++    const auto pos = std::find (modsync::ampIds.begin (), modsync::ampIds.end (), effectId);
++    if (metadataError.isNotEmpty () || pos == modsync::ampIds.end ()
++        || (existing != overrides.end () && existing->second.customCloAmp)
++        || ((existing == overrides.end () || !existing->second.customNamAmp)
++            && !inplaceEligible[static_cast<std::size_t> (pos-modsync::ampIds.begin ())])) return false;
++    if (displayName.isEmpty () || displayName.length () > 12) return false;
++    for (auto c : displayName) if (c < 32 || c > 126) return false;
++    auto& entry = overrides[effectId]; entry.customNamAmp = true;
++    entry.displayName = displayName;
++    entry.sourceFile = sourceFile;
+     return saveUnlocked ();
+ }
+ 
+--- 1.5/GP200-VST-Editor/source/libgp200/GP200ModSync.h
++++ 1.7/GP200-VST-Editor/source/libgp200/GP200ModSync.h
+@@ -35,6 +35,7 @@
+ 
+     // NAM profiles come from GP200_MOD_SYNC.json; MS11 cannot discover them.
+     static bool isNamAmp (juce::uint32 effectId);
++    static bool canUseNamInPlace (int zeroBasedFactoryAmpIndex);
+     static bool canWriteFactoryClo (int zeroBasedFactoryAmpIndex);
+     static juce::String getNamMetadataStatus ();
+     static bool isCustomCloAmp (juce::uint32 effectId);
+--- 1.5/GP200-VST-Editor/source/libgp200/GP200NAM.cpp
++++ 1.7/GP200-VST-Editor/source/libgp200/GP200NAM.cpp
+@@ -53,19 +53,19 @@
+  if(ordered.size()!=1871)return juce::Result::fail("NAM weight layout error.");
+  bytes.resize(weightBytes);for(std::size_t i=0;i<ordered.size();++i){unsigned bits=0;static_assert(sizeof(float)==4);std::memcpy(&bits,&ordered[i],4);modsync::write32(bytes.data()+i*4,bits);}return juce::Result::ok();
+ }
+-GP200IRUpload GP200NAM::query(int index,unsigned nonce,bool names){auto b=wrapper(index,nonce,0x5148);if(names)b[8]=2;return stage(b);}
+-GP200IRUpload GP200NAM::upload(const std::vector<juce::uint8>&weights,int index,unsigned nonce,const juce::String& name){auto b=wrapper(index,nonce,0x4e48);if(weights.size()!=weightBytes||index<0||index>=71||nonce==0)return {};modsync::write32(b.data()+12,crc(weights));modsync::write32(b.data()+16,binding);modsync::write32(b.data()+20,modsync::ampIds[static_cast<std::size_t>(index)]);modsync::write32(b.data()+24,weightBytes);b.insert(b.end(),weights.begin(),weights.end());if(name.isNotEmpty()){
++GP200IRUpload GP200NAM::query(int index,unsigned nonce,bool names,bool inplace){auto b=wrapper(index,nonce,0x5148);if(names)b[8]=2;if(inplace)b[8]=4;return stage(b);}
++GP200IRUpload GP200NAM::upload(const std::vector<juce::uint8>&weights,int index,unsigned nonce,const juce::String& name,bool inplace){auto b=wrapper(index,nonce,0x4e48);if(weights.size()!=weightBytes||index<0||index>=71||nonce==0)return {};modsync::write32(b.data()+12,crc(weights));modsync::write32(b.data()+16,binding);modsync::write32(b.data()+20,modsync::ampIds[static_cast<std::size_t>(index)]);modsync::write32(b.data()+24,weightBytes);b.insert(b.end(),weights.begin(),weights.end());if(name.isNotEmpty()){
+  const auto text=name.trim();if(text.isEmpty()||text.length()>12)return {};
+  for(auto c:text)if(c<32||c>126)return {};
+  b[8]=2;const auto pos=b.size();b.resize(pos+16,0);std::memcpy(b.data()+pos,text.toRawUTF8(),static_cast<std::size_t>(text.length()));
+- }return stage(b);}
++ }if(inplace){if(name.isEmpty())return {};b[8]=4;}return stage(b);}
+ bool GP200NAM::decodeAck(const juce::uint8*data,int n,Ack&out){
+  if(n<38||data[0]!=0xf0||data[8]!=0x12)return false;
+  std::array<juce::uint8,28> b{};for(int i=0;i<12;++i){if(data[13+2*i]>15||data[14+2*i]>15)return false;b[static_cast<std::size_t>(i)]=static_cast<juce::uint8>((data[13+2*i]<<4)|data[14+2*i]);}
+- if(modsync::read16(b.data())!=0x104b||(modsync::read32(b.data()+8)!=ackMagic&&modsync::read32(b.data()+8)!=nameAckMagic))return false;
++ if(modsync::read16(b.data())!=0x104b||(modsync::read32(b.data()+8)!=ackMagic&&modsync::read32(b.data()+8)!=nameAckMagic&&modsync::read32(b.data()+8)!=inplaceAckMagic&&modsync::read32(b.data()+8)!=0x3330484eu))return false;
+  out={};if(n!=70||data[9]!=28||data[10]||data[11]||data[12]||data[n-1]!=0xf7)return true;
+  for(int i=12;i<28;++i){if(data[13+2*i]>15||data[14+2*i]>15)return true;b[static_cast<std::size_t>(i)]=static_cast<juce::uint8>((data[13+2*i]<<4)|data[14+2*i]);}
+  if(modsync::read16(b.data()+2)!=24||modsync::read32(b.data()+12)!=binding||modsync::read32(b.data()+24)!=weightBytes)return true;
+- out.names=modsync::read32(b.data()+8)==nameAckMagic;out.nonce=modsync::read16(b.data()+4);out.status=modsync::read16(b.data()+6);out.id=modsync::read32(b.data()+16);out.physical=modsync::read32(b.data()+20);return true;
++ out.inplace=modsync::read32(b.data()+8)==inplaceAckMagic;out.names=out.inplace||modsync::read32(b.data()+8)==nameAckMagic;out.nonce=modsync::read16(b.data()+4);out.status=modsync::read16(b.data()+6);out.id=modsync::read32(b.data()+16);out.physical=modsync::read32(b.data()+20);return true;
+ }
+ } // namespace gp200
+--- 1.5/GP200-VST-Editor/source/libgp200/GP200NAM.h
++++ 1.7/GP200-VST-Editor/source/libgp200/GP200NAM.h
+@@ -4,11 +4,11 @@
+ namespace gp200 {
+ class GP200NAM final {
+ public:
+- static constexpr unsigned weightBytes=7484, binding=0x44423084, ackMagic=0x3130484e, nameAckMagic=0x3230484e;
++ static constexpr unsigned weightBytes=7484, binding=0x44423084, ackMagic=0x3130484e, nameAckMagic=0x3230484e, inplaceAckMagic=0x3430484e;
+  static juce::Result readWeights(const juce::File&, std::vector<juce::uint8>&);
+- static GP200IRUpload query(int logicalIndex,unsigned nonce,bool names=false);
+- static GP200IRUpload upload(const std::vector<juce::uint8>&,int logicalIndex,unsigned nonce,const juce::String& name={});
+- struct Ack {unsigned nonce=0,status=0,id=0,physical=0;bool names=false;};
++ static GP200IRUpload query(int logicalIndex,unsigned nonce,bool names=false,bool inplace=false);
++ static GP200IRUpload upload(const std::vector<juce::uint8>&,int logicalIndex,unsigned nonce,const juce::String& name={},bool inplace=false);
++ struct Ack {unsigned nonce=0,status=0,id=0,physical=0;bool names=false,inplace=false;};
+  // Returns true for our protocol, including malformed/late replies, to prevent
+  // stock parsers interpreting a NAM acknowledgement as another command.
+  static bool decodeAck(const juce::uint8*,int,Ack&);
+--- 1.5/GP200-VST-Editor/source/libgp200/MidiConnection.cpp
++++ 1.7/GP200-VST-Editor/source/libgp200/MidiConnection.cpp
+@@ -441,8 +441,8 @@
+         || irUploadPhase != IRUploadPhase::Idle || soundCloneUploadPhase != SoundCloneUploadPhase::Idle)
+     { irUploadStatusText = "NAM HOT unavailable: MIDI disconnected or another transaction is busy"; return false; }
+     GP200ModSync::reloadIfChanged ();
+-    if (index < 0 || index >= 71 || !GP200ModSync::isNamAmp (modsync::ampIds[static_cast<std::size_t> (index)]))
+-    { irUploadStatusText = "NAM HOT blocked: destination is not a known NAM2 AMP"; return false; }
++    if (index < 0 || index >= 71 || !GP200ModSync::canUseNamInPlace (index))
++    { irUploadStatusText = "NAM HOT blocked: destination is excluded, occupied by CLO, or NH04 JSON is missing"; return false; }
+     if (!isFactoryAmpDestinationInactiveLocked (index))
+     { irUploadStatusText = "NAM HOT: select a different AMP and wait for the live preset; bypass is not enough"; return false; }
+     std::vector<juce::uint8> weights;
+@@ -455,8 +455,8 @@
+     for (auto c : namHotName) if (c < 32 || c > 126)
+     { irUploadStatusText = "NAM HOT: name must use ASCII characters"; return false; }
+     namHotSource = file.getFileName ();
+-    namPendingUpload = GP200NAM::upload (weights, index, writeNonce, namHotName);
+-    irUpload = GP200NAM::query (index, namHotNonce, true);
++    namPendingUpload = GP200NAM::upload (weights, index, writeNonce, namHotName, true);
++    irUpload = GP200NAM::query (index, namHotNonce, true, true);
+     namHotIndex = index; namHotStage = NamHotStage::Query;
+     hot1FactoryAmpUploadIndex = -1; hot2FactoryAmpRename = false;
+     irUploadChunkIndex = 0; irUploadLabel = "NAM HOT";
+@@ -493,13 +493,13 @@
+             // before any separate User IR commit. Guard before releasing that packet.
+             GP200ModSync::reloadIfChanged ();
+             if (routingStage != 0 || presetRestoreTransactionActive || namHotIndex < 0
+-                || !GP200ModSync::isNamAmp (modsync::ampIds[static_cast<std::size_t> (namHotIndex)])
++                || !GP200ModSync::canUseNamInPlace (namHotIndex)
+                 || !isFactoryAmpDestinationInactiveLocked (namHotIndex))
+             { finishNamHot ("cancelled before final packet: destination or live preset changed"); return; }
+ 
+             // Arm reception before sendMessageNow: the device can reply immediately.
+             irUploadPhase = IRUploadPhase::WaitingForNamAck;
+-            irUploadNextActionMs = now + 10000.0;
++            irUploadNextActionMs = now + 30000.0;
+             irUploadStatusText = namHotStage == NamHotStage::Query
+                 ? "NAM HOT: waiting for firmware capability response"
+                 : "NAM HOT: waiting for flash readback ACK";
+@@ -520,7 +520,7 @@
+ 
+     if (irUploadPhase == IRUploadPhase::WaitingForNamAck)
+         finishNamHot (namHotStage == NamHotStage::Query
+-            ? "firmware did not confirm NH02; model write was not sent"
++            ? "firmware did not confirm NH04; model write was not sent"
+             : "no readback ACK; persistence unconfirmed; transfer was not retried");
+ }
+ 
+@@ -530,22 +530,24 @@
+     if (!GP200NAM::decodeAck (data, size, ack)) return false;
+     if (namHotStage == NamHotStage::None || irUploadPhase != IRUploadPhase::WaitingForNamAck
+         || ack.nonce != namHotNonce || namHotIndex < 0) return true;
++    if (!ack.inplace) { finishNamHot ("update firmware to 1.7 NH04; model write was not sent"); return true; }
++    if (ack.status == 11) { finishNamHot ("flash recovery pending or failed; restart before another transfer"); return true; }
+     if (ack.status >= 2 && ack.status <= 7)
+     {
+         const char* reasons[] = {
+             "", "", "destination selected on device; select another AMP",
+             "device rejected model CRC or engine binding",
+-            "firmware NH01 responded, but destination is not prepared for NAM HOT",
++            "destination is excluded, changed or occupied by SnapTone",
+             "device rejected incompatible weights",
+-            "device could not verify flash; persistence unconfirmed",
++            "write failed or verification failed; previous AMP restored when rollback succeeded",
+             "device rejected NAM name"
+         };
+         finishNamHot (reasons[ack.status]);
+         return true;
+     }
+-    if (ack.status != 1 || ack.physical >= 17
++    if (ack.status != 1 || ack.physical != static_cast<unsigned> (namHotIndex)
+         || ack.id != modsync::ampIds[static_cast<std::size_t> (namHotIndex)]) return true;
+-    if (!ack.names) { finishNamHot ("update firmware to 1.5 (NH02 names); model write was not sent or name unconfirmed"); return true; }
++    
+     if (namHotStage == NamHotStage::Query)
+     {
+         namHotPhysical = ack.physical;

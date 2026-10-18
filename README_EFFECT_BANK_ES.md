@@ -1,5 +1,3 @@
-> Documento histórico. Para esta entrega usa README_FACTORY_NAM_ES.md.
-
 # GP200 VST 0.1.9 — banco genérico de efectos
 
 Añade la lectura de `GP200_EFFECT_BANK.json` y muestra nombres, parámetros y rangos de las asignaciones **WAH, PRE, DIST/DST y EQ** del firmware Unified M7OPT 1.3. Conserva NAM2 0.1.8, que el usuario confirmó funcionando.

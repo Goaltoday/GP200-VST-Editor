@@ -7,11 +7,13 @@
 using namespace gp200;
 std::vector<juce::uint8> fromHex(const std::string&s){std::vector<juce::uint8>b;for(std::size_t i=0;i+1<s.size();i+=2)b.push_back(static_cast<juce::uint8>(std::stoul(s.substr(i,2),nullptr,16)));return b;}
 int main(int argc,char**argv){
- if(argc!=2&&argc!=3)return 2;
- const int index=argc==3?std::stoi(argv[2]):0;
+ if(argc!=4)return 2;
  auto mf=GP200ModSync::getManifestFile();mf.getParentDirectory().createDirectory();
- mf.replaceWithText("{\"schema\":\"gp200-mod-sync/v1\",\"product\":\"GP-200\",\"firmware\":\"V182\",\"firmware_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"nam_amp_overrides\":[{\"effect_id\":117440513,\"display_name\":\"NAM\",\"parameter_profile\":\"NAM2\",\"parameter_count\":2,\"controls\":[\"Input\",\"Output\"],\"neutral\":50}],\"factory_amp_overrides\":[],\"factory_cab_overrides\":[]}");
+ mf.replaceWithText(juce::File{juce::String(argv[2])}.loadFileAsString());
+ const int index=std::stoi(argv[3]);
  GP200ModSync::reloadIfChanged();
+ int eligible=0;for(int i=0;i<71;++i)if(GP200ModSync::canUseNamInPlace(i))++eligible;
+ if(eligible!=62||GP200ModSync::canUseNamInPlace(0))return 6;
  MidiConnection midi;midi.currentPresetDecodedData.setSize(effectBlockStart+effectBlockCount*effectBlockSize);
  int replies=0;
  midi.output.onSend=[&](const juce::MidiMessage&message){

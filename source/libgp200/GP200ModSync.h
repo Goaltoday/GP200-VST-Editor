@@ -34,9 +34,8 @@ class GP200ModSync final
     static std::uint64_t getRevision ();
 
     // NAM profiles come from GP200_MOD_SYNC.json; MS11 cannot discover them.
-    static bool canUseNamHot (int zeroBasedFactoryAmpIndex);
-    static bool removeNamAmpOverride (juce::uint32 effectId);
     static bool isNamAmp (juce::uint32 effectId);
+    static bool canUseNamInPlace (int zeroBasedFactoryAmpIndex);
     static bool canWriteFactoryClo (int zeroBasedFactoryAmpIndex);
     static juce::String getNamMetadataStatus ();
     static bool isCustomCloAmp (juce::uint32 effectId);

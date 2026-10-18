@@ -14,8 +14,8 @@ def branch(code,address):
  return address+4+offset-(1<<25 if s else 0)
 class Native:
  def __init__(self,fw,tag):
-  self.rt=json.loads((fw/f'nam_hot/{tag}.json').read_text());meta=json.loads((fw/f'CURRENT_METADATA_{tag}.json').read_text())
-  z=zipfile.ZipFile(fw/f'tests/{tag}_hot_unified5.zip');b=z.read(f'GP200_UNIFIED_M7OPT_{tag}.bin');self.manifest=json.loads(z.read('manifest.json'))['nam']
+  self.rt=json.loads((fw/f'nam_inplace/{tag}.json').read_text());meta=json.loads((fw/f'CURRENT_METADATA_{tag}.json').read_text())
+  z=zipfile.ZipFile(fw/f'tests/{tag}_hot_unified0.zip');b=z.read(f'GP200_UNIFIED_M7OPT_{tag}.bin');self.manifest=json.loads(z.read('manifest.json'))['nam']
   self.u=u=Uc(UC_ARCH_ARM,UC_MODE_THUMB|UC_MODE_MCLASS);u.ctl_set_cpu_model(UC_CPU_ARM_CORTEX_M7)
   for a,n in [(0,0x80000),(0x20000000,0x10000),(0x20200000,0x80000),(0x21000000,0x40000),(0x60500000,0x200000),(0x80000000,0x1800000)]:u.mem_map(a,n)
   end,last=(0x22309,0x3ff9c6) if tag=='V182' else (0x21c79,0x3ff336)
@@ -23,7 +23,10 @@ class Native:
   start,n=struct.unpack_from('<II',b,56);u.mem_write(0x60500000,b[48+start:48+start+n]);u.reg_write(UC_ARM_REG_R7,1)
   reg,stop=(0x1d9cb,0x1d9d4) if tag=='V182' else (0x1d337,0x1d340)
   u.emu_start(reg,stop,count=4000000);assert u.reg_read(UC_ARM_REG_PC)==stop
-  self.flash={address-0x7ffbe3d7:bytearray(b[file:file+8192]) for address,file in zip(self.rt['slots'],meta['safe_amp_slots'])}
+  self.flash=bytearray(b'\xff'*0x800000)
+  self.flash[0x500000:0x500000+n]=b[48+start:48+start+n]
+  for address,file in zip(self.rt['slots'],meta['safe_amp_slots']):self.flash[address-0x7ffbe3d7:address-0x7ffbe3d7+8192]=b[file:file+8192]
+  self.sync=z.read('GP200_MOD_SYNC.json')
   self.wire=[];self.incoming=[];self.writes=[];self.receivers=[];self.frame=0
   u.hook_add(UC_HOOK_CODE,self.hook)
   self.call(self.rt['boot'],[])
@@ -40,12 +43,11 @@ class Native:
  def call(self,pc,args):
   u=self.u;u.reg_write(UC_ARM_REG_SP,0x2103f000);u.reg_write(UC_ARM_REG_LR,0x79001)
   for reg,value in zip(REGS,args):u.reg_write(reg,value)
-  u.emu_start(pc,0x79000,count=10000000);assert u.reg_read(UC_ARM_REG_PC)==0x79000,(hex(pc),hex(u.reg_read(UC_ARM_REG_PC)))
+  u.emu_start(pc,0x79000,count=40000000);assert u.reg_read(UC_ARM_REG_PC)==0x79000,(hex(pc),hex(u.reg_read(UC_ARM_REG_PC)))
   return u.reg_read(UC_ARM_REG_R0)
  def region(self,offset,n):
-  for base,data in self.flash.items():
-   if base<=offset and offset+n<=base+8192:return data,offset-base
-  raise AssertionError(('flash outside AMP18',hex(offset),n))
+  assert 0<=offset and offset+n<=len(self.flash)
+  return self.flash,offset
  def hook(self,u,pc,size,user):
   r=lambda i:u.reg_read(REGS[i])
   ret=lambda:u.reg_write(UC_ARM_REG_PC,u.reg_read(UC_ARM_REG_LR))
@@ -83,10 +85,11 @@ if __name__=='__main__':
  parser=argparse.ArgumentParser();parser.add_argument('--firmware-root',type=Path,required=True);parser.add_argument('--report',type=Path);args=parser.parse_args();reports=[]
  with tempfile.TemporaryDirectory(prefix='gp200-native-midi-') as name:
   temp=Path(name);exe=compile_client(temp)
-  for tag,index in [(t,i) for t in ['V180','V182'] for i in (0,4)]:
+  for tag,index in [(tag,i) for tag in ['V180','V182'] for i in [1,15,31,69]]:
    native=Native(args.firmware_root,tag)
-   fixture=json.loads((ROOT/'tests/nam_hot_fixtures/compatible.nam').read_text());fixture['weights'][0]+=0.001;file=temp/f'{tag}_{index}.nam';file.write_text(json.dumps(fixture))
-   env=dict(os.environ,TEST_NAM2_DIR=str(temp/tag));p=subprocess.Popen([str(exe),str(file),str(index)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,bufsize=1,env=env);result=None
+   fixture=json.loads((ROOT/'tests/nam_hot_fixtures/compatible.nam').read_text());fixture['weights'][0]+=0.001;file=temp/f'{tag}.nam';file.write_text(json.dumps(fixture))
+   sync=temp/f'{tag}_SYNC.json';sync.write_bytes(native.sync)
+   env=dict(os.environ,TEST_NAM2_DIR=str(temp/f'{tag}_{index}'));p=subprocess.Popen([str(exe),str(file),str(sync),str(index)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,bufsize=1,env=env);result=None
    for line in p.stdout:
     if line.startswith('FRAME '):
      responses=native.receive(bytes.fromhex(line[6:].strip()));p.stdin.write(json.dumps({'responses':[r.hex() for r in responses]})+'\n');p.stdin.flush()
@@ -97,7 +100,7 @@ if __name__=='__main__':
    assert native.receivers[0]==(2,0x5148,28),native.receivers
    assert native.receivers[1]==(45,0x4e48,7528),native.receivers
    assert native.writes and all(event[0]==45 for event in native.writes)
-   data=next(data for data in native.flash.values() if bytes(data[0x1d60:0x1d70]).split(b'\0')[0]==file.stem.encode());assert bytes(data[0x1d60:0x1d70]).split(b'\0')[0]==file.stem.encode()
-   reports.append({'profile':tag,'logical_destination':index,'destination_initially_stock':index==4,'result':result,'client_messages':native.frame,'native_receiver_calls':native.receivers,'new_name_written_to_flash':True,'query_read_only':True,'write_only_on_final_model_packet':True,'no_separate_commit_sent':True,'native_reassembly_dispatch_and_ack_encoder_executed':True,'flash_hardware_modeled':True,'usb_endpoints_modeled':True,'hardware_tested':False})
+   row=native.manifest['inplace_rows'][index];offset=0x500000+row['offset'];assert bytes(native.flash[offset+171:offset+184]).split(b'\0')[0]==tag.encode()
+   reports.append({'profile':tag,'runtime_sha256':native.rt['sha256'],'logical_index':index,'result':result,'client_messages':native.frame,'native_receiver_calls':native.receivers,'new_name_written_to_flash':True,'query_read_only':True,'write_only_on_final_model_packet':True,'no_separate_commit_sent':True,'native_reassembly_dispatch_and_ack_encoder_executed':True,'flash_hardware_modeled':True,'usb_endpoints_modeled':True,'hardware_tested':False})
  print(json.dumps(reports,indent=2))
  if args.report:args.report.write_text(json.dumps(reports,indent=2))

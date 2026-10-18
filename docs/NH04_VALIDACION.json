@@ -1,0 +1,403 @@
+{
+  "version": "firmware 1.7 NH04 / VST 0.1.14",
+  "based_on": "delivered 1.5 / VST 0.1.12, exact profile hashes checked",
+  "models_stored": "own original AMP packages",
+  "model_capacity_stock": 62,
+  "record_bytes": 7696,
+  "common_engine_package_bytes": 35740,
+  "global_receiver_bytes_reserved": 8192,
+  "global_temporary_journal_bytes": 16384,
+  "factory_clo_stores_remaining": 15,
+  "profiles": {
+    "V180": {
+      "runtime_sha256": "40995280cc924aa7cdfaeeab7d2c2450f55abba8210fc8c4293b6ea6b8ec15d4",
+      "runtime_bytes": 3892,
+      "arm": {
+        "profile": "V180",
+        "runtime_sha256": "40995280cc924aa7cdfaeeab7d2c2450f55abba8210fc8c4293b6ea6b8ec15d4",
+        "stock_destinations_converted": 62,
+        "excluded": [
+          {
+            "name": "Tweedy",
+            "package_bytes": 5708
+          },
+          {
+            "name": "SUPDual CL",
+            "package_bytes": 5784
+          },
+          {
+            "name": "J-120 CL",
+            "package_bytes": 5264
+          },
+          {
+            "name": "Z38 CL",
+            "package_bytes": 7528
+          },
+          {
+            "name": "SUPDual OD",
+            "package_bytes": 7312
+          },
+          {
+            "name": "Juice R100",
+            "package_bytes": 6560
+          },
+          {
+            "name": "Foxy Bass",
+            "package_bytes": 4608
+          },
+          {
+            "name": "Mini Bass",
+            "package_bytes": 4492
+          },
+          {
+            "name": "Bass Pre",
+            "package_bytes": 5824
+          }
+        ],
+        "simultaneous_persistent_models": 62,
+        "fresh_boot_native_load_init_process_all_62": true,
+        "registry_pointers_never_redirected": true,
+        "neighbors_byte_exact_all_destinations": true,
+        "all_write_boundary_power_cuts": 52,
+        "two_and_three_sector_updates": true,
+        "scratch_pages_reserved_from_factory_clo": true,
+        "first_upload_and_replacement_rollback": true,
+        "smallest_package_7696_tested": true,
+        "active_crc_name_old_protocol_rejected": true,
+        "failed_write_rolled_back": true,
+        "active_neighbor_ram_header_retained_during_rollback": true,
+        "no_flash_io_in_audio_process": true,
+        "hardware_tested": false,
+        "nor_hardware_api_modeled": true
+      }
+    },
+    "V182": {
+      "runtime_sha256": "4ecfbdf3c899d5d2f3ff39020b7ee4d94e2ded55f653c74d4e41e034992b5afc",
+      "runtime_bytes": 3892,
+      "arm": {
+        "profile": "V182",
+        "runtime_sha256": "4ecfbdf3c899d5d2f3ff39020b7ee4d94e2ded55f653c74d4e41e034992b5afc",
+        "stock_destinations_converted": 62,
+        "excluded": [
+          {
+            "name": "Tweedy",
+            "package_bytes": 5708
+          },
+          {
+            "name": "SUPDual CL",
+            "package_bytes": 5784
+          },
+          {
+            "name": "J-120 CL",
+            "package_bytes": 5264
+          },
+          {
+            "name": "Z38 CL",
+            "package_bytes": 7528
+          },
+          {
+            "name": "SUPDual OD",
+            "package_bytes": 7312
+          },
+          {
+            "name": "Juice R100",
+            "package_bytes": 6560
+          },
+          {
+            "name": "Foxy Bass",
+            "package_bytes": 4608
+          },
+          {
+            "name": "Mini Bass",
+            "package_bytes": 4492
+          },
+          {
+            "name": "Bass Pre",
+            "package_bytes": 5824
+          }
+        ],
+        "simultaneous_persistent_models": 62,
+        "fresh_boot_native_load_init_process_all_62": true,
+        "registry_pointers_never_redirected": true,
+        "neighbors_byte_exact_all_destinations": true,
+        "all_write_boundary_power_cuts": 52,
+        "two_and_three_sector_updates": true,
+        "scratch_pages_reserved_from_factory_clo": true,
+        "first_upload_and_replacement_rollback": true,
+        "smallest_package_7696_tested": true,
+        "active_crc_name_old_protocol_rejected": true,
+        "failed_write_rolled_back": true,
+        "active_neighbor_ram_header_retained_during_rollback": true,
+        "no_flash_io_in_audio_process": true,
+        "hardware_tested": false,
+        "nor_hardware_api_modeled": true
+      }
+    }
+  },
+  "native_midi_cases": [
+    {
+      "profile": "V180",
+      "runtime_sha256": "40995280cc924aa7cdfaeeab7d2c2450f55abba8210fc8c4293b6ea6b8ec15d4",
+      "logical_index": 1,
+      "result": "RESULT PASS NAM HOT: flash verified: model and name saved; select the destination AMP replies=2 sent=45",
+      "client_messages": 45,
+      "native_receiver_calls": [
+        [
+          2,
+          20808,
+          28
+        ],
+        [
+          45,
+          20040,
+          7528
+        ]
+      ],
+      "new_name_written_to_flash": true,
+      "query_read_only": true,
+      "write_only_on_final_model_packet": true,
+      "no_separate_commit_sent": true,
+      "native_reassembly_dispatch_and_ack_encoder_executed": true,
+      "flash_hardware_modeled": true,
+      "usb_endpoints_modeled": true,
+      "hardware_tested": false
+    },
+    {
+      "profile": "V180",
+      "runtime_sha256": "40995280cc924aa7cdfaeeab7d2c2450f55abba8210fc8c4293b6ea6b8ec15d4",
+      "logical_index": 15,
+      "result": "RESULT PASS NAM HOT: flash verified: model and name saved; select the destination AMP replies=2 sent=45",
+      "client_messages": 45,
+      "native_receiver_calls": [
+        [
+          2,
+          20808,
+          28
+        ],
+        [
+          45,
+          20040,
+          7528
+        ]
+      ],
+      "new_name_written_to_flash": true,
+      "query_read_only": true,
+      "write_only_on_final_model_packet": true,
+      "no_separate_commit_sent": true,
+      "native_reassembly_dispatch_and_ack_encoder_executed": true,
+      "flash_hardware_modeled": true,
+      "usb_endpoints_modeled": true,
+      "hardware_tested": false
+    },
+    {
+      "profile": "V180",
+      "runtime_sha256": "40995280cc924aa7cdfaeeab7d2c2450f55abba8210fc8c4293b6ea6b8ec15d4",
+      "logical_index": 31,
+      "result": "RESULT PASS NAM HOT: flash verified: model and name saved; select the destination AMP replies=2 sent=45",
+      "client_messages": 45,
+      "native_receiver_calls": [
+        [
+          2,
+          20808,
+          28
+        ],
+        [
+          45,
+          20040,
+          7528
+        ]
+      ],
+      "new_name_written_to_flash": true,
+      "query_read_only": true,
+      "write_only_on_final_model_packet": true,
+      "no_separate_commit_sent": true,
+      "native_reassembly_dispatch_and_ack_encoder_executed": true,
+      "flash_hardware_modeled": true,
+      "usb_endpoints_modeled": true,
+      "hardware_tested": false
+    },
+    {
+      "profile": "V180",
+      "runtime_sha256": "40995280cc924aa7cdfaeeab7d2c2450f55abba8210fc8c4293b6ea6b8ec15d4",
+      "logical_index": 69,
+      "result": "RESULT PASS NAM HOT: flash verified: model and name saved; select the destination AMP replies=2 sent=45",
+      "client_messages": 45,
+      "native_receiver_calls": [
+        [
+          2,
+          20808,
+          28
+        ],
+        [
+          45,
+          20040,
+          7528
+        ]
+      ],
+      "new_name_written_to_flash": true,
+      "query_read_only": true,
+      "write_only_on_final_model_packet": true,
+      "no_separate_commit_sent": true,
+      "native_reassembly_dispatch_and_ack_encoder_executed": true,
+      "flash_hardware_modeled": true,
+      "usb_endpoints_modeled": true,
+      "hardware_tested": false
+    },
+    {
+      "profile": "V182",
+      "runtime_sha256": "4ecfbdf3c899d5d2f3ff39020b7ee4d94e2ded55f653c74d4e41e034992b5afc",
+      "logical_index": 1,
+      "result": "RESULT PASS NAM HOT: flash verified: model and name saved; select the destination AMP replies=2 sent=45",
+      "client_messages": 45,
+      "native_receiver_calls": [
+        [
+          2,
+          20808,
+          28
+        ],
+        [
+          45,
+          20040,
+          7528
+        ]
+      ],
+      "new_name_written_to_flash": true,
+      "query_read_only": true,
+      "write_only_on_final_model_packet": true,
+      "no_separate_commit_sent": true,
+      "native_reassembly_dispatch_and_ack_encoder_executed": true,
+      "flash_hardware_modeled": true,
+      "usb_endpoints_modeled": true,
+      "hardware_tested": false
+    },
+    {
+      "profile": "V182",
+      "runtime_sha256": "4ecfbdf3c899d5d2f3ff39020b7ee4d94e2ded55f653c74d4e41e034992b5afc",
+      "logical_index": 15,
+      "result": "RESULT PASS NAM HOT: flash verified: model and name saved; select the destination AMP replies=2 sent=45",
+      "client_messages": 45,
+      "native_receiver_calls": [
+        [
+          2,
+          20808,
+          28
+        ],
+        [
+          45,
+          20040,
+          7528
+        ]
+      ],
+      "new_name_written_to_flash": true,
+      "query_read_only": true,
+      "write_only_on_final_model_packet": true,
+      "no_separate_commit_sent": true,
+      "native_reassembly_dispatch_and_ack_encoder_executed": true,
+      "flash_hardware_modeled": true,
+      "usb_endpoints_modeled": true,
+      "hardware_tested": false
+    },
+    {
+      "profile": "V182",
+      "runtime_sha256": "4ecfbdf3c899d5d2f3ff39020b7ee4d94e2ded55f653c74d4e41e034992b5afc",
+      "logical_index": 31,
+      "result": "RESULT PASS NAM HOT: flash verified: model and name saved; select the destination AMP replies=2 sent=45",
+      "client_messages": 45,
+      "native_receiver_calls": [
+        [
+          2,
+          20808,
+          28
+        ],
+        [
+          45,
+          20040,
+          7528
+        ]
+      ],
+      "new_name_written_to_flash": true,
+      "query_read_only": true,
+      "write_only_on_final_model_packet": true,
+      "no_separate_commit_sent": true,
+      "native_reassembly_dispatch_and_ack_encoder_executed": true,
+      "flash_hardware_modeled": true,
+      "usb_endpoints_modeled": true,
+      "hardware_tested": false
+    },
+    {
+      "profile": "V182",
+      "runtime_sha256": "4ecfbdf3c899d5d2f3ff39020b7ee4d94e2ded55f653c74d4e41e034992b5afc",
+      "logical_index": 69,
+      "result": "RESULT PASS NAM HOT: flash verified: model and name saved; select the destination AMP replies=2 sent=45",
+      "client_messages": 45,
+      "native_receiver_calls": [
+        [
+          2,
+          20808,
+          28
+        ],
+        [
+          45,
+          20040,
+          7528
+        ]
+      ],
+      "new_name_written_to_flash": true,
+      "query_read_only": true,
+      "write_only_on_final_model_packet": true,
+      "no_separate_commit_sent": true,
+      "native_reassembly_dispatch_and_ack_encoder_executed": true,
+      "flash_hardware_modeled": true,
+      "usb_endpoints_modeled": true,
+      "hardware_tested": false
+    }
+  ],
+  "clean_rebuild": {
+    "source_zip_clean_rebuild": true,
+    "both_profiles_byte_exact": true,
+    "profile_sha256": {
+      "V180": "7e459d8a4103c3dd13eb5ecf4f32be82749dd56f09c4a815b34970aa880035c3",
+      "V182": "b0e31c2a47c4999abfb434f17cdaab2343c4e849ce995d1655994afa77a0c593"
+    },
+    "compiler": "Zig 0.17.0 ARM clang/lld",
+    "base_1_5_profiles_hash_verified": true
+  },
+  "vst": {
+    "complete_regression_suite_passed": true,
+    "suite_output": [
+      "Production methods extracted",
+      "Production methods extracted",
+      "Save/Recall/DAW production methods extracted",
+      "Real ribbon methods extracted",
+      "1251 scene notification, ALIGN/PHASE readback, guard and traffic-budget production checks passed (simulated JUCE ports/codec)",
+      "628 CHAIN/BLEND production restore and transport checks passed; JUCE ports/codec/known-parameter DB simulated",
+      "6128 drag preview / drop / cancellation checks passed (real ribbon methods; simulated JUCE drawing/events)",
+      "71 Save/Recall pipeline + A/B project-state regressions passed (actual methods; simulated JUCE XML, codec and ports)",
+      "353 FIX8 connection / read / save regressions passed (real method bodies, simulated ports and codec)",
+      "728 mode packets passed",
+      "FIX4: 512 native short/full mode frames passed; wrong length, wrong path, nonzero offset and outgoing query rejected",
+      "192192 routing moves passed",
+      "74 checks of actual Thumb responses with production decoder passed: legacy CAB/AMP, PRE pages, malformed records, nonce and checksums.",
+      "1309 NAM2 checks passed: actual ModSync, parameter/catalog DB and SoundClone builders; JUCE/filesystem/JSON modeled.",
+      "14 cold-process NAM2 cache checks passed.",
+      "116 NAM2 transport checks passed: actual MidiConnection start/commit bodies and SoundClone builders; ports/timing modeled.",
+      "23036 NAM import, weight order, wire and production transfer checks passed",
+      "100000 warm iterations (4 getters): 38368 us; zero file stats, reads or JSON parses.",
+      "106744 generic-bank checks passed (production metadata and databases; JUCE modeled).",
+      "141 cold-process bank checks passed.",
+      "Audio callback and MIDI parameter/effect serializers unchanged (SHA-256 checks)."
+    ],
+    "additional_nh04_validation_output": [
+      "1309 NAM2 checks passed: actual ModSync, parameter/catalog DB and SoundClone builders; JUCE/filesystem/JSON modeled.",
+      "14 cold-process NAM2 cache checks passed.",
+      "116 NAM2 transport checks passed: actual MidiConnection start/commit bodies and SoundClone builders; ports/timing modeled.",
+      "23061 NAM import, weight order, wire and production transfer checks passed"
+    ],
+    "real_juce_8_0_6_core_syntax_passed": true,
+    "editor_gcc_errors": 15,
+    "editor_errors_same_as_base_1_5": true,
+    "windows_vst_binary_compiled": false
+  },
+  "physical_hardware_tested": false,
+  "emulation_limitations": "Flash API and USB hardware modeled. Power cuts between API operations. Boot follows native startup/registry then the 1.5 cold hook, not full UI/preset lifecycle."
+}

@@ -327,7 +327,6 @@ class MidiConnection final : private juce::MidiInputCallback, private juce::Time
     GP200IRUpload irUpload;
     juce::String namHotName, namHotSource;
     GP200IRUpload namPendingUpload;
-    std::vector<juce::uint8> namHotWeights;
     enum class NamHotStage { None, Query, Write };
     NamHotStage namHotStage{NamHotStage::None};
     int namHotIndex{-1};
