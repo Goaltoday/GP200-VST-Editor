@@ -1,0 +1,253 @@
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -1,6 +1,6 @@
+ cmake_minimum_required(VERSION 3.22)
+ 
+-project(GP200VST VERSION 0.1.11)
++project(GP200VST VERSION 0.1.12)
+ 
+ set(CMAKE_CXX_STANDARD 20)
+ set(CMAKE_CXX_STANDARD_REQUIRED ON)
+--- a/source/libgp200/GP200NAM.h
++++ b/source/libgp200/GP200NAM.h
+@@ -4,11 +4,11 @@
+ namespace gp200 {
+ class GP200NAM final {
+ public:
+- static constexpr unsigned weightBytes=7484, binding=0x44423084, ackMagic=0x3130484e;
++ static constexpr unsigned weightBytes=7484, binding=0x44423084, ackMagic=0x3130484e, nameAckMagic=0x3230484e;
+  static juce::Result readWeights(const juce::File&, std::vector<juce::uint8>&);
+- static GP200IRUpload query(int logicalIndex,unsigned nonce);
+- static GP200IRUpload upload(const std::vector<juce::uint8>&,int logicalIndex,unsigned nonce);
+- struct Ack {unsigned nonce=0,status=0,id=0,physical=0;};
++ static GP200IRUpload query(int logicalIndex,unsigned nonce,bool names=false);
++ static GP200IRUpload upload(const std::vector<juce::uint8>&,int logicalIndex,unsigned nonce,const juce::String& name={});
++ struct Ack {unsigned nonce=0,status=0,id=0,physical=0;bool names=false;};
+  // Returns true for our protocol, including malformed/late replies, to prevent
+  // stock parsers interpreting a NAM acknowledgement as another command.
+  static bool decodeAck(const juce::uint8*,int,Ack&);
+--- a/source/libgp200/GP200NAM.cpp
++++ b/source/libgp200/GP200NAM.cpp
+@@ -53,15 +53,19 @@
+  if(ordered.size()!=1871)return juce::Result::fail("NAM weight layout error.");
+  bytes.resize(weightBytes);for(std::size_t i=0;i<ordered.size();++i){unsigned bits=0;static_assert(sizeof(float)==4);std::memcpy(&bits,&ordered[i],4);modsync::write32(bytes.data()+i*4,bits);}return juce::Result::ok();
+ }
+-GP200IRUpload GP200NAM::query(int index,unsigned nonce){return stage(wrapper(index,nonce,0x5148));}
+-GP200IRUpload GP200NAM::upload(const std::vector<juce::uint8>&weights,int index,unsigned nonce){auto b=wrapper(index,nonce,0x4e48);if(weights.size()!=weightBytes||index<0||index>=71||nonce==0)return {};modsync::write32(b.data()+12,crc(weights));modsync::write32(b.data()+16,binding);modsync::write32(b.data()+20,modsync::ampIds[static_cast<std::size_t>(index)]);modsync::write32(b.data()+24,weightBytes);b.insert(b.end(),weights.begin(),weights.end());return stage(b);}
++GP200IRUpload GP200NAM::query(int index,unsigned nonce,bool names){auto b=wrapper(index,nonce,0x5148);if(names)b[8]=2;return stage(b);}
++GP200IRUpload GP200NAM::upload(const std::vector<juce::uint8>&weights,int index,unsigned nonce,const juce::String& name){auto b=wrapper(index,nonce,0x4e48);if(weights.size()!=weightBytes||index<0||index>=71||nonce==0)return {};modsync::write32(b.data()+12,crc(weights));modsync::write32(b.data()+16,binding);modsync::write32(b.data()+20,modsync::ampIds[static_cast<std::size_t>(index)]);modsync::write32(b.data()+24,weightBytes);b.insert(b.end(),weights.begin(),weights.end());if(name.isNotEmpty()){
++ const auto text=name.trim();if(text.isEmpty()||text.length()>12)return {};
++ for(auto c:text)if(c<32||c>126)return {};
++ b[8]=2;const auto pos=b.size();b.resize(pos+16,0);std::memcpy(b.data()+pos,text.toRawUTF8(),static_cast<std::size_t>(text.length()));
++ }return stage(b);}
+ bool GP200NAM::decodeAck(const juce::uint8*data,int n,Ack&out){
+  if(n<38||data[0]!=0xf0||data[8]!=0x12)return false;
+  std::array<juce::uint8,28> b{};for(int i=0;i<12;++i){if(data[13+2*i]>15||data[14+2*i]>15)return false;b[static_cast<std::size_t>(i)]=static_cast<juce::uint8>((data[13+2*i]<<4)|data[14+2*i]);}
+- if(modsync::read16(b.data())!=0x104b||modsync::read32(b.data()+8)!=ackMagic)return false;
++ if(modsync::read16(b.data())!=0x104b||(modsync::read32(b.data()+8)!=ackMagic&&modsync::read32(b.data()+8)!=nameAckMagic))return false;
+  out={};if(n!=70||data[9]!=28||data[10]||data[11]||data[12]||data[n-1]!=0xf7)return true;
+  for(int i=12;i<28;++i){if(data[13+2*i]>15||data[14+2*i]>15)return true;b[static_cast<std::size_t>(i)]=static_cast<juce::uint8>((data[13+2*i]<<4)|data[14+2*i]);}
+  if(modsync::read16(b.data()+2)!=24||modsync::read32(b.data()+12)!=binding||modsync::read32(b.data()+24)!=weightBytes)return true;
+- out.nonce=modsync::read16(b.data()+4);out.status=modsync::read16(b.data()+6);out.id=modsync::read32(b.data()+16);out.physical=modsync::read32(b.data()+20);return true;
++ out.names=modsync::read32(b.data()+8)==nameAckMagic;out.nonce=modsync::read16(b.data()+4);out.status=modsync::read16(b.data()+6);out.id=modsync::read32(b.data()+16);out.physical=modsync::read32(b.data()+20);return true;
+ }
+ } // namespace gp200
+--- a/source/libgp200/GP200ModSync.h
++++ b/source/libgp200/GP200ModSync.h
+@@ -59,6 +59,7 @@
+     static juce::String getWahConfigDescription (juce::uint32 wahEffectId);
+     static juce::File getWahConfigFile ();
+ 
++    static bool recordNamAmpOverride (juce::uint32 effectId, const juce::String& displayName, const juce::String& sourceFile);
+     static void recordFactoryAmpOverride (juce::uint32 effectId,
+                                           const juce::String& displayName,
+                                           const juce::String& sourceFile);
+--- a/source/libgp200/GP200ModSync.cpp
++++ b/source/libgp200/GP200ModSync.cpp
+@@ -835,6 +835,18 @@
+     return text;
+ }
+ 
++bool GP200ModSync::recordNamAmpOverride (juce::uint32 effectId, const juce::String& displayName, const juce::String& sourceFile)
++{
++    reloadIfChanged ();
++    const juce::ScopedLock lock (syncLock);
++    if (!loadedOnce) loadUnlocked (getManifestFile ());
++    const auto existing = overrides.find (effectId);
++    if (metadataError.isNotEmpty () || existing == overrides.end () || !existing->second.customNamAmp) return false;
++    existing->second.displayName = displayName;
++    existing->second.sourceFile = sourceFile;
++    return saveUnlocked ();
++}
++
+ void GP200ModSync::recordFactoryAmpOverride (juce::uint32 effectId,
+                                              const juce::String& displayName,
+                                              const juce::String& sourceFile)
+--- a/source/libgp200/MidiConnection.h
++++ b/source/libgp200/MidiConnection.h
+@@ -74,7 +74,7 @@
+                                 const juce::String& requestedDisplayName);
+     bool startFactoryAmpRename (int zeroBasedFactoryAmpIndex,
+                                 const juce::String& requestedDisplayName);
+-    bool startNamHotUpload (const juce::File&, int zeroBasedFactoryAmpIndex);
++    bool startNamHotUpload (const juce::File&, int zeroBasedFactoryAmpIndex, const juce::String& requestedName = {});
+     void processIRUpload ();
+     bool isIRUploadInProgress () const;
+     juce::String getIRUploadStatusText () const;
+@@ -325,6 +325,7 @@
+ 
+     enum class IRUploadPhase { Idle, WaitingAfterPrepare, SendingChunks, WaitingBeforeCommit, WaitingAfterCommit, WaitingForNamAck };
+     GP200IRUpload irUpload;
++    juce::String namHotName, namHotSource;
+     GP200IRUpload namPendingUpload;
+     enum class NamHotStage { None, Query, Write };
+     NamHotStage namHotStage{NamHotStage::None};
+--- a/source/libgp200/MidiConnection.cpp
++++ b/source/libgp200/MidiConnection.cpp
+@@ -434,7 +434,7 @@
+     return true;
+ }
+ 
+-bool MidiConnection::startNamHotUpload (const juce::File& file, int index)
++bool MidiConnection::startNamHotUpload (const juce::File& file, int index, const juce::String& requestedName)
+ {
+     const juce::ScopedLock lock (stateLock);
+     if (!midiOutput || routingStage != 0 || presetRestoreTransactionActive
+@@ -450,8 +450,13 @@
+     if (result.failed ()) { irUploadStatusText = "NAM HOT: " + result.getErrorMessage (); return false; }
+     namHotNonce = (namHotNonce + 1u) & 65535u; if (!namHotNonce) ++namHotNonce;
+     const unsigned writeNonce = (namHotNonce == 65535u ? 1u : namHotNonce + 1u);
+-    namPendingUpload = GP200NAM::upload (weights, index, writeNonce);
+-    irUpload = GP200NAM::query (index, namHotNonce);
++    namHotName = (requestedName.isEmpty () ? file.getFileNameWithoutExtension () : requestedName).trim ().substring (0, 12);
++    if (namHotName.isEmpty ()) { irUploadStatusText = "NAM HOT: enter a name (1-12 ASCII characters)"; return false; }
++    for (auto c : namHotName) if (c < 32 || c > 126)
++    { irUploadStatusText = "NAM HOT: name must use ASCII characters"; return false; }
++    namHotSource = file.getFileName ();
++    namPendingUpload = GP200NAM::upload (weights, index, writeNonce, namHotName);
++    irUpload = GP200NAM::query (index, namHotNonce, true);
+     namHotIndex = index; namHotStage = NamHotStage::Query;
+     hot1FactoryAmpUploadIndex = -1; hot2FactoryAmpRename = false;
+     irUploadChunkIndex = 0; irUploadLabel = "NAM HOT";
+@@ -466,7 +471,7 @@
+ void MidiConnection::finishNamHot (const juce::String& status)
+ {
+     namHotStage = NamHotStage::None; namHotIndex = -1;
+-    namPendingUpload = {}; irUpload = {}; irUploadPhase = IRUploadPhase::Idle;
++    namPendingUpload = {}; namHotName.clear (); namHotSource.clear (); irUpload = {}; irUploadPhase = IRUploadPhase::Idle;
+     irUploadStatusText = "NAM HOT: " + status; lastMessageText = irUploadStatusText;
+ }
+ 
+@@ -515,7 +520,7 @@
+ 
+     if (irUploadPhase == IRUploadPhase::WaitingForNamAck)
+         finishNamHot (namHotStage == NamHotStage::Query
+-            ? "firmware did not confirm NH01; model write was not sent"
++            ? "firmware did not confirm NH02; model write was not sent"
+             : "no readback ACK; persistence unconfirmed; transfer was not retried");
+ }
+ 
+@@ -525,20 +530,22 @@
+     if (!GP200NAM::decodeAck (data, size, ack)) return false;
+     if (namHotStage == NamHotStage::None || irUploadPhase != IRUploadPhase::WaitingForNamAck
+         || ack.nonce != namHotNonce || namHotIndex < 0) return true;
+-    if (ack.status >= 2 && ack.status <= 6)
++    if (ack.status >= 2 && ack.status <= 7)
+     {
+         const char* reasons[] = {
+             "", "", "destination selected on device; select another AMP",
+             "device rejected model CRC or engine binding",
+             "firmware NH01 responded, but destination is not prepared for NAM HOT",
+             "device rejected incompatible weights",
+-            "device could not verify flash; persistence unconfirmed"
++            "device could not verify flash; persistence unconfirmed",
++            "device rejected NAM name"
+         };
+         finishNamHot (reasons[ack.status]);
+         return true;
+     }
+     if (ack.status != 1 || ack.physical >= 17
+         || ack.id != modsync::ampIds[static_cast<std::size_t> (namHotIndex)]) return true;
++    if (!ack.names) { finishNamHot ("update firmware to 1.5 (NH02 names); model write was not sent or name unconfirmed"); return true; }
+     if (namHotStage == NamHotStage::Query)
+     {
+         namHotPhysical = ack.physical;
+@@ -550,7 +557,10 @@
+         midiOutput->sendMessageNow (irUpload.prepareMessage); return true;
+     }
+     if (ack.physical != namHotPhysical) return true;
+-    finishNamHot ("flash verified; select the destination AMP. Name and NAM2 controls are retained");
++    const bool saved = GP200ModSync::recordNamAmpOverride (
++        modsync::ampIds[static_cast<std::size_t> (namHotIndex)], namHotName, namHotSource);
++    finishNamHot (saved ? "flash verified: model and name saved; select the destination AMP"
++                       : "flash verified: model and name saved on device; local metadata could not be saved");
+     return true;
+ }
+ 
+--- a/source/GP200Plugin/PluginEditor.cpp
++++ b/source/GP200Plugin/PluginEditor.cpp
+@@ -869,7 +869,7 @@
+         destinationBox.setColour (juce::ComboBox::outlineColourId, panelOutlineColour);
+         destinationBox.onChange = [this] { updateRenameEditorForSelectedSlot (); };
+ 
+-        renameEditor.setTextToShowWhenEmpty ("Name (maximum 16 characters)",
++        renameEditor.setTextToShowWhenEmpty ("Name (NAM: 12 ASCII; CLO: 16)",
+                                              mutedTextColour.withAlpha (0.65f));
+         renameEditor.setFont (gp200ui::regular (14.0f));
+         renameEditor.setColour (juce::TextEditor::backgroundColourId, panelColour);
+@@ -992,7 +992,8 @@
+         const bool isFactoryAmp = selectedId >= 1001 && selectedId <= 1071;
+         const bool writable = isSnapTone || (isFactoryAmp
+             && gp200::GP200ModSync::canWriteFactoryClo (selectedId - 1001));
+-        renameEditor.setEnabled (writable);
++        renameEditor.setInputRestrictions ((selectedId >= 1001 && namHotDestination (selectedId - 1001)) ? 12 : 16);
++        renameEditor.setEnabled (writable || (selectedId >= 1001 && namHotDestination (selectedId - 1001)));
+         renameButton.setEnabled (writable && !isCurrentlyBusy ());
+         if (isFactoryAmp)
+         {
+@@ -1001,7 +1002,7 @@
+                 && !entries[static_cast<std::size_t> (selectedRow)].isDirectory)
+                 renameEditor.setText (
+                     entries[static_cast<std::size_t> (selectedRow)].file
+-                        .getFileNameWithoutExtension ().substring (0, 16),
++                        .getFileNameWithoutExtension ().substring (0, namHotDestination (destinationBox.getSelectedId () - 1001) ? 12 : 16),
+                     juce::dontSendNotification);
+             else
+                 renameEditor.clear ();
+@@ -1136,7 +1137,7 @@
+         if (selectedFile && destinationBox.getSelectedId () >= 1001)
+             renameEditor.setText (
+                 entries[static_cast<std::size_t> (lastRowSelected)].file
+-                    .getFileNameWithoutExtension ().substring (0, 16),
++                    .getFileNameWithoutExtension ().substring (0, namHotDestination (destinationBox.getSelectedId () - 1001) ? 12 : 16),
+                 juce::dontSendNotification);
+     }
+ 
+@@ -1295,7 +1296,7 @@
+         {
+             requestedName = renameEditor.getText ().trim ().substring (0, 16);
+             if (requestedName.isEmpty ())
+-                requestedName = activeImportFile.getFileNameWithoutExtension ().substring (0, 16);
++                requestedName = activeImportFile.getFileNameWithoutExtension ().substring (0, namHotDestination (destinationBox.getSelectedId () - 1001) ? 12 : 16);
+         }
+         onImport (activeImportFile, destinationCode, requestedName);
+     }
+@@ -1345,7 +1346,8 @@
+         const bool namFile = selectedFile && entries[static_cast<std::size_t> (selectedRow)].file
+             .getFileExtension ().equalsIgnoreCase (".nam");
+         importButton.setEnabled (selectedFile && (namFile ? namDestination : writable));
+-        renameEditor.setEnabled (writable);
++        renameEditor.setInputRestrictions ((selectedId >= 1001 && namHotDestination (selectedId - 1001)) ? 12 : 16);
++        renameEditor.setEnabled (writable || (selectedId >= 1001 && namHotDestination (selectedId - 1001)));
+         renameButton.setEnabled (writable);
+     }
+ 
+@@ -3451,7 +3453,7 @@
+         const auto factoryAmpIndex = globalSlot - 1000;
+         if (file.getFileExtension ().equalsIgnoreCase (".nam"))
+         {
+-            if (!midiConnection.startNamHotUpload (file, factoryAmpIndex))
++            if (!midiConnection.startNamHotUpload (file, factoryAmpIndex, requestedName))
+                 juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon,
+                     "NAM HOT import", midiConnection.getIRUploadStatusText ());
+             effectsStatusText = midiConnection.getIRUploadStatusText ();

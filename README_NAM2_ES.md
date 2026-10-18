@@ -1,3 +1,5 @@
+> Documento histórico. Para esta entrega usa README_FACTORY_NAM_ES.md.
+
 # GP200 VST — NAM2 0.1.8
 
 Nota de continuidad: para la actualización 0.1.9, lee también `README_EFFECT_BANK_ES.md`. Esta guía describe el alcance original de 0.1.8.

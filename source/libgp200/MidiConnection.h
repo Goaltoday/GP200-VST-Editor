@@ -74,7 +74,7 @@ class MidiConnection final : private juce::MidiInputCallback, private juce::Time
                                 const juce::String& requestedDisplayName);
     bool startFactoryAmpRename (int zeroBasedFactoryAmpIndex,
                                 const juce::String& requestedDisplayName);
-    bool startNamHotUpload (const juce::File&, int zeroBasedFactoryAmpIndex);
+    bool startNamHotUpload (const juce::File&, int zeroBasedFactoryAmpIndex, const juce::String& requestedName = {});
     void processIRUpload ();
     bool isIRUploadInProgress () const;
     juce::String getIRUploadStatusText () const;
@@ -325,7 +325,9 @@ class MidiConnection final : private juce::MidiInputCallback, private juce::Time
 
     enum class IRUploadPhase { Idle, WaitingAfterPrepare, SendingChunks, WaitingBeforeCommit, WaitingAfterCommit, WaitingForNamAck };
     GP200IRUpload irUpload;
+    juce::String namHotName, namHotSource;
     GP200IRUpload namPendingUpload;
+    std::vector<juce::uint8> namHotWeights;
     enum class NamHotStage { None, Query, Write };
     NamHotStage namHotStage{NamHotStage::None};
     int namHotIndex{-1};

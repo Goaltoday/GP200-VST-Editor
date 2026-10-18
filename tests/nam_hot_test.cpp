@@ -7,7 +7,7 @@ using namespace gp200;
 int checks=0;
 #define CHECK(x) do{if(!(x)){std::cerr<<"FAIL "<<__LINE__<<": "<<#x<<"\n";std::abort();}++checks;}while(false)
 static std::vector<juce::uint8> unstage(const GP200IRUpload&u){std::vector<juce::uint8>b;for(auto&m:u.chunks){auto p=m.getRawData();const int n=m.getRawDataSize();CHECK(n>=14);CHECK(((p[12]<<7)|p[11])==int(b.size()));for(int i=13;i<n-1;i+=2){CHECK(p[i]<=15&&p[i+1]<=15);b.push_back(juce::uint8((p[i]<<4)|p[i+1]));}}return b;}
-static std::vector<juce::uint8> response(unsigned nonce,unsigned status=1,unsigned physical=0){std::array<juce::uint8,28>b{};modsync::write16(b.data(),0x104b);modsync::write16(b.data()+2,24);modsync::write16(b.data()+4,nonce);modsync::write16(b.data()+6,status);modsync::write32(b.data()+8,GP200NAM::ackMagic);modsync::write32(b.data()+12,GP200NAM::binding);modsync::write32(b.data()+16,modsync::ampIds[0]);modsync::write32(b.data()+20,physical);modsync::write32(b.data()+24,7484);std::vector<juce::uint8>o{0xf0,0x21,0x25,0x7e,0x47,0x50,0x2d,0x32,0x12,28,0,0,0};for(auto v:b){o.push_back(v>>4);o.push_back(v&15);}o.push_back(0xf7);return o;}
+static std::vector<juce::uint8> response(unsigned nonce,unsigned status=1,unsigned physical=0,unsigned logical=0){std::array<juce::uint8,28>b{};modsync::write16(b.data(),0x104b);modsync::write16(b.data()+2,24);modsync::write16(b.data()+4,nonce);modsync::write16(b.data()+6,status);modsync::write32(b.data()+8,GP200NAM::genericAckMagic);modsync::write32(b.data()+12,GP200NAM::binding);modsync::write32(b.data()+16,modsync::ampIds[logical]);modsync::write32(b.data()+20,physical);modsync::write32(b.data()+24,7484);std::vector<juce::uint8>o{0xf0,0x21,0x25,0x7e,0x47,0x50,0x2d,0x32,0x12,28,0,0,0};for(auto v:b){o.push_back(v>>4);o.push_back(v&15);}o.push_back(0xf7);return o;}
 int main(int argc,char**argv){
  CHECK(argc==3);juce::File file{juce::String(argv[1])};std::vector<juce::uint8>w;CHECK(GP200NAM::readWeights(file,w).wasOk());CHECK(w.size()==7484);
  std::ifstream f(argv[2],std::ios::binary);std::vector<juce::uint8>expected((std::istreambuf_iterator<char>(f)),{});CHECK(expected==w);
@@ -39,7 +39,7 @@ int main(int argc,char**argv){
   if(size<14)return;
   const int total=data[9]|(data[10]<<7),offset=data[11]|(data[12]<<7);
   const int amount=(size-14)/2;
-  if((total==28||total==7512)&&offset+amount==total){
+  if((total==28||total==7528)&&offset+amount==total){
    CHECK(immediate.irUploadPhase==MidiConnection::IRUploadPhase::WaitingForNamAck);
    auto reply=response(immediate.namHotNonce);++immediateAcks;
    CHECK(immediate.handleNamHotAck(reply.data(),int(reply.size())));
@@ -64,5 +64,35 @@ int main(int argc,char**argv){
  for(int i=0;i<8;++i)invalidDestination[13+16*2+i]=0;
  CHECK(rejected.handleNamHotAck(invalidDestination.data(),int(invalidDestination.size())));
  CHECK(rejected.namHotStage==MidiConnection::NamHotStage::None);CHECK(rejected.irUploadStatusText.contains("not prepared"));
+ // Names are committed to metadata only after the matching NH02 write ACK.
+ CHECK(GP200ModSync::getDisplayName(modsync::ampIds[0])=="sentinel");
+ MidiConnection names;names.currentPresetDecodedData.setSize(effectBlockStart+effectBlockCount*effectBlockSize);
+ CHECK(names.startNamHotUpload(file,0,"NEW_NAM"));CHECK(GP200ModSync::getDisplayName(modsync::ampIds[0])!="NEW_NAM");
+ juce::Time::now+=1000;names.processIRUpload();auto namesAck=response(names.namHotNonce);names.handleNamHotAck(namesAck.data(),int(namesAck.size()));
+ for(int i=0;i<42;++i){juce::Time::now+=1000;names.processIRUpload();}
+ CHECK(GP200ModSync::getDisplayName(modsync::ampIds[0])!="NEW_NAM");
+ namesAck=response(names.namHotNonce);names.handleNamHotAck(namesAck.data(),int(namesAck.size()));
+ CHECK(GP200ModSync::getDisplayName(modsync::ampIds[0])=="NEW_NAM");CHECK(GP200ModSync::isNamAmp(modsync::ampIds[0]));
+ auto namedBlob=unstage(GP200NAM::upload(expected,0,7,"TWELVE_CHARS"));CHECK(namedBlob.size()==7528);CHECK(namedBlob[8]==2);
+ CHECK(std::memcmp(namedBlob.data()+7512,"TWELVE_CHARS",12)==0);CHECK(namedBlob.back()==0);
+ CHECK(GP200NAM::upload(expected,0,7,"TOO_LONG_12345").chunks.empty());
+ MidiConnection old;old.currentPresetDecodedData.setSize(effectBlockStart+effectBlockCount*effectBlockSize);CHECK(old.startNamHotUpload(file,0));
+ juce::Time::now+=1000;old.processIRUpload();auto legacy=response(old.namHotNonce);
+ auto oldRaw=GP200NAM::ackMagic;for(int i=0;i<4;++i){auto byte=(oldRaw>>(8*i))&255;legacy[13+(8+i)*2]=byte>>4;legacy[14+(8+i)*2]=byte&15;}
+ CHECK(old.handleNamHotAck(legacy.data(),int(legacy.size())));CHECK(old.namHotStage==MidiConnection::NamHotStage::None);CHECK(old.output.messages.size()==2);CHECK(old.irUploadStatusText.contains("update firmware"));
+ // Stock destination becomes typed NAM2 only after its confirmed NH03 write.
+ CHECK(!GP200ModSync::isNamAmp(modsync::ampIds[5]));
+ MidiConnection stock;stock.currentPresetDecodedData.setSize(effectBlockStart+effectBlockCount*effectBlockSize);
+ CHECK(stock.startNamHotUpload(file,5,"STOCK_TO_NAM"));juce::Time::now+=1000;stock.processIRUpload();
+ auto slotAck=response(stock.namHotNonce,1,7,5);stock.handleNamHotAck(slotAck.data(),int(slotAck.size()));
+ auto staged=unstage(stock.irUpload);CHECK(staged[8]==3&&staged[9]==7);CHECK(modsync::read32(staged.data()+20)==modsync::ampIds[5]);
+ for(int i=0;i<42;++i){juce::Time::now+=1000;stock.processIRUpload();}
+ CHECK(!GP200ModSync::isNamAmp(modsync::ampIds[5]));slotAck=response(stock.namHotNonce,1,7,5);stock.handleNamHotAck(slotAck.data(),int(slotAck.size()));
+ CHECK(GP200ModSync::isNamAmp(modsync::ampIds[5]));CHECK(GP200EffectParamDatabase::findParamsForEffect(modsync::ampIds[5])->count==2);CHECK(!GP200ModSync::canWriteFactoryClo(5));
+ CHECK(stock.startNamHotUpload(file,5));juce::Time::now+=1000;stock.processIRUpload();slotAck=response(stock.namHotNonce,1,7,5);stock.handleNamHotAck(slotAck.data(),int(slotAck.size()));
+ for(int i=0;i<42;++i){juce::Time::now+=1000;stock.processIRUpload();}
+ auto reverted=response(stock.namHotNonce,10,7,5);stock.handleNamHotAck(reverted.data(),int(reverted.size()));CHECK(!GP200ModSync::isNamAmp(modsync::ampIds[5]));CHECK(stock.irUploadStatusText.contains("restored to stock"));
+ // Full storage and an ownership race do not cause a model transfer.
+ for(unsigned status:{8u,9u}){MidiConnection blocked;blocked.currentPresetDecodedData.setSize(effectBlockStart+effectBlockCount*effectBlockSize);CHECK(blocked.startNamHotUpload(file,5));juce::Time::now+=1000;blocked.processIRUpload();auto no=response(blocked.namHotNonce,status,0xffffffffu,5);blocked.handleNamHotAck(no.data(),int(no.size()));CHECK(blocked.output.messages.size()==2);CHECK(blocked.namHotStage==MidiConnection::NamHotStage::None);}
  std::cout<<checks<<" NAM import, weight order, wire and production transfer checks passed\n";
 }

@@ -1,3 +1,5 @@
+> Documento histórico. Para esta entrega usa README_FACTORY_NAM_ES.md.
+
 > Documento vigente para distribución VST. Firmware vigente: CAPTURE LED. Este paquete consolida documentación y conserva el código existente.
 
 # Compilar VST3 y Standalone desde GitHub — GP200 VST

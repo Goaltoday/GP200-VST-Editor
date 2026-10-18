@@ -53,15 +53,19 @@ juce::Result GP200NAM::readWeights(const juce::File&file,std::vector<juce::uint8
  if(ordered.size()!=1871)return juce::Result::fail("NAM weight layout error.");
  bytes.resize(weightBytes);for(std::size_t i=0;i<ordered.size();++i){unsigned bits=0;static_assert(sizeof(float)==4);std::memcpy(&bits,&ordered[i],4);modsync::write32(bytes.data()+i*4,bits);}return juce::Result::ok();
 }
-GP200IRUpload GP200NAM::query(int index,unsigned nonce){return stage(wrapper(index,nonce,0x5148));}
-GP200IRUpload GP200NAM::upload(const std::vector<juce::uint8>&weights,int index,unsigned nonce){auto b=wrapper(index,nonce,0x4e48);if(weights.size()!=weightBytes||index<0||index>=71||nonce==0)return {};modsync::write32(b.data()+12,crc(weights));modsync::write32(b.data()+16,binding);modsync::write32(b.data()+20,modsync::ampIds[static_cast<std::size_t>(index)]);modsync::write32(b.data()+24,weightBytes);b.insert(b.end(),weights.begin(),weights.end());return stage(b);}
+GP200IRUpload GP200NAM::query(int index,unsigned nonce,bool names,bool generic){auto b=wrapper(index,nonce,0x5148);if(names)b[8]=2;if(generic){b[8]=3;b[9]=255;}return stage(b);}
+GP200IRUpload GP200NAM::upload(const std::vector<juce::uint8>&weights,int index,unsigned nonce,const juce::String& name,int physical){auto b=wrapper(index,nonce,0x4e48);if(weights.size()!=weightBytes||index<0||index>=71||nonce==0)return {};modsync::write32(b.data()+12,crc(weights));modsync::write32(b.data()+16,binding);modsync::write32(b.data()+20,modsync::ampIds[static_cast<std::size_t>(index)]);modsync::write32(b.data()+24,weightBytes);b.insert(b.end(),weights.begin(),weights.end());if(name.isNotEmpty()){
+ const auto text=name.trim();if(text.isEmpty()||text.length()>12)return {};
+ for(auto c:text)if(c<32||c>126)return {};
+ b[8]=physical>=0?3:2;if(physical>=0){if(physical>=17)return {};b[9]=static_cast<juce::uint8>(physical);}const auto pos=b.size();b.resize(pos+16,0);std::memcpy(b.data()+pos,text.toRawUTF8(),static_cast<std::size_t>(text.length()));
+ }return stage(b);}
 bool GP200NAM::decodeAck(const juce::uint8*data,int n,Ack&out){
  if(n<38||data[0]!=0xf0||data[8]!=0x12)return false;
  std::array<juce::uint8,28> b{};for(int i=0;i<12;++i){if(data[13+2*i]>15||data[14+2*i]>15)return false;b[static_cast<std::size_t>(i)]=static_cast<juce::uint8>((data[13+2*i]<<4)|data[14+2*i]);}
- if(modsync::read16(b.data())!=0x104b||modsync::read32(b.data()+8)!=ackMagic)return false;
+ if(modsync::read16(b.data())!=0x104b||(modsync::read32(b.data()+8)!=ackMagic&&modsync::read32(b.data()+8)!=nameAckMagic&&modsync::read32(b.data()+8)!=genericAckMagic))return false;
  out={};if(n!=70||data[9]!=28||data[10]||data[11]||data[12]||data[n-1]!=0xf7)return true;
  for(int i=12;i<28;++i){if(data[13+2*i]>15||data[14+2*i]>15)return true;b[static_cast<std::size_t>(i)]=static_cast<juce::uint8>((data[13+2*i]<<4)|data[14+2*i]);}
  if(modsync::read16(b.data()+2)!=24||modsync::read32(b.data()+12)!=binding||modsync::read32(b.data()+24)!=weightBytes)return true;
- out.nonce=modsync::read16(b.data()+4);out.status=modsync::read16(b.data()+6);out.id=modsync::read32(b.data()+16);out.physical=modsync::read32(b.data()+20);return true;
+ out.generic=modsync::read32(b.data()+8)==genericAckMagic;out.names=out.generic||modsync::read32(b.data()+8)==nameAckMagic;out.nonce=modsync::read16(b.data()+4);out.status=modsync::read16(b.data()+6);out.id=modsync::read32(b.data()+16);out.physical=modsync::read32(b.data()+20);return true;
 }
 } // namespace gp200

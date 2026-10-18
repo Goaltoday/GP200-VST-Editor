@@ -26,6 +26,7 @@ class Native:
   self.flash={address-0x7ffbe3d7:bytearray(b[file:file+8192]) for address,file in zip(self.rt['slots'],meta['safe_amp_slots'])}
   self.wire=[];self.incoming=[];self.writes=[];self.receivers=[];self.frame=0
   u.hook_add(UC_HOOK_CODE,self.hook)
+  self.call(self.rt['boot'],[])
   self.call(0x80026d51,[0x78005,0x78001])
   emit=self.rt['emit']&~1;connected=branch(bytes(u.mem_read(emit+8,4)),emit+8)
   ptr=struct.unpack('<I',u.mem_read(((connected+4)&~3)+4,4))[0];u.mem_write(ptr+2,bytes([1]))
@@ -62,7 +63,7 @@ class Native:
     data,pos=self.region(offset,n);incoming=u.mem_read(p,n);data[pos:pos+n]=bytes(a&v for a,v in zip(data[pos:pos+n],incoming));self.writes.append((self.frame,'write',offset))
    else:
     data,pos=self.region(offset,n);u.mem_write(p,bytes(data[pos:pos+n]))
-   ret()
+   u.reg_write(UC_ARM_REG_R0,0);ret()
   elif pc==(self.rt['rx']&~1):
    raw=bytes(u.mem_read(r(0),12));self.receivers.append((self.frame,int.from_bytes(raw[6:8],'little'),r(1)))
  def receive(self,frame):
@@ -82,10 +83,10 @@ if __name__=='__main__':
  parser=argparse.ArgumentParser();parser.add_argument('--firmware-root',type=Path,required=True);parser.add_argument('--report',type=Path);args=parser.parse_args();reports=[]
  with tempfile.TemporaryDirectory(prefix='gp200-native-midi-') as name:
   temp=Path(name);exe=compile_client(temp)
-  for tag in ['V180','V182']:
+  for tag,index in [(t,i) for t in ['V180','V182'] for i in (0,4)]:
    native=Native(args.firmware_root,tag)
-   fixture=json.loads((ROOT/'tests/nam_hot_fixtures/compatible.nam').read_text());fixture['weights'][0]+=0.001;file=temp/f'{tag}.nam';file.write_text(json.dumps(fixture))
-   env=dict(os.environ,TEST_NAM2_DIR=str(temp/tag));p=subprocess.Popen([str(exe),str(file)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,bufsize=1,env=env);result=None
+   fixture=json.loads((ROOT/'tests/nam_hot_fixtures/compatible.nam').read_text());fixture['weights'][0]+=0.001;file=temp/f'{tag}_{index}.nam';file.write_text(json.dumps(fixture))
+   env=dict(os.environ,TEST_NAM2_DIR=str(temp/tag));p=subprocess.Popen([str(exe),str(file),str(index)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,bufsize=1,env=env);result=None
    for line in p.stdout:
     if line.startswith('FRAME '):
      responses=native.receive(bytes.fromhex(line[6:].strip()));p.stdin.write(json.dumps({'responses':[r.hex() for r in responses]})+'\n');p.stdin.flush()
@@ -94,8 +95,9 @@ if __name__=='__main__':
    code=p.wait();assert code==0,(code,result,p.stderr.read());assert result and 'PASS' in result
    assert native.frame==45 and len(native.receivers)==2,native.receivers
    assert native.receivers[0]==(2,0x5148,28),native.receivers
-   assert native.receivers[1]==(45,0x4e48,7512),native.receivers
+   assert native.receivers[1]==(45,0x4e48,7528),native.receivers
    assert native.writes and all(event[0]==45 for event in native.writes)
-   reports.append({'profile':tag,'result':result,'client_messages':native.frame,'native_receiver_calls':native.receivers,'query_read_only':True,'write_only_on_final_model_packet':True,'no_separate_commit_sent':True,'native_reassembly_dispatch_and_ack_encoder_executed':True,'flash_hardware_modeled':True,'usb_endpoints_modeled':True,'hardware_tested':False})
+   data=next(data for data in native.flash.values() if bytes(data[0x1d60:0x1d70]).split(b'\0')[0]==file.stem.encode());assert bytes(data[0x1d60:0x1d70]).split(b'\0')[0]==file.stem.encode()
+   reports.append({'profile':tag,'logical_destination':index,'destination_initially_stock':index==4,'result':result,'client_messages':native.frame,'native_receiver_calls':native.receivers,'new_name_written_to_flash':True,'query_read_only':True,'write_only_on_final_model_packet':True,'no_separate_commit_sent':True,'native_reassembly_dispatch_and_ack_encoder_executed':True,'flash_hardware_modeled':True,'usb_endpoints_modeled':True,'hardware_tested':False})
  print(json.dumps(reports,indent=2))
  if args.report:args.report.write_text(json.dumps(reports,indent=2))

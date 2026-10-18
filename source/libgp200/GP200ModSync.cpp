@@ -139,7 +139,7 @@ bool validCloOverrides (const juce::var& root)
     return true;
 }
 
-// NAM2 is accepted only from the generated manifest, never inferred from
+// NAM2 is accepted from a generated manifest or an acknowledged HOT import, never inferred from
 // the name of an AMP or from a two-parameter stock amplifier.
 bool parseNamOverrides (const juce::var& root,
                         std::map<juce::uint32, OverrideEntry>& destination)
@@ -147,7 +147,7 @@ bool parseNamOverrides (const juce::var& root,
     const auto value = root.getProperty ("nam_amp_overrides", {});
     if (value.isVoid ()) return true; // Legacy manifest.
     const auto* rows = value.getArray ();
-    if (rows == nullptr || rows->size () > 5) return false;
+    if (rows == nullptr || rows->size () > 17) return false;
     if (root.getProperty ("schema", {}).toString () != "gp200-mod-sync/v1"
         || root.getProperty ("product", {}).toString () != "GP-200") return false;
     const auto firmware = root.getProperty ("firmware", {}).toString ();
@@ -833,6 +833,41 @@ juce::String GP200ModSync::getWahConfigDescription (juce::uint32 wahEffectId)
     auto text = it->second.sourceModule + " effect relocated into WAH";
     if (it->second.description.isNotEmpty ()) text += " (" + it->second.description + ")";
     return text;
+}
+
+bool GP200ModSync::canUseNamHot (int index)
+{
+    const juce::ScopedLock lock (syncLock);
+    if (metadataError.isNotEmpty () || (manifestFirmware != "V180" && manifestFirmware != "V182") || manifestFirmwareSha.length () != 64 || index < 0 || index >= 71) return false;
+    const auto it = overrides.find (modsync::ampIds[static_cast<std::size_t> (index)]);
+    return it == overrides.end () || !it->second.customCloAmp;
+}
+
+bool GP200ModSync::removeNamAmpOverride (juce::uint32 id)
+{
+    const juce::ScopedLock lock (syncLock);
+    const auto it = overrides.find (id);
+    if (it == overrides.end () || !it->second.customNamAmp) return false;
+    overrides.erase (it); return saveUnlocked ();
+}
+
+bool GP200ModSync::recordNamAmpOverride (juce::uint32 effectId, const juce::String& displayName, const juce::String& sourceFile)
+{
+    reloadIfChanged ();
+    const juce::ScopedLock lock (syncLock);
+    if (!loadedOnce) loadUnlocked (getManifestFile ());
+    if (metadataError.isNotEmpty () || std::find (modsync::ampIds.begin (), modsync::ampIds.end (), effectId) == modsync::ampIds.end ()) return false;
+    const auto existing = overrides.find (effectId);
+    if (existing != overrides.end () && existing->second.customCloAmp) return false;
+    if (existing == overrides.end ())
+    {
+        int count = 0; for (const auto& pair : overrides) if (pair.second.customNamAmp) ++count;
+        if (count >= 17) return false;
+    }
+    auto& entry = overrides[effectId];
+    entry.customNamAmp = true; entry.customCloAmp = false; entry.isCab = false;
+    entry.displayName = displayName; entry.sourceFile = sourceFile;
+    return saveUnlocked ();
 }
 
 void GP200ModSync::recordFactoryAmpOverride (juce::uint32 effectId,

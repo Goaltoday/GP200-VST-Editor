@@ -1,3 +1,5 @@
+> Documento histórico. Para esta entrega usa README_FACTORY_NAM_ES.md.
+
 # GP200 VST MIDI Sync 1 — 11/10/2026
 
 Esta entrega añade ALIGN e inversión de polaridad B debajo de BLEND. El VST actualiza los parámetros y ON/OFF al recibir una Scene confirmada desde el firmware de esta entrega. El audio mantiene CTRL nativo; la espera de sincronización sólo afecta al editor.

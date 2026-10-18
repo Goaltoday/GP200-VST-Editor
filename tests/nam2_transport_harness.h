@@ -22,7 +22,9 @@ struct MidiConnection {
  enum class SoundCloneUploadPhase{Idle,Busy};
  IRUploadPhase irUploadPhase=IRUploadPhase::Idle;SoundCloneUploadPhase soundCloneUploadPhase=SoundCloneUploadPhase::Idle;
  juce::String lastMessageText,irUploadStatusText,irUploadLabel,hot1FactoryAmpSourceFile,assignmentNamesStatusText;
- enum class NamHotStage{None,Query,Write};NamHotStage namHotStage=NamHotStage::None;int namHotIndex=-1;unsigned namHotNonce=0,namHotPhysical=0;GP200IRUpload namPendingUpload;
+ enum class NamHotStage{None,Query,Write};NamHotStage namHotStage=NamHotStage::None;int namHotIndex=-1;unsigned namHotNonce=0,namHotPhysical=0;juce::String namHotName, namHotSource;
+    GP200IRUpload namPendingUpload;
+    std::vector<juce::uint8> namHotWeights;
  GP200IRUpload irUpload;int hot1FactoryAmpUploadIndex=-1,irUploadChunkIndex=0;bool hot2FactoryAmpRename=false;double irUploadNextActionMs=0;
  struct Query{int a=0,b=0,c=0;};std::vector<Query> pendingAssignmentNameQueries;Query currentAssignmentNameQuery;
  std::array<juce::String,userIRCount> userIRNames;std::array<juce::String,snapToneCount> snapToneNames;
@@ -31,7 +33,7 @@ struct MidiConnection {
  bool isFactoryAmpDestinationInactiveLocked(int)const;
  bool startFactoryAmpUpload(const juce::File&,int,const juce::String&);
  bool startFactoryAmpRename(int,const juce::String&);
- bool startNamHotUpload(const juce::File&,int);void processNamHotUpload();bool handleNamHotAck(const juce::uint8*,int);void finishNamHot(const juce::String&);
+ bool startNamHotUpload(const juce::File&,int, const juce::String& requestedName = {});void processNamHotUpload();bool handleNamHotAck(const juce::uint8*,int);void finishNamHot(const juce::String&);
  void processIRUpload();
  bool sceneRefreshPending=false;double remoteSceneDeadline=0;std::uint64_t presetRevision=0;
  bool sendParamChange(int,int,juce::uint32,float);
